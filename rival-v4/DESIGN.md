@@ -11,14 +11,15 @@ Target: CustomNPCs 1.20.1 GBPort + DragonMineZ 2.1.3 + Fabled (optional).
 4. Anti-gank: low-BP players who rival a stronger fighter grow faster near them.
 5. Never punish fair losses with RP loss. Punish forfeits / AFK / disconnects only.
 
-## Modules
+## Modules (install these)
 
 | File | Slot | Role |
 |---|---|---|
-| `RivalCore_v4.js` | Global Player | Rivalry DB, login sync (no commands) |
-| `RivalProximity_v4.js` | Global Player | Near-rival bonuses, kill TP, anti-gank, catch-up |
-| `RivalChallenge_v4.js` | Global Player | 60s damage contest combat/tick (no commands) |
+| `Rival System.js` | Global Player | All gameplay (core, proximity, challenges, instinct, progression, spectator, fusion) |
 | `Rival Command Handler.js` | Script-slot | All player commands (same style as Sparring Command Handler) |
+| `RivalNPC_v4.js` | NPC | Rival Master dialog hooks |
+
+Obsolete split Global Player files (`RivalCore_v4.js`, etc.) are stubs — do not install them.
 
 Disable old V3 rival scripts while testing V4.
 
@@ -27,17 +28,20 @@ Disable old V3 rival scripts while testing V4.
 | Trigger | Command idea | Action |
 |---|---|---|
 | 200 | `/rival help` | Help |
-| 201 | `/rival <player>` | Declare / request |
-| 202 | `/rival accept <player>` | Accept |
-| 203 | `/rival decline <player>` | Decline |
-| 204 | `/rival remove <player>` | Remove |
-| 205 | `/rival list` | List rivals |
-| 206 | `/rival stats [player]` | Personal / target stats |
-| 210 | `/challenge rival <player>` | Start 60s damage contest |
-| 211 | `/challenge accept` | Accept challenge |
-| 212 | `/challenge decline` | Decline |
-| 213 | `/challenge cancel` | Cancel pending / forfeit |
-| 220 | `/rival top` | RP leaderboard |
+| 201 | `/rivaldeclare <player>` | Declare / request |
+| 202 | `/rivalaccept <player>` | Accept |
+| 203 | `/rivaldecline <player>` | Decline |
+| 204 | `/rivalremove <player>` | Remove |
+| 205 | `/rivallist` | List rivals |
+| 206 | `/rivalstats [player]` | Personal / target stats |
+| 210 | `/challenge <player>` | Start 60s damage contest |
+| 211 | `/challengeaccept` | Accept challenge |
+| 212 | `/challengedecline` | Decline |
+| 213 | `/challengecancel` | Cancel pending / forfeit |
+| 220 | `/rivaltop` | Leaderboards |
+| 221–226 | title / journal / season / quests / achievements / hof | Displays |
+| 230 | `/spectaterival <player>` | Spectate |
+| 240 | admin refresh | Titles / HoF (Global Player trigger) |
 
 Wire these with CMI aliases (same style as sparring):
 
@@ -48,7 +52,7 @@ rivaldeclare:
 ```
 
 Place `Rival Command Handler.js` with SkillCheck / Sparring Command Handler.
-Gameplay stays in Global Player modules (no command triggers).
+Gameplay stays in `Rival System.js` (Global Player).
 
 ## Rival Point Tiers
 
@@ -67,79 +71,17 @@ Gameplay stays in Global Player modules (no command triggers).
 
 ## Core Loops (Adjusted Design)
 
-### A. Proximity Rivalry (`/rival`)
+See prior design notes in repo history / chat for proximity offense, anti-gank,
+underdog, surpass, catch-up, mutual fusion bonus, and 60s damage challenges.
 
-While within range of a rival:
+## Config
 
-- Bonus to your **highest offensive stat** (STR or SKP), scaled by RP tier + time nearby.
-- Bonus TP on kills made near them.
-- Passive RP ticks from shared presence (both mutual; one-sided favors the declarer).
+All multipliers live in top-of-section CONFIG blocks inside `Rival System.js`
+(same style as Sparring).
 
-If your RP > their RP and they are stronger by BP:
-
-- Catch-up multiplier on your offensive bonus so you can close the gap.
-- Crossing above their released BP awards a one-time “Surpass” TP dump (cooldown).
-
-### B. Official Challenge (`/challenge rival`)
-
-60-second most-damage contest:
-
-- Winner: more TP, less RP
-- Loser: more RP, less TP
-- Knockout: instant win, larger TP for winner, larger RP for loser
-- Fair loss never reduces RP
-- Forfeit / disconnect: winner gets TP; loser gets RP penalty or zero RP gain
-
-Non-rival accepted challenges still award TP on win.
-
-### C. One-sided Underdog
-
-If you declared them, they did not declare you, and they are stronger:
-
-- Combat engagement grants TP
-- Dying to them grants RP
-- Beating them grants a large TP bonus
-
-### D. Anti-Gank (≤40% Released BP)
-
-If weaker players have you as a rival and are ≤40% of your released BP:
-
-- You gain bonus TP for kills made in front of them
-- They gain RP for witnessing / proximity
-- They receive an offensive proximity bonus near you
-- When you take damage near them, they gain TP + RP
-
-Repeated gank pressure accelerates their growth until they can retaliate.
-
-### E. Fusion (mutual only)
-
-While fused with a mutual rival:
-
-- Shared power bonus scaled by combined RP
-- Kill TP split / bonus awarded to both accounts when possible
-
-## Persistence
-
-Single overworld stored database:
+## Storage keys
 
 - `dlr.rivalry.v4.database`
-- `dlr.rivalry.v4.database.backup`
-
-Player session/temp keys use `rival.v4.*` prefixes.
-
-## Roadmap After V4 Core
-
-Reports UI polish, seasons, quests, achievements, Rival Master NPC,
-spectator mode, journal, hall of fame — keep the same database schema
-so later modules only read/write new fields.
-
-## Balance Knobs
-
-All multipliers live in top-of-file CONFIG blocks (same style as Sparring).
-Tune first:
-
-- proximity range
-- offensive bonus caps
-- kill TP rates
-- challenge TP / RP payouts
-- underdog / anti-gank thresholds (default 0.40 BP)
+- `dlr.rivalry.v4.challenges`
+- `dlr.rivalry.v4.progression`
+(+ `.backup` variants)

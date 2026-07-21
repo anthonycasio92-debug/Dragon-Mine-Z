@@ -34,10 +34,11 @@ function msg(p, t) { try { p.message(t); } catch (e) {} }
 function fire(player, id) {
     try {
         var Bukkit = Java.type("org.bukkit.Bukkit");
+        /* Argument 0 must be the player name — Rival Command Handler style. */
         Bukkit.dispatchCommand(
             Bukkit.getConsoleSender(),
             "execute as " + player.getName() + " at " + player.getName() +
-            " run noppes script trigger " + id
+            " run noppes script trigger " + id + " " + player.getName()
         );
     } catch (e) {
         msg(player, C + "cRival Master failed to open menu: " + e);

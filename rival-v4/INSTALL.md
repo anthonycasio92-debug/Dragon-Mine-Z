@@ -1,5 +1,15 @@
 # Rival System V4.3 — Install Guide
 
+## Final layout (3 scripts)
+
+Same idea as sparring: **one Global Player system** + **one command handler** + optional NPC.
+
+| File | Where | Events |
+|---|---|---|
+| `Rival System.js` | Global Player | init, login, tick, damagedEntity, damaged, kill, died, logout, trigger |
+| `Rival Command Handler.js` | Script-slot (with SkillCheck / Sparring Command Handler) | trigger |
+| `RivalNPC_v4.js` | Rival Master NPC | interact, dialogOption |
+
 ## 1) Disable old V3
 
 Disable Global Player scripts:
@@ -9,31 +19,21 @@ Disable Global Player scripts:
 - `RivalBattle Manager V3.js`
 - `RivalBattle Combat Core V3.js`
 
-## 2) Global Player scripts (gameplay only)
+## 2) Install the combined Global Player script
 
-Same split as Sparring: Global Player = systems, **not** commands.
+Install **only** `Rival System.js` as a Global Player script.
 
-| Script | Events |
-|---|---|
-| `RivalCore_v4.js` | init, login |
-| `RivalProximity_v4.js` | tick, damagedEntity, damaged, kill, logout, died |
-| `RivalChallenge_v4.js` | init, tick, damagedEntity, damaged, kill, died, logout |
-| `RivalInstinct_v4.js` | tick, login |
-| `RivalProgression_v4.js` | login, tick, trigger |
-| `RivalSpectator_v4.js` | tick |
-| `RivalDMZHooks_v4.js` | tick, kill, logout, died |
+Enable all events listed in the table above.
 
-## 3) Script-slot command handler
+Do **not** also enable the old split modules (`RivalCore_v4`, `RivalProximity_v4`, etc.) — those are obsolete stubs.
 
-Same place as **SkillCheckCommand** / **Sparring Command Handler**:
+## 3) Install the command handler
 
-| Script | Events |
-|---|---|
-| `Rival Command Handler.js` | trigger |
+Put `Rival Command Handler.js` in the **same CustomNPCs script location as SkillCheck / Sparring Command Handler**.
 
-Do **not** place this in the Global Player Script slot.
+Do **not** put it in Global Player.
 
-## 4) Rival Master NPC
+## 4) Rival Master NPC (optional)
 
 Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable `interact` + `dialogOption`.
 Map dialog options to slots 0–9 (see file header).
@@ -41,16 +41,12 @@ Map dialog options to slots 0–9 (see file header).
 ## 5) CMI aliases (same style as sparring)
 
 1. Paste `cmi/Aliases-Rival.yml` into CMI `Aliases.yml`
-2. (Optional) paste `cmi/Aliases-Sparring.yml` if you want matching sparring shortcuts
+2. (Optional) paste `cmi/Aliases-Sparring.yml` for sparring shortcuts
 3. `/cmi reload`
 
-Pattern (identical to sparring stats):
+Pattern:
 
 ```yaml
-sparstats:
-  Cmds:
-  - asFakeOp! noppes script trigger 73 [playerName]
-
 rivalstats:
   Cmds:
   - asFakeOp! noppes script trigger 206 [playerName] $1-
@@ -60,52 +56,23 @@ rivaldeclare:
   - asFakeOp! noppes script trigger 201 [playerName] $1
 ```
 
-- `[playerName]` = argument 0 (required — what the handler resolves)
+- `[playerName]` = argument 0 (required)
 - `$1` / `$1-` = extra args after the player name
-- `asFakeOp!` = player-like OP source for `noppes script trigger`
 
 ## 6) CMI title placeholder
 
-On login / `/rivaltitle`, progression writes:
+On login / `/rivaltitle`:
 
 - `cmi usermeta <player> set rival_title <Title>`
-- `cmi usermeta <player> set rival_rank <Title>`
 
-Use in nametags/tab (if enabled in your CMI setup):
+Nametag/tab (if enabled):
 
 ```text
 %cmi_user_meta_rival_title%
 ```
 
-## 7) What this build covers vs roadmap
+## 7) Coverage
 
-Implemented now:
+Core, proximity, challenges, instinct, titles/seasons/quests/achievements/journal/HoF, spectator, fusion hooks, command aliases.
 
-- Phase 1 Core
-- Phase 2 Instinct sensing
-- Phase 3 Challenges + combat tracking + reports
-- Phase 4 RP tiers + fair-loss rules
-- Phase 5 Titles (CMI usermeta)
-- Phase 6 Perk text unlocks by tier
-- Phase 7 Battle reports
-- Phase 8 Stats
-- Phase 9 Leaderboards (in-game categories)
-- Phase 10 Seasons (75-day window, season RP)
-- Phase 11 Weekly quests
-- Phase 12 Achievements
-- Phase 13 Rival Master NPC hooks
-- Phase 14 Spectator
-- Phase 15 Journal
-- Phase 16 Hall of Fame data
-- Phase 17 Fusion mutual bonus + kill TP split
-- Adjusted design: proximity offense, anti-gank, underdog, surpass, catch-up
-
-Still optional / later polish:
-
-- Website / Discord leaderboard feeds
-- Animated hologram titles
-- Entrance animations / custom particle auras (needs asset pipeline)
-- Betting (intentionally disabled)
-- Saga dialogue tables
-
-See `VERIFIED_API.md` and `DESIGN.md`.
+See `DESIGN.md` and `VERIFIED_API.md`.

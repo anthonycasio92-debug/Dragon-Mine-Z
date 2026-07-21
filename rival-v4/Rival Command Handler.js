@@ -8,8 +8,8 @@
 
  DO NOT place this in the Global Player Script slot.
 
- Gameplay (proximity, instinct, battles) stays in Global Player
- modules. This file is the command display / action handler only —
+ Gameplay stays in Rival System.js (Global Player).
+ This file is the command display / action handler only —
  same split as Sparring TP System + Sparring Command Handler.
 
  TRIGGERS:

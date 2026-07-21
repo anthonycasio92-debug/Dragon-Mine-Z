@@ -1,0 +1,4062 @@
+/*
+============================================================
+ DBZ Legacy Reborn - Rival System V4
+ Version: 4.3.0
+
+ Combined Global Player gameplay modules (like Sparring TP System).
+
+ PLACE AS:
+ CustomNPCs Global Player Script
+
+ REQUIRED EVENTS:
+ - init
+ - login
+ - tick
+ - damagedEntity
+ - damaged
+ - kill
+ - died
+ - logout
+ - trigger   (admin refresh id 240 only)
+
+ COMMANDS:
+ Use Rival Command Handler.js in the script-slot
+ (same place as Sparring Command Handler / SkillCheck).
+
+ NPC:
+ Use RivalNPC_v4.js on the Rival Master NPC.
+
+ This file merges:
+  Core, Proximity, Challenge, Instinct, Progression,
+  Spectator, DMZ/Fusion hooks.
+
+ Disable old V3 and the separate Rival*_v4 Global Player
+ scripts while using this combined file.
+============================================================
+*/
+
+
+/* ========================= CORE ========================= */
+
+/* ========================= JAVA TYPES ========================= */
+
+/*
+ CustomNPCs Global Player scripts can clash on names like RC_SYSTEM /
+ RC_System / System. Keep API lazy and avoid a top-level System binding.
+*/
+var RIVAL_CORE_API = null;
+
+function rcApi() {
+    if (RIVAL_CORE_API === null) {
+        RIVAL_CORE_API = Java.type("noppes.npcs.api.NpcAPI");
+    }
+    return RIVAL_CORE_API;
+}
+
+/* ========================= CONFIGURATION ========================= */
+
+var RC_DEBUG = false;
+var RC_VERSION = 4;
+var RC_COLOR = String.fromCharCode(167);
+
+var RC_MAX_MUTUAL_RIVALS = 3;
+var RC_MAX_ONE_SIDED_OUT = 5;
+var RC_REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
+var RC_DECLARE_COOLDOWN_MS = 30 * 1000;
+var RC_HISTORY_LIMIT = 30;
+
+var RC_DATABASE_KEY = "dlr.rivalry.v4.database";
+var RC_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
+
+var RC_TIERS = [
+    { min: 0,     name: "Acquaintance",  color: "7" },
+    { min: 100,   name: "Competitor",    color: "a" },
+    { min: 300,   name: "Adversary",     color: "2" },
+    { min: 700,   name: "Rival",         color: "e" },
+    { min: 1500,  name: "Nemesis",       color: "6" },
+    { min: 3000,  name: "Legendary",     color: "c" },
+    { min: 5000,  name: "Arch Rival",    color: "d" },
+    { min: 7500,  name: "Mortal Enemy",  color: "5" },
+    { min: 10000, name: "Eternal Rival", color: "b" },
+    { min: 15000, name: "Mythic Rival",  color: "4" }
+];
+
+/* ========================= BASIC HELPERS ========================= */
+
+function rcNow() {
+    try {
+        return Number(new Date().getTime());
+    } catch (ignored) {
+        try {
+            return Number(Java.type("java.lang.System").currentTimeMillis());
+        } catch (ignored2) {
+            return 0;
+        }
+    }
+}
+
+function rcString(value) {
+    if (value === null || value === undefined) return "";
+    return String(value);
+}
+
+function rcLower(value) {
+    return rcString(value).toLowerCase();
+}
+
+function rcNumber(value, fallback) {
+    var number = Number(value);
+    return isNaN(number) || !isFinite(number) ? fallback : number;
+}
+
+function rcClamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function rcMessage(player, message) {
+    try {
+        if (player !== null && player !== undefined) player.message(message);
+    } catch (ignored) {}
+}
+
+function rcLog(message) {
+    if (!RC_DEBUG) return;
+    try {
+        print("[RivalCore v4] " + message);
+    } catch (ignored) {}
+}
+
+function rcUuid(player) {
+    try {
+        return rcString(player.getUUID());
+    } catch (ignored) {
+        return "";
+    }
+}
+
+function rcName(player) {
+    try {
+        return rcString(player.getName());
+    } catch (ignored) {
+        return "Unknown";
+    }
+}
+
+function rcIsPlayer(entity) {
+    if (entity === null || entity === undefined) return false;
+    try {
+        return Number(entity.getType()) === 1;
+    } catch (ignored) {
+        return false;
+    }
+}
+
+function rcArgs(event) {
+    var result = [];
+    if (event === null || event === undefined || event.arguments === null || event.arguments === undefined) {
+        return result;
+    }
+    for (var i = 0; i < event.arguments.length; i++) {
+        result.push(rcString(event.arguments[i]));
+    }
+    return result;
+}
+
+function rcCommas(value) {
+    var number = Math.floor(rcNumber(value, 0));
+    var raw = String(number);
+    var out = "";
+    while (raw.length > 3) {
+        out = "," + raw.substring(raw.length - 3) + out;
+        raw = raw.substring(0, raw.length - 3);
+    }
+    return raw + out;
+}
+
+/* ========================= TIERS ========================= */
+
+function rcGetTier(points) {
+    var rp = Math.max(0, rcNumber(points, 0));
+    var tier = RC_TIERS[0];
+    for (var i = 0; i < RC_TIERS.length; i++) {
+        if (rp >= RC_TIERS[i].min) tier = RC_TIERS[i];
+    }
+    return tier;
+}
+
+function rcTierLabel(points) {
+    var tier = rcGetTier(points);
+    return RC_COLOR + tier.color + tier.name + RC_COLOR + "7 (" + rcCommas(points) + " RP)";
+}
+
+/* ========================= WORLD STORAGE ========================= */
+
+function rcDataWorld(fallbackPlayer) {
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = rcApi().Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (error1) {
+            rcLog("World lookup failed for " + names[i] + ": " + error1);
+        }
+    }
+
+    if (fallbackPlayer !== null && fallbackPlayer !== undefined) {
+        try {
+            return fallbackPlayer.getWorld();
+        } catch (error2) {
+            rcLog("Fallback world lookup failed: " + error2);
+        }
+    }
+    return null;
+}
+
+function rcFreshDatabase() {
+    return {
+        version: RC_VERSION,
+        players: {},
+        requests: {},
+        cooldowns: {},
+        leaderboard: {},
+        updatedAt: rcNow()
+    };
+}
+
+function rcNormalizeDatabase(database) {
+    if (database === null || typeof database !== "object") database = rcFreshDatabase();
+    database.version = RC_VERSION;
+    if (database.players === null || typeof database.players !== "object") database.players = {};
+    if (database.requests === null || typeof database.requests !== "object") database.requests = {};
+    if (database.cooldowns === null || typeof database.cooldowns !== "object") database.cooldowns = {};
+    if (database.leaderboard === null || typeof database.leaderboard !== "object") database.leaderboard = {};
+    database.updatedAt = rcNumber(database.updatedAt, rcNow());
+    return database;
+}
+
+function rcLoadDatabase(player) {
+    var world = rcDataWorld(player);
+    if (world === null) throw new Error("RivalCore could not access persistent storage.");
+
+    var storage = world.getStoreddata();
+    var database;
+
+    try {
+        database = storage.has(RC_DATABASE_KEY)
+            ? JSON.parse(rcString(storage.get(RC_DATABASE_KEY)))
+            : rcFreshDatabase();
+    } catch (mainError) {
+        rcLog("Main database parse failed: " + mainError);
+        try {
+            database = storage.has(RC_BACKUP_KEY)
+                ? JSON.parse(rcString(storage.get(RC_BACKUP_KEY)))
+                : rcFreshDatabase();
+            rcLog("Recovered database from backup.");
+        } catch (backupError) {
+            rcLog("Backup parse failed: " + backupError);
+            database = rcFreshDatabase();
+        }
+    }
+
+    return rcNormalizeDatabase(database);
+}
+
+function rcSaveDatabase(player, database) {
+    var world = rcDataWorld(player);
+    if (world === null) throw new Error("RivalCore could not access persistent storage.");
+
+    database = rcNormalizeDatabase(database);
+    database.updatedAt = rcNow();
+
+    var storage = world.getStoreddata();
+    var json = JSON.stringify(database);
+
+    if (storage.has(RC_DATABASE_KEY)) {
+        storage.put(RC_BACKUP_KEY, rcString(storage.get(RC_DATABASE_KEY)));
+    }
+    storage.put(RC_DATABASE_KEY, json);
+}
+
+/* ========================= PLAYER / RIVAL RECORDS ========================= */
+
+function rcFreshPlayerRecord(uuid, name) {
+    var now = rcNow();
+    return {
+        uuid: uuid,
+        name: name,
+        nameLower: rcLower(name),
+        createdAt: now,
+        lastSeenAt: now,
+        rivals: {},
+        career: {
+            rivalPointsTotal: 0,
+            officialWins: 0,
+            officialLosses: 0,
+            officialDraws: 0,
+            knockouts: 0,
+            currentStreak: 0,
+            bestStreak: 0,
+            damageDealt: 0,
+            damageTaken: 0,
+            biggestHit: 0,
+            highestCombo: 0,
+            challengesPlayed: 0,
+            presenceMs: 0,
+            killsNearRival: 0,
+            surpassAwards: 0
+        },
+        totals: {
+            declarationsSent: 0,
+            declarationsAccepted: 0,
+            declarationsDeclined: 0,
+            rivalsRemoved: 0
+        }
+    };
+}
+
+function rcNormalizeCareer(career) {
+    if (career === null || typeof career !== "object") career = {};
+    career.rivalPointsTotal = rcNumber(career.rivalPointsTotal, 0);
+    career.officialWins = rcNumber(career.officialWins, 0);
+    career.officialLosses = rcNumber(career.officialLosses, 0);
+    career.officialDraws = rcNumber(career.officialDraws, 0);
+    career.knockouts = rcNumber(career.knockouts, 0);
+    career.currentStreak = rcNumber(career.currentStreak, 0);
+    career.bestStreak = rcNumber(career.bestStreak, 0);
+    career.damageDealt = rcNumber(career.damageDealt, 0);
+    career.damageTaken = rcNumber(career.damageTaken, 0);
+    career.biggestHit = rcNumber(career.biggestHit, 0);
+    career.highestCombo = rcNumber(career.highestCombo, 0);
+    career.challengesPlayed = rcNumber(career.challengesPlayed, 0);
+    career.presenceMs = rcNumber(career.presenceMs, 0);
+    career.killsNearRival = rcNumber(career.killsNearRival, 0);
+    career.surpassAwards = rcNumber(career.surpassAwards, 0);
+    return career;
+}
+
+function rcNormalizeRivalLink(link, uuid, name) {
+    if (link === null || typeof link !== "object") link = {};
+    link.uuid = rcString(link.uuid || uuid);
+    link.name = rcString(link.name || name);
+    link.nameLower = rcLower(link.name);
+    link.mutual = link.mutual === true;
+    link.declaredByMe = link.declaredByMe === true;
+    link.declaredByThem = link.declaredByThem === true;
+    link.points = Math.max(0, rcNumber(link.points, 0));
+    link.wins = rcNumber(link.wins, 0);
+    link.losses = rcNumber(link.losses, 0);
+    link.draws = rcNumber(link.draws, 0);
+    link.damageDealt = rcNumber(link.damageDealt, 0);
+    link.damageTaken = rcNumber(link.damageTaken, 0);
+    link.presenceMs = rcNumber(link.presenceMs, 0);
+    link.createdAt = rcNumber(link.createdAt, rcNow());
+    link.updatedAt = rcNumber(link.updatedAt, rcNow());
+    link.mutualSince = rcNumber(link.mutualSince, 0);
+    link.lastBattleAt = rcNumber(link.lastBattleAt, 0);
+    link.lastSeenTogetherAt = rcNumber(link.lastSeenTogetherAt, 0);
+    if (!(link.history instanceof Array)) link.history = [];
+    return link;
+}
+
+function rcEnsurePlayer(database, player) {
+    var uuid = rcUuid(player);
+    var name = rcName(player);
+    var record = database.players[uuid];
+
+    if (record === null || record === undefined || typeof record !== "object") {
+        record = rcFreshPlayerRecord(uuid, name);
+        database.players[uuid] = record;
+    }
+
+    record.uuid = uuid;
+    record.name = name;
+    record.nameLower = rcLower(name);
+    record.lastSeenAt = rcNow();
+    if (record.rivals === null || typeof record.rivals !== "object") record.rivals = {};
+    record.career = rcNormalizeCareer(record.career);
+    if (record.totals === null || typeof record.totals !== "object") {
+        record.totals = {
+            declarationsSent: 0,
+            declarationsAccepted: 0,
+            declarationsDeclined: 0,
+            rivalsRemoved: 0
+        };
+    }
+
+    for (var rivalUuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
+        record.rivals[rivalUuid] = rcNormalizeRivalLink(
+            record.rivals[rivalUuid],
+            rivalUuid,
+            record.rivals[rivalUuid].name
+        );
+    }
+
+    return record;
+}
+
+function rcFindPlayerRecordByName(database, name) {
+    var wanted = rcLower(name);
+    for (var uuid in database.players) {
+        if (!database.players.hasOwnProperty(uuid)) continue;
+        var record = database.players[uuid];
+        if (rcLower(record.name) === wanted || rcLower(record.nameLower) === wanted) {
+            return record;
+        }
+    }
+    return null;
+}
+
+function rcFindOnlinePlayer(world, name) {
+    if (world === null || world === undefined) return null;
+    try {
+        var direct = world.getPlayer(name);
+        if (direct !== null && direct !== undefined) return direct;
+    } catch (ignored1) {}
+
+    try {
+        var players = world.getAllPlayers();
+        var wanted = rcLower(name);
+        for (var i = 0; i < players.length; i++) {
+            if (rcLower(players[i].getName()) === wanted) return players[i];
+        }
+    } catch (ignored2) {}
+    return null;
+}
+
+function rcFindOnlinePlayerAnyWorld(name) {
+    try {
+        var worlds = rcApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            var found = rcFindOnlinePlayer(worlds[i], name);
+            if (found !== null) return found;
+        }
+    } catch (error) {
+        rcLog("Cross-world player lookup failed: " + error);
+    }
+    return null;
+}
+
+function rcCountMutual(record) {
+    var count = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        if (record.rivals[uuid].mutual === true) count++;
+    }
+    return count;
+}
+
+function rcCountOneSidedOut(record) {
+    var count = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        var link = record.rivals[uuid];
+        if (link.declaredByMe === true && link.mutual !== true) count++;
+    }
+    return count;
+}
+
+function rcGetOrCreateRival(ownerRecord, targetRecord) {
+    var rival = ownerRecord.rivals[targetRecord.uuid];
+    if (rival === null || rival === undefined) {
+        rival = rcNormalizeRivalLink({}, targetRecord.uuid, targetRecord.name);
+        ownerRecord.rivals[targetRecord.uuid] = rival;
+    }
+    rival.name = targetRecord.name;
+    rival.nameLower = rcLower(targetRecord.name);
+    rival.updatedAt = rcNow();
+    return rival;
+}
+
+function rcPushHistory(rivalRecord, type, note) {
+    if (!(rivalRecord.history instanceof Array)) rivalRecord.history = [];
+    rivalRecord.history.push({
+        time: rcNow(),
+        type: rcString(type),
+        note: rcString(note)
+    });
+    while (rivalRecord.history.length > RC_HISTORY_LIMIT) {
+        rivalRecord.history.shift();
+    }
+}
+
+function rcRecalcCareerRp(record) {
+    var total = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        total += Math.max(0, rcNumber(record.rivals[uuid].points, 0));
+    }
+    record.career.rivalPointsTotal = total;
+    return total;
+}
+
+function rcUpdateLeaderboard(database, record) {
+    database.leaderboard[record.uuid] = {
+        uuid: record.uuid,
+        name: record.name,
+        rp: rcNumber(record.career.rivalPointsTotal, 0),
+        wins: rcNumber(record.career.officialWins, 0),
+        streak: rcNumber(record.career.bestStreak, 0),
+        updatedAt: rcNow()
+    };
+}
+
+/* ========================= PUBLIC RP API (used by other modules) ========================= */
+
+/*
+ Other Global Player scripts cannot call these functions directly.
+ They mutate the shared database JSON using the same keys / schema.
+ These helpers remain the reference implementation for RP awards.
+*/
+
+function rcAwardRivalPoints(database, ownerRecord, rivalUuid, amount, reason) {
+    amount = Math.floor(rcNumber(amount, 0));
+    if (amount === 0) return 0;
+
+    var link = ownerRecord.rivals[rivalUuid];
+    if (link === null || link === undefined) return 0;
+
+    link.points = Math.max(0, rcNumber(link.points, 0) + amount);
+    link.updatedAt = rcNow();
+    rcPushHistory(link, amount >= 0 ? "rp_gain" : "rp_loss", reason + " (" + amount + ")");
+    rcRecalcCareerRp(ownerRecord);
+    rcUpdateLeaderboard(database, ownerRecord);
+    return amount;
+}
+
+/* ========================= REQUESTS ========================= */
+
+function rcRequestKey(fromUuid, toUuid) {
+    return fromUuid + ">" + toUuid;
+}
+
+function rcGetRequest(database, fromUuid, toUuid) {
+    var key = rcRequestKey(fromUuid, toUuid);
+    var request = database.requests[key];
+    if (request === null || request === undefined) return null;
+
+    var createdAt = rcNumber(request.createdAt, 0);
+    if (createdAt <= 0 || rcNow() - createdAt > RC_REQUEST_EXPIRE_MS) {
+        delete database.requests[key];
+        return null;
+    }
+    return request;
+}
+
+function rcRemoveRequestsBetween(database, uuidA, uuidB) {
+    delete database.requests[rcRequestKey(uuidA, uuidB)];
+    delete database.requests[rcRequestKey(uuidB, uuidA)];
+}
+
+function rcCleanupExpiredRequests(database) {
+    var now = rcNow();
+    for (var key in database.requests) {
+        if (!database.requests.hasOwnProperty(key)) continue;
+        var createdAt = rcNumber(database.requests[key].createdAt, 0);
+        if (createdAt <= 0 || now - createdAt > RC_REQUEST_EXPIRE_MS) {
+            delete database.requests[key];
+        }
+    }
+}
+
+/* ========================= CORE OPERATIONS ========================= */
+
+function rcFormMutual(database, playerRecord, targetRecord, note) {
+    var now = rcNow();
+    var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
+    var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
+
+    playerRival.mutual = true;
+    playerRival.declaredByMe = true;
+    playerRival.declaredByThem = true;
+    playerRival.mutualSince = now;
+    rcPushHistory(playerRival, "mutual", note);
+
+    targetRival.mutual = true;
+    targetRival.declaredByMe = true;
+    targetRival.declaredByThem = true;
+    targetRival.mutualSince = now;
+    rcPushHistory(targetRival, "mutual", note);
+
+    rcRecalcCareerRp(playerRecord);
+    rcRecalcCareerRp(targetRecord);
+    rcUpdateLeaderboard(database, playerRecord);
+    rcUpdateLeaderboard(database, targetRecord);
+}
+
+function rcDeclare(player, targetName) {
+    var cleanName = rcString(targetName).replace(/^\s+|\s+$/g, "");
+    if (cleanName === "") {
+        rcMessage(player, RC_COLOR + "cUsage: /rival <player>");
+        return;
+    }
+
+    var target = rcFindOnlinePlayerAnyWorld(cleanName);
+    if (target === null) {
+        rcMessage(player, RC_COLOR + "cThat player must be online for the first declaration.");
+        return;
+    }
+
+    var playerUuid = rcUuid(player);
+    var targetUuid = rcUuid(target);
+    if (playerUuid === targetUuid) {
+        rcMessage(player, RC_COLOR + "cYou cannot declare yourself as a rival.");
+        return;
+    }
+
+    var database = rcLoadDatabase(player);
+    rcCleanupExpiredRequests(database);
+
+    var playerRecord = rcEnsurePlayer(database, player);
+    var targetRecord = rcEnsurePlayer(database, target);
+
+    var current = playerRecord.rivals[targetUuid];
+    if (current !== null && current !== undefined && current.mutual === true) {
+        rcMessage(player, RC_COLOR + "e" + targetRecord.name + " is already your mutual rival.");
+        return;
+    }
+
+    if (current !== null && current !== undefined && current.declaredByMe === true && current.mutual !== true) {
+        rcMessage(player, RC_COLOR + "eYou already declared " + targetRecord.name + ". Waiting for them.");
+        return;
+    }
+
+    var cooldownKey = rcRequestKey(playerUuid, targetUuid);
+    var lastDeclaration = rcNumber(database.cooldowns[cooldownKey], 0);
+    var remaining = RC_DECLARE_COOLDOWN_MS - (rcNow() - lastDeclaration);
+    if (remaining > 0) {
+        rcMessage(player, RC_COLOR + "cWait " + Math.ceil(remaining / 1000) + "s before declaring this player again.");
+        return;
+    }
+
+    var reverseRequest = rcGetRequest(database, targetUuid, playerUuid);
+    if (reverseRequest !== null) {
+        if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
+            rcMessage(player, RC_COLOR + "cYou already have the maximum of " + RC_MAX_MUTUAL_RIVALS + " mutual rivals.");
+            return;
+        }
+        if (rcCountMutual(targetRecord) >= RC_MAX_MUTUAL_RIVALS) {
+            rcMessage(player, RC_COLOR + "c" + targetRecord.name + " already has the maximum mutual rivals.");
+            return;
+        }
+
+        rcFormMutual(database, playerRecord, targetRecord, "Crossed declarations became mutual.");
+        rcRemoveRequestsBetween(database, playerUuid, targetUuid);
+        database.cooldowns[cooldownKey] = rcNow();
+        playerRecord.totals.declarationsAccepted++;
+        targetRecord.totals.declarationsAccepted++;
+        rcSaveDatabase(player, database);
+
+        rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + targetRecord.name + " is now your mutual rival.");
+        rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + playerRecord.name + " is now your mutual rival.");
+        return;
+    }
+
+    if (rcCountOneSidedOut(playerRecord) >= RC_MAX_ONE_SIDED_OUT && (current === null || current === undefined || current.declaredByMe !== true)) {
+        rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_ONE_SIDED_OUT + " one-sided rival declarations.");
+        return;
+    }
+
+    var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
+    playerRival.declaredByMe = true;
+    playerRival.declaredByThem = playerRival.declaredByThem === true;
+    playerRival.mutual = false;
+    rcPushHistory(playerRival, "declare", "Declared rivalry.");
+
+    var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
+    targetRival.declaredByThem = true;
+    targetRival.declaredByMe = targetRival.declaredByMe === true;
+    targetRival.mutual = false;
+    rcPushHistory(targetRival, "declared_by", "Was declared as a rival.");
+
+    database.requests[rcRequestKey(playerUuid, targetUuid)] = {
+        fromUuid: playerUuid,
+        fromName: playerRecord.name,
+        toUuid: targetUuid,
+        toName: targetRecord.name,
+        createdAt: rcNow()
+    };
+    database.cooldowns[cooldownKey] = rcNow();
+    playerRecord.totals.declarationsSent++;
+
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "aYou declared " + RC_COLOR + "e" + targetRecord.name + RC_COLOR + "a as a rival.");
+    rcMessage(player, RC_COLOR + "7They can accept with " + RC_COLOR + "f/rival accept " + playerRecord.name);
+    rcMessage(player, RC_COLOR + "7One-sided bonuses already apply while you hunt them.");
+
+    rcMessage(target, RC_COLOR + "6" + playerRecord.name + RC_COLOR + "e declared you as a rival!");
+    rcMessage(target, RC_COLOR + "7Accept: " + RC_COLOR + "f/rival accept " + playerRecord.name);
+    rcMessage(target, RC_COLOR + "7Decline: " + RC_COLOR + "f/rival decline " + playerRecord.name);
+}
+
+function rcAccept(player, targetName) {
+    var cleanName = rcString(targetName).replace(/^\s+|\s+$/g, "");
+    if (cleanName === "") {
+        rcMessage(player, RC_COLOR + "cUsage: /rival accept <player>");
+        return;
+    }
+
+    var database = rcLoadDatabase(player);
+    rcCleanupExpiredRequests(database);
+
+    var playerRecord = rcEnsurePlayer(database, player);
+    var fromRecord = rcFindPlayerRecordByName(database, cleanName);
+    if (fromRecord === null) {
+        rcMessage(player, RC_COLOR + "cNo rivalry request found from that player.");
+        return;
+    }
+
+    var request = rcGetRequest(database, fromRecord.uuid, playerRecord.uuid);
+    if (request === null) {
+        rcMessage(player, RC_COLOR + "cNo active rivalry request from " + fromRecord.name + ".");
+        return;
+    }
+
+    if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
+        rcMessage(player, RC_COLOR + "cYou already have the maximum of " + RC_MAX_MUTUAL_RIVALS + " mutual rivals.");
+        return;
+    }
+    if (rcCountMutual(fromRecord) >= RC_MAX_MUTUAL_RIVALS) {
+        rcMessage(player, RC_COLOR + "c" + fromRecord.name + " already has the maximum mutual rivals.");
+        return;
+    }
+
+    rcFormMutual(database, playerRecord, fromRecord, "Request accepted.");
+    rcRemoveRequestsBetween(database, fromRecord.uuid, playerRecord.uuid);
+    playerRecord.totals.declarationsAccepted++;
+    fromRecord.totals.declarationsAccepted++;
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + fromRecord.name + " is now your mutual rival.");
+
+    var online = rcFindOnlinePlayerAnyWorld(fromRecord.name);
+    if (online !== null) {
+        rcMessage(online, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + playerRecord.name + " accepted your rivalry!");
+    }
+}
+
+function rcDecline(player, targetName) {
+    var cleanName = rcString(targetName).replace(/^\s+|\s+$/g, "");
+    if (cleanName === "") {
+        rcMessage(player, RC_COLOR + "cUsage: /rival decline <player>");
+        return;
+    }
+
+    var database = rcLoadDatabase(player);
+    rcCleanupExpiredRequests(database);
+
+    var playerRecord = rcEnsurePlayer(database, player);
+    var fromRecord = rcFindPlayerRecordByName(database, cleanName);
+    if (fromRecord === null) {
+        rcMessage(player, RC_COLOR + "cNo rivalry request found from that player.");
+        return;
+    }
+
+    var request = rcGetRequest(database, fromRecord.uuid, playerRecord.uuid);
+    if (request === null) {
+        rcMessage(player, RC_COLOR + "cNo active rivalry request from " + fromRecord.name + ".");
+        return;
+    }
+
+    rcRemoveRequestsBetween(database, fromRecord.uuid, playerRecord.uuid);
+    playerRecord.totals.declarationsDeclined++;
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "eDeclined rivalry request from " + fromRecord.name + ".");
+    var online = rcFindOnlinePlayerAnyWorld(fromRecord.name);
+    if (online !== null) {
+        rcMessage(online, RC_COLOR + "c" + playerRecord.name + " declined your rivalry request.");
+    }
+}
+
+function rcRemove(player, targetName) {
+    var cleanName = rcString(targetName).replace(/^\s+|\s+$/g, "");
+    if (cleanName === "") {
+        rcMessage(player, RC_COLOR + "cUsage: /rival remove <player>");
+        return;
+    }
+
+    var database = rcLoadDatabase(player);
+    var playerRecord = rcEnsurePlayer(database, player);
+    var targetRecord = rcFindPlayerRecordByName(database, cleanName);
+    if (targetRecord === null || playerRecord.rivals[targetRecord.uuid] === undefined) {
+        rcMessage(player, RC_COLOR + "cYou do not have that rival.");
+        return;
+    }
+
+    var link = playerRecord.rivals[targetRecord.uuid];
+    var wasMutual = link.mutual === true;
+    delete playerRecord.rivals[targetRecord.uuid];
+
+    if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
+        var theirLink = targetRecord.rivals[playerRecord.uuid];
+        if (wasMutual) {
+            theirLink.mutual = false;
+            theirLink.declaredByThem = false;
+            theirLink.declaredByMe = theirLink.declaredByMe === true;
+            rcPushHistory(theirLink, "broken", "Mutual rivalry ended by " + playerRecord.name);
+            if (theirLink.declaredByMe !== true) {
+                delete targetRecord.rivals[playerRecord.uuid];
+            }
+        } else {
+            theirLink.declaredByThem = false;
+            if (theirLink.declaredByMe !== true) {
+                delete targetRecord.rivals[playerRecord.uuid];
+            }
+        }
+    }
+
+    rcRemoveRequestsBetween(database, playerRecord.uuid, targetRecord.uuid);
+    playerRecord.totals.rivalsRemoved++;
+    rcRecalcCareerRp(playerRecord);
+    rcRecalcCareerRp(targetRecord);
+    rcUpdateLeaderboard(database, playerRecord);
+    rcUpdateLeaderboard(database, targetRecord);
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "eRemoved rivalry with " + targetRecord.name + ".");
+    var online = rcFindOnlinePlayerAnyWorld(targetRecord.name);
+    if (online !== null) {
+        rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
+    }
+}
+
+function rcList(player) {
+    var database = rcLoadDatabase(player);
+    var record = rcEnsurePlayer(database, player);
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "6========== " + RC_COLOR + "eYour Rivals " + RC_COLOR + "6==========");
+    rcMessage(player, RC_COLOR + "7Career RP: " + RC_COLOR + "f" + rcCommas(record.career.rivalPointsTotal) +
+        RC_COLOR + "7  |  Record: " + RC_COLOR + "a" + record.career.officialWins +
+        RC_COLOR + "7-" + RC_COLOR + "c" + record.career.officialLosses);
+
+    var count = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        var link = record.rivals[uuid];
+        count++;
+        var status = link.mutual === true
+            ? RC_COLOR + "6Mutual"
+            : (link.declaredByMe === true ? RC_COLOR + "eDeclared" : RC_COLOR + "7Incoming");
+        rcMessage(
+            player,
+            RC_COLOR + "7- " + RC_COLOR + "f" + link.name + " " + status +
+            RC_COLOR + "7 | " + rcTierLabel(link.points) +
+            RC_COLOR + "7 | W/L " + RC_COLOR + "a" + link.wins + RC_COLOR + "7/" + RC_COLOR + "c" + link.losses
+        );
+    }
+
+    if (count === 0) {
+        rcMessage(player, RC_COLOR + "8No rivals yet. Use /rival <player> to declare one.");
+    }
+
+    rcCleanupExpiredRequests(database);
+    var pending = 0;
+    for (var key in database.requests) {
+        if (!database.requests.hasOwnProperty(key)) continue;
+        var req = database.requests[key];
+        if (rcString(req.toUuid) === record.uuid) {
+            pending++;
+            rcMessage(player, RC_COLOR + "dPending request from " + RC_COLOR + "f" + req.fromName);
+        }
+    }
+    if (pending === 0) {
+        rcMessage(player, RC_COLOR + "8No pending incoming requests.");
+    }
+}
+
+function rcHelp(player) {
+    rcMessage(player, RC_COLOR + "6===== Rival System V4 =====");
+    rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
+    rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
+    rcMessage(player, RC_COLOR + "e/rival decline <player> " + RC_COLOR + "7- Decline a request");
+    rcMessage(player, RC_COLOR + "e/rival remove <player> " + RC_COLOR + "7- End a rivalry");
+    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + RP tiers");
+    rcMessage(player, RC_COLOR + "e/rival stats [player] " + RC_COLOR + "7- Career statistics");
+    rcMessage(player, RC_COLOR + "e/challenge rival <player> " + RC_COLOR + "7- 60s damage contest");
+    rcMessage(player, RC_COLOR + "7Near rivals for offensive bonuses, kill TP, and RP growth.");
+}
+
+/* ========================= EVENTS ========================= */
+
+function rivalCoreInit(event) {
+    try {
+        var player = event.player;
+        if (!rcIsPlayer(player)) return;
+        var database = rcLoadDatabase(player);
+        rcEnsurePlayer(database, player);
+        rcCleanupExpiredRequests(database);
+        rcSaveDatabase(player, database);
+    } catch (error) {
+        rcLog("init failed: " + error);
+    }
+}
+
+function rivalCoreLogin(event) {
+    try {
+        var player = event.player;
+        if (!rcIsPlayer(player)) return;
+        var database = rcLoadDatabase(player);
+        var record = rcEnsurePlayer(database, player);
+        rcCleanupExpiredRequests(database);
+        rcSaveDatabase(player, database);
+
+        var incoming = 0;
+        for (var key in database.requests) {
+            if (!database.requests.hasOwnProperty(key)) continue;
+            if (rcString(database.requests[key].toUuid) === record.uuid) incoming++;
+        }
+        if (incoming > 0) {
+            rcMessage(player, RC_COLOR + "6[Rival] " + RC_COLOR + "eYou have " + incoming + " pending rivalry request(s). /rival list");
+        }
+    } catch (error) {
+        rcLog("login failed: " + error);
+    }
+}
+
+function rcTriggerPlayer(event) {
+    /*
+     Verified from CustomNPCs ScriptTriggerEvent:
+     Global Player triggers use event.entity, not event.player.
+     Keep event.player as a fallback for other script slots.
+    */
+    if (event === null || event === undefined) return null;
+    if (rcIsPlayer(event.entity)) return event.entity;
+    if (rcIsPlayer(event.player)) return event.player;
+    return null;
+}
+
+/*
+ Commands live in Rival Command Handler.js (script-slot),
+ matching Sparring Command Handler. Global Player trigger unused.
+*/
+function rivalCoreTriggerUnused(event) {
+    return;
+}
+
+/* ========================= PROXIMITY ========================= */
+
+/* ========================= JAVA TYPES ========================= */
+
+var RIVAL_PROX_API = null;
+var RIVAL_PROX_STATS_PROVIDER = null;
+var RIVAL_PROX_STATS_CAP = null;
+var RIVAL_PROX_SYNC = null;
+var RIVAL_PROX_NETWORK = null;
+
+function rpApi() {
+    if (RIVAL_PROX_API === null) RIVAL_PROX_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RIVAL_PROX_API;
+}
+function rpStatsProvider() {
+    if (RIVAL_PROX_STATS_PROVIDER === null) RIVAL_PROX_STATS_PROVIDER = Java.type("com.dragonminez.common.stats.StatsProvider");
+    return RIVAL_PROX_STATS_PROVIDER;
+}
+function rpStatsCap() {
+    if (RIVAL_PROX_STATS_CAP === null) RIVAL_PROX_STATS_CAP = Java.type("com.dragonminez.common.stats.StatsCapability");
+    return RIVAL_PROX_STATS_CAP;
+}
+function rpSyncPacket() {
+    if (RIVAL_PROX_SYNC === null) RIVAL_PROX_SYNC = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
+    return RIVAL_PROX_SYNC;
+}
+function rpNetwork() {
+    if (RIVAL_PROX_NETWORK === null) RIVAL_PROX_NETWORK = Java.type("com.dragonminez.common.network.NetworkHandler");
+    return RIVAL_PROX_NETWORK;
+}
+
+/* ========================= CONFIGURATION ========================= */
+
+var RP_DEBUG = false;
+var RP_COLOR = String.fromCharCode(167);
+
+var RP_DATABASE_KEY = "dlr.rivalry.v4.database";
+var RP_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
+
+var RP_TICK_MS = 1000;
+var RP_BONUS_NAME = "Rival Proximity";
+
+/* Presence / sensing */
+var RP_BASE_RANGE = 48;
+var RP_RANGE_PER_TIER = 8;
+var RP_MAX_RANGE = 160;
+
+/* Offensive proximity bonus on highest of STR / SKP */
+var RP_BASE_OFFENSE_BONUS = 0.03;      // +3% at Acquaintance
+var RP_OFFENSE_PER_TIER = 0.02;        // +2% per tier above
+var RP_PRESENCE_BONUS_CAP = 0.10;      // extra +10% from long presence
+var RP_PRESENCE_FULL_MS = 10 * 60 * 1000;
+var RP_MAX_OFFENSE_BONUS = 0.35;       // hard cap 35%
+
+/* Catch-up: if your RP > theirs and they have higher BP */
+var RP_CATCHUP_ENABLED = true;
+var RP_CATCHUP_MAX = 0.25;             // up to +25% extra
+var RP_CATCHUP_BP_RATIO = 1.25;        // rival must be at least 25% stronger
+
+/* Passive RP from hanging out */
+var RP_PRESENCE_RP_INTERVAL_MS = 60 * 1000;
+var RP_PRESENCE_RP_MUTUAL = 3;
+var RP_PRESENCE_RP_ONE_SIDED = 2;
+
+/* Kill TP near rival */
+var RP_KILL_TP_BASE = 250;
+var RP_KILL_TP_PER_TIER = 75;
+var RP_KILL_TP_MUTUAL_MULT = 1.35;
+var RP_SHOW_KILL_TP = true;
+
+/* Surpass rival BP award */
+var RP_SURPASS_ENABLED = true;
+var RP_SURPASS_TP = 5000;
+var RP_SURPASS_COOLDOWN_MS = 30 * 60 * 1000;
+
+/* One-sided underdog combat */
+var RP_UNDERDOG_ENGAGE_TP = 150;
+var RP_UNDERDOG_ENGAGE_COOLDOWN_MS = 15 * 1000;
+var RP_UNDERDOG_DEATH_RP = 25;
+var RP_UNDERDOG_WIN_TP = 4000;
+var RP_UNDERDOG_WIN_RP = 40;
+
+/* Anti-gank: weaker declarers (<= 40% of your released BP) */
+var RP_ANTIGANK_RATIO = 0.40;
+var RP_ANTIGANK_WITNESS_KILL_TP = 200;   // strong player kill TP bonus
+var RP_ANTIGANK_WITNESS_RP = 4;         // weak rival RP for witnessing kills
+var RP_ANTIGANK_HIT_TP = 80;            // weak rival TP when strong takes damage
+var RP_ANTIGANK_HIT_RP = 2;
+var RP_ANTIGANK_HIT_COOLDOWN_MS = 3000;
+var RP_ANTIGANK_OFFENSE_BONUS = 0.08;   // weak rival offense near strong target
+
+var RP_TIERS = [
+    { min: 0,     name: "Acquaintance" },
+    { min: 100,   name: "Competitor" },
+    { min: 300,   name: "Adversary" },
+    { min: 700,   name: "Rival" },
+    { min: 1500,  name: "Nemesis" },
+    { min: 3000,  name: "Legendary" },
+    { min: 5000,  name: "Arch Rival" },
+    { min: 7500,  name: "Mortal Enemy" },
+    { min: 10000, name: "Eternal Rival" },
+    { min: 15000, name: "Mythic Rival" }
+];
+
+/* ========================= HELPERS ========================= */
+
+function rpNow() {
+    try { return Number(new Date().getTime()); }
+    catch (ignored) {
+        try { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+        catch (ignored2) { return 0; }
+    }
+}
+
+function rpString(value) {
+    if (value === null || value === undefined) return "";
+    return String(value);
+}
+
+function rpNumber(value, fallback) {
+    var number = Number(value);
+    return isNaN(number) || !isFinite(number) ? fallback : number;
+}
+
+function rpClamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function rpMessage(player, message) {
+    try {
+        if (player !== null && player !== undefined) player.message(message);
+    } catch (ignored) {}
+}
+
+function rpLog(message) {
+    if (!RP_DEBUG) return;
+    try { print("[RivalProximity v4] " + message); } catch (ignored) {}
+}
+
+function rpUuid(player) {
+    try { return rpString(player.getUUID()); } catch (ignored) { return ""; }
+}
+
+function rpName(player) {
+    try { return rpString(player.getName()); } catch (ignored) { return "Unknown"; }
+}
+
+function rpIsPlayer(entity) {
+    if (entity === null || entity === undefined) return false;
+    try { return Number(entity.getType()) === 1; } catch (ignored) { return false; }
+}
+
+function rpDistance(a, b) {
+    try {
+        var dx = a.getX() - b.getX();
+        var dy = a.getY() - b.getY();
+        var dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    } catch (ignored) {
+        return 999999;
+    }
+}
+
+function rpTierIndex(points) {
+    var rp = Math.max(0, rpNumber(points, 0));
+    var index = 0;
+    for (var i = 0; i < RP_TIERS.length; i++) {
+        if (rp >= RP_TIERS[i].min) index = i;
+    }
+    return index;
+}
+
+function rpCommas(value) {
+    var number = Math.floor(rpNumber(value, 0));
+    var raw = String(number);
+    var out = "";
+    while (raw.length > 3) {
+        out = "," + raw.substring(raw.length - 3) + out;
+        raw = raw.substring(0, raw.length - 3);
+    }
+    return raw + out;
+}
+
+/* ========================= DATABASE ========================= */
+
+function rpDataWorld(fallbackPlayer) {
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = rpApi().Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (ignored1) {}
+    }
+    try { return fallbackPlayer.getWorld(); } catch (ignored2) { return null; }
+}
+
+function rpLoadDatabase(player) {
+    var world = rpDataWorld(player);
+    if (world === null) return null;
+    try {
+        var stored = world.getStoreddata();
+        if (!stored.has(RP_DATABASE_KEY)) return null;
+        var database = JSON.parse(rpString(stored.get(RP_DATABASE_KEY)));
+        if (database === null || typeof database !== "object") return null;
+        if (database.players === null || typeof database.players !== "object") return null;
+        return database;
+    } catch (error) {
+        rpLog("Database read failed: " + error);
+        return null;
+    }
+}
+
+function rpSaveDatabase(player, database) {
+    var world = rpDataWorld(player);
+    if (world === null) return;
+    try {
+        var stored = world.getStoreddata();
+        database.updatedAt = rpNow();
+        var json = JSON.stringify(database);
+        if (stored.has(RP_DATABASE_KEY)) {
+            stored.put(RP_BACKUP_KEY, rpString(stored.get(RP_DATABASE_KEY)));
+        }
+        stored.put(RP_DATABASE_KEY, json);
+    } catch (error) {
+        rpLog("Database save failed: " + error);
+    }
+}
+
+function rpGetLink(record, rivalUuid) {
+    if (record === null || record.rivals === null) return null;
+    var link = record.rivals[rivalUuid];
+    return link === null || link === undefined ? null : link;
+}
+
+function rpRecalcCareerRp(record) {
+    var total = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        total += Math.max(0, rpNumber(record.rivals[uuid].points, 0));
+    }
+    if (record.career === null || typeof record.career !== "object") record.career = {};
+    record.career.rivalPointsTotal = total;
+    return total;
+}
+
+function rpAwardPoints(record, rivalUuid, amount, reason) {
+    var link = rpGetLink(record, rivalUuid);
+    if (link === null) return 0;
+    amount = Math.floor(rpNumber(amount, 0));
+    if (amount === 0) return 0;
+    link.points = Math.max(0, rpNumber(link.points, 0) + amount);
+    link.updatedAt = rpNow();
+    if (!(link.history instanceof Array)) link.history = [];
+    link.history.push({ time: rpNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
+    while (link.history.length > 30) link.history.shift();
+    rpRecalcCareerRp(record);
+    return amount;
+}
+
+/* ========================= DMZ ========================= */
+
+function rpGetDMZ(player) {
+    try {
+        var mcPlayer = player.getMCEntity();
+        if (mcPlayer === null) return null;
+        return rpStatsProvider().get(rpStatsCap().INSTANCE, mcPlayer).orElse(null);
+    } catch (ignored) {
+        return null;
+    }
+}
+
+function rpInvokeNumber(object, methodNames, fallback) {
+    if (object === null) return fallback;
+    for (var i = 0; i < methodNames.length; i++) {
+        try {
+            var method = object.getClass().getMethod(methodNames[i]);
+            var value = Number(method.invoke(object));
+            if (!isNaN(value)) return value;
+        } catch (ignored1) {}
+        try {
+            var direct = object[methodNames[i]];
+            if (typeof direct === "function") {
+                var directValue = Number(direct.call(object));
+                if (!isNaN(directValue)) return directValue;
+            }
+        } catch (ignored2) {}
+    }
+    return fallback;
+}
+
+function rpGetBattlePower(data) {
+    if (data === null) return 0;
+    var direct = rpInvokeNumber(data, [
+        "getBattlePowerExact",
+        "getCurrentBattlePower",
+        "getBattlePower",
+        "getCurrentPower",
+        "getPowerLevel",
+        "getPower"
+    ], -1);
+    if (direct >= 0) return direct;
+    try {
+        var fromStats = rpInvokeNumber(data.getStats(), [
+            "getBattlePowerExact", "getCurrentBattlePower", "getBattlePower"
+        ], -1);
+        if (fromStats >= 0) return fromStats;
+    } catch (ignored) {}
+    return 0;
+}
+
+function rpGetReleasePercent(data) {
+    if (data === null) return 100.0;
+    try {
+        var release = Number(data.getResources().getPowerRelease());
+        if (!isNaN(release) && release > 0) {
+            if (release <= 3.0) release *= 100.0;
+            return rpClamp(release, 0.0, 200.0);
+        }
+    } catch (ignored) {}
+    return 100.0;
+}
+
+function rpGetReleasedBP(data) {
+    var bp = rpGetBattlePower(data);
+    var release = rpGetReleasePercent(data) / 100.0;
+    return bp * release;
+}
+
+function rpGetStat(data, key) {
+    if (data === null) return 0;
+    try {
+        return Math.max(0, rpNumber(data.getCurrentStatValue(key), 0));
+    } catch (ignored1) {}
+    try {
+        var stats = data.getStats();
+        if (key === "STR") return Math.max(0, rpNumber(stats.getStrength(), 0));
+        if (key === "SKP") return Math.max(0, rpNumber(stats.getStrikePower(), 0));
+    } catch (ignored2) {}
+    return 0;
+}
+
+function rpHighestOffense(data) {
+    var str = rpGetStat(data, "STR");
+    var skp = rpGetStat(data, "SKP");
+    if (skp > str) return { key: "SKP", value: skp };
+    return { key: "STR", value: str };
+}
+
+function rpAwardTP(player, data, amount, reason) {
+    try {
+        amount = Math.floor(rpNumber(amount, 0));
+        if (amount <= 0 || data === null) return false;
+        var resources = data.getResources();
+        if (resources === null) return false;
+        resources.addTrainingPoints(amount);
+        var mcPlayer = player.getMCEntity();
+        rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
+        if (RP_SHOW_KILL_TP) {
+            rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
+                (reason ? RP_COLOR + "7 (" + reason + ")" : ""));
+        }
+        return true;
+    } catch (error) {
+        rpMessage(player, RP_COLOR + "c[Rival] Failed to award TP: " + error);
+        return false;
+    }
+}
+
+function rpClearOffenseBonus(bonusStats) {
+    try { bonusStats.removeBonus("STR", RP_BONUS_NAME); } catch (ignored1) {}
+    try { bonusStats.removeBonus("SKP", RP_BONUS_NAME); } catch (ignored2) {}
+}
+
+function rpApplyOffenseBonus(player, data, multiplier) {
+    if (data === null) return false;
+    try {
+        var bonusStats = data.getBonusStats();
+        if (bonusStats === null) return false;
+
+        rpClearOffenseBonus(bonusStats);
+
+        multiplier = rpNumber(multiplier, 1.0);
+        if (multiplier <= 1.001) {
+            try {
+                rpNetwork().sendToTrackingEntityAndSelf(
+                    new (rpSyncPacket())(player.getMCEntity()),
+                    player.getMCEntity()
+                );
+            } catch (ignoredSync) {}
+            return false;
+        }
+
+        var offense = rpHighestOffense(data);
+        bonusStats.addBonus(offense.key, RP_BONUS_NAME, "*", multiplier);
+
+        try {
+            rpNetwork().sendToTrackingEntityAndSelf(
+                new (rpSyncPacket())(player.getMCEntity()),
+                player.getMCEntity()
+            );
+        } catch (ignoredSync2) {}
+        return true;
+    } catch (error) {
+        rpLog("Bonus apply failed: " + error);
+        return false;
+    }
+}
+
+/* ========================= ONLINE LOOKUP ========================= */
+
+function rpFindOnlineByUuid(uuid) {
+    try {
+        var worlds = rpApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) {
+                    if (rpUuid(players[p]) === uuid) return players[p];
+                }
+            } catch (ignored) {}
+        }
+    } catch (error) {
+        rpLog("Online lookup failed: " + error);
+    }
+    return null;
+}
+
+/* ========================= PROXIMITY MATH ========================= */
+
+function rpRangeForPoints(points) {
+    var tier = rpTierIndex(points);
+    return Math.min(RP_MAX_RANGE, RP_BASE_RANGE + tier * RP_RANGE_PER_TIER);
+}
+
+function rpOffenseMultiplier(points, presenceMs, catchupExtra) {
+    var tier = rpTierIndex(points);
+    var base = RP_BASE_OFFENSE_BONUS + tier * RP_OFFENSE_PER_TIER;
+    var presenceRatio = rpClamp(rpNumber(presenceMs, 0) / RP_PRESENCE_FULL_MS, 0, 1);
+    var presence = presenceRatio * RP_PRESENCE_BONUS_CAP;
+    var total = base + presence + rpNumber(catchupExtra, 0);
+    total = rpClamp(total, 0, RP_MAX_OFFENSE_BONUS);
+    return 1.0 + total;
+}
+
+function rpTemp(player) {
+    return player.getTempdata();
+}
+
+function rpTempNumber(temp, key, fallback) {
+    try {
+        if (temp.has(key)) return rpNumber(temp.get(key), fallback);
+    } catch (ignored) {}
+    return fallback;
+}
+
+function rpTempPut(temp, key, value) {
+    try { temp.put(key, rpString(value)); } catch (ignored) {}
+}
+
+/* ========================= CORE TICK ========================= */
+
+function rpProcessPlayer(player) {
+    var database = rpLoadDatabase(player);
+    if (database === null) {
+        rpApplyOffenseBonus(player, rpGetDMZ(player), 1.0);
+        return;
+    }
+
+    var uuid = rpUuid(player);
+    var record = database.players[uuid];
+    if (record === null || record === undefined) {
+        rpApplyOffenseBonus(player, rpGetDMZ(player), 1.0);
+        return;
+    }
+
+    var data = rpGetDMZ(player);
+    var myReleased = rpGetReleasedBP(data);
+    var temp = rpTemp(player);
+    var now = rpNow();
+
+    var bestMultiplier = 1.0;
+    var nearCount = 0;
+    var dirty = false;
+
+    for (var rivalUuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
+        var link = record.rivals[rivalUuid];
+        var rivalPlayer = rpFindOnlineByUuid(rivalUuid);
+        if (rivalPlayer === null) continue;
+
+        var range = rpRangeForPoints(link.points);
+        var distance = rpDistance(player, rivalPlayer);
+        if (distance > range) continue;
+
+        nearCount++;
+        link.lastSeenTogetherAt = now;
+        link.presenceMs = rpNumber(link.presenceMs, 0) + RP_TICK_MS;
+        if (record.career === null || typeof record.career !== "object") record.career = {};
+        record.career.presenceMs = rpNumber(record.career.presenceMs, 0) + RP_TICK_MS;
+
+        var rivalData = rpGetDMZ(rivalPlayer);
+        var rivalReleased = rpGetReleasedBP(rivalData);
+        var rivalRecord = database.players[rivalUuid];
+        var theirLink = rivalRecord !== null && rivalRecord !== undefined
+            ? rpGetLink(rivalRecord, uuid)
+            : null;
+
+        var catchup = 0;
+        if (RP_CATCHUP_ENABLED && theirLink !== null) {
+            var myRp = rpNumber(link.points, 0);
+            var theirRp = rpNumber(theirLink.points, 0);
+            if (myRp > theirRp && rivalReleased > myReleased * RP_CATCHUP_BP_RATIO && rivalReleased > 0) {
+                var gap = (rivalReleased / Math.max(1, myReleased)) - 1.0;
+                catchup = rpClamp(gap * 0.15, 0, RP_CATCHUP_MAX);
+            }
+        }
+
+        var mult = rpOffenseMultiplier(link.points, link.presenceMs, catchup);
+
+        /* Anti-gank offense for weak one-sided declarers targeting a stronger player */
+        if (link.declaredByMe === true && myReleased > 0 && rivalReleased > 0) {
+            if (myReleased <= rivalReleased * RP_ANTIGANK_RATIO) {
+                mult = Math.max(mult, 1.0 + RP_ANTIGANK_OFFENSE_BONUS + rpTierIndex(link.points) * 0.01);
+            }
+        }
+
+        if (mult > bestMultiplier) bestMultiplier = mult;
+
+        /* Presence RP ticks */
+        var presenceKey = "rival.v4.presenceRp." + rivalUuid;
+        var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
+        if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
+            var presenceRp = link.mutual === true ? RP_PRESENCE_RP_MUTUAL : RP_PRESENCE_RP_ONE_SIDED;
+            if (link.declaredByMe === true || link.mutual === true) {
+                rpAwardPoints(record, rivalUuid, presenceRp, "presence");
+                dirty = true;
+            }
+            rpTempPut(temp, presenceKey, now);
+        }
+
+        /* Surpass award */
+        if (RP_SURPASS_ENABLED && rivalReleased > 0 && myReleased > rivalReleased) {
+            var surpassKey = "rival.v4.surpass." + rivalUuid;
+            var lastSurpass = rpTempNumber(temp, surpassKey, 0);
+            if (now - lastSurpass >= RP_SURPASS_COOLDOWN_MS) {
+                if (rpAwardTP(player, data, RP_SURPASS_TP, "Surpassed " + link.name)) {
+                    record.career.surpassAwards = rpNumber(record.career.surpassAwards, 0) + 1;
+                    rpTempPut(temp, surpassKey, now);
+                    dirty = true;
+                }
+            }
+        }
+    }
+
+    rpApplyOffenseBonus(player, data, bestMultiplier);
+
+    if (nearCount > 0) {
+        rpTempPut(temp, "rival.v4.nearCount", nearCount);
+        rpTempPut(temp, "rival.v4.offenseMult", bestMultiplier.toFixed(3));
+    } else {
+        rpTempPut(temp, "rival.v4.nearCount", 0);
+        rpTempPut(temp, "rival.v4.offenseMult", "1.000");
+    }
+
+    if (dirty) rpSaveDatabase(player, database);
+}
+
+/* ========================= COMBAT HOOKS ========================= */
+
+function rpIsRivalOf(record, otherUuid) {
+    return rpGetLink(record, otherUuid) !== null;
+}
+
+function rpHandleKillNearRivals(killer, victim) {
+    var database = rpLoadDatabase(killer);
+    if (database === null) return;
+
+    var killerUuid = rpUuid(killer);
+    var record = database.players[killerUuid];
+    if (record === null || record === undefined) return;
+
+    var killerData = rpGetDMZ(killer);
+    var killerReleased = rpGetReleasedBP(killerData);
+    var dirty = false;
+    var victimIsPlayer = rpIsPlayer(victim);
+    var victimUuid = victimIsPlayer ? rpUuid(victim) : "";
+
+    /* Direct rival kill underdog win */
+    if (victimIsPlayer) {
+        var directLink = rpGetLink(record, victimUuid);
+        if (directLink !== null && directLink.declaredByMe === true && directLink.mutual !== true) {
+            var victimData = rpGetDMZ(victim);
+            var victimReleased = rpGetReleasedBP(victimData);
+            if (victimReleased > killerReleased) {
+                rpAwardTP(killer, killerData, RP_UNDERDOG_WIN_TP, "Underdog victory vs " + directLink.name);
+                rpAwardPoints(record, victimUuid, RP_UNDERDOG_WIN_RP, "underdog_win");
+                dirty = true;
+            }
+        }
+    }
+
+    for (var rivalUuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
+        if (victimIsPlayer && rivalUuid === victimUuid) continue;
+
+        var link = record.rivals[rivalUuid];
+        var rivalPlayer = rpFindOnlineByUuid(rivalUuid);
+        if (rivalPlayer === null) continue;
+        if (rpDistance(killer, rivalPlayer) > rpRangeForPoints(link.points)) continue;
+
+        var tier = rpTierIndex(link.points);
+        var tp = RP_KILL_TP_BASE + tier * RP_KILL_TP_PER_TIER;
+        if (link.mutual === true) tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT);
+
+        rpAwardTP(killer, killerData, tp, "Near rival " + link.name);
+        if (record.career === null || typeof record.career !== "object") record.career = {};
+        record.career.killsNearRival = rpNumber(record.career.killsNearRival, 0) + 1;
+        dirty = true;
+
+        /* Anti-gank: if this rival is much weaker and has me declared, they gain from witnessing */
+        var rivalRecord = database.players[rivalUuid];
+        if (rivalRecord === null || rivalRecord === undefined) continue;
+        var theirLink = rpGetLink(rivalRecord, killerUuid);
+        if (theirLink === null || theirLink.declaredByMe !== true) continue;
+
+        var rivalData = rpGetDMZ(rivalPlayer);
+        var rivalReleased = rpGetReleasedBP(rivalData);
+        if (killerReleased > 0 && rivalReleased <= killerReleased * RP_ANTIGANK_RATIO) {
+            rpAwardTP(killer, killerData, RP_ANTIGANK_WITNESS_KILL_TP, "Rivals watching");
+            rpAwardPoints(rivalRecord, killerUuid, RP_ANTIGANK_WITNESS_RP, "witness_kill");
+            dirty = true;
+        }
+    }
+
+    if (dirty) rpSaveDatabase(killer, database);
+}
+
+function rpHandleDamagedByRival(victim, attacker) {
+    if (!rpIsPlayer(attacker)) return;
+
+    var database = rpLoadDatabase(victim);
+    if (database === null) return;
+
+    var victimUuid = rpUuid(victim);
+    var attackerUuid = rpUuid(attacker);
+    var record = database.players[victimUuid];
+    if (record === null || record === undefined) return;
+
+    var link = rpGetLink(record, attackerUuid);
+    if (link === null) return;
+
+    var temp = rpTemp(victim);
+    var now = rpNow();
+
+    /* Underdog engage TP when fighting a stronger one-sided rival */
+    if (link.declaredByMe === true && link.mutual !== true) {
+        var myData = rpGetDMZ(victim);
+        var theirData = rpGetDMZ(attacker);
+        var myReleased = rpGetReleasedBP(myData);
+        var theirReleased = rpGetReleasedBP(theirData);
+        if (theirReleased > myReleased) {
+            var engageKey = "rival.v4.engage." + attackerUuid;
+            var last = rpTempNumber(temp, engageKey, 0);
+            if (now - last >= RP_UNDERDOG_ENGAGE_COOLDOWN_MS) {
+                rpAwardTP(victim, myData, RP_UNDERDOG_ENGAGE_TP, "Engaging rival");
+                rpTempPut(temp, engageKey, now);
+            }
+        }
+    }
+}
+
+function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
+    var database = rpLoadDatabase(victim);
+    if (database === null) return;
+
+    var victimUuid = rpUuid(victim);
+    var record = database.players[victimUuid];
+    if (record === null || record === undefined) return;
+
+    var victimData = rpGetDMZ(victim);
+    var victimReleased = rpGetReleasedBP(victimData);
+    if (victimReleased <= 0) return;
+
+    var temp = rpTemp(victim);
+    var now = rpNow();
+    var hitKey = "rival.v4.antigankHit";
+    var last = rpTempNumber(temp, hitKey, 0);
+    if (now - last < RP_ANTIGANK_HIT_COOLDOWN_MS) return;
+
+    var dirty = false;
+
+    for (var rivalUuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
+        var rivalRecord = database.players[rivalUuid];
+        if (rivalRecord === null || rivalRecord === undefined) continue;
+
+        var theirLink = rpGetLink(rivalRecord, victimUuid);
+        if (theirLink === null || theirLink.declaredByMe !== true) continue;
+
+        var rivalPlayer = rpFindOnlineByUuid(rivalUuid);
+        if (rivalPlayer === null) continue;
+
+        var myLink = record.rivals[rivalUuid];
+        if (rpDistance(victim, rivalPlayer) > rpRangeForPoints(myLink.points)) continue;
+
+        var rivalData = rpGetDMZ(rivalPlayer);
+        var rivalReleased = rpGetReleasedBP(rivalData);
+        if (rivalReleased > victimReleased * RP_ANTIGANK_RATIO) continue;
+
+        rpAwardTP(rivalPlayer, rivalData, RP_ANTIGANK_HIT_TP, "Rival under fire");
+        rpAwardPoints(rivalRecord, victimUuid, RP_ANTIGANK_HIT_RP, "target_hit");
+        dirty = true;
+    }
+
+    if (dirty) {
+        rpTempPut(temp, hitKey, now);
+        rpSaveDatabase(victim, database);
+    }
+}
+
+function rpHandleDeathToRival(victim, damageSource) {
+    var attacker = null;
+    try { attacker = damageSource; } catch (ignored) {}
+    if (!rpIsPlayer(attacker)) {
+        try {
+            if (damageSource !== null && damageSource.getSourceEntity) {
+                attacker = damageSource.getSourceEntity();
+            }
+        } catch (ignored2) {}
+    }
+    if (!rpIsPlayer(attacker)) return;
+
+    var database = rpLoadDatabase(victim);
+    if (database === null) return;
+
+    var victimUuid = rpUuid(victim);
+    var attackerUuid = rpUuid(attacker);
+    var record = database.players[victimUuid];
+    if (record === null || record === undefined) return;
+
+    var link = rpGetLink(record, attackerUuid);
+    if (link === null) return;
+    if (link.declaredByMe !== true) return;
+
+    var myData = rpGetDMZ(victim);
+    var theirData = rpGetDMZ(attacker);
+    if (rpGetReleasedBP(theirData) > rpGetReleasedBP(myData)) {
+        rpAwardPoints(record, attackerUuid, RP_UNDERDOG_DEATH_RP, "died_to_stronger_rival");
+        rpSaveDatabase(victim, database);
+        rpMessage(victim, RP_COLOR + "e[Rival] +" + RP_UNDERDOG_DEATH_RP + " RP for falling to " + link.name);
+    }
+}
+
+/* ========================= EVENTS ========================= */
+
+function rivalProxTick(event) {
+    try {
+        var player = event.player;
+        if (!rpIsPlayer(player)) return;
+
+        var temp = rpTemp(player);
+        var now = rpNow();
+        var last = rpTempNumber(temp, "rival.v4.tick", 0);
+        if (now - last < RP_TICK_MS) return;
+        rpTempPut(temp, "rival.v4.tick", now);
+
+        rpProcessPlayer(player);
+    } catch (error) {
+        rpLog("tick failed: " + error);
+    }
+}
+
+function rivalProxDamagedEntity(event) {
+    try {
+        var attacker = event.player;
+        var target = event.target;
+        if (!rpIsPlayer(attacker) || target === null) return;
+        if (rpIsPlayer(target)) {
+            rpHandleDamagedByRival(target, attacker);
+        }
+    } catch (error) {
+        rpLog("damagedEntity failed: " + error);
+    }
+}
+
+function rivalProxDamaged(event) {
+    try {
+        var victim = event.player;
+        if (!rpIsPlayer(victim)) return;
+
+        var source = null;
+        try { source = event.source; } catch (ignored) {}
+        if (rpIsPlayer(source)) {
+            rpHandleDamagedByRival(victim, source);
+        }
+
+        rpHandleStrongPlayerDamagedNearWeakRivals(victim);
+    } catch (error) {
+        rpLog("damaged failed: " + error);
+    }
+}
+
+function rivalProxKill(event) {
+    try {
+        var killer = event.player;
+        var victim = event.entity;
+        if (!rpIsPlayer(killer) || victim === null) return;
+        rpHandleKillNearRivals(killer, victim);
+    } catch (error) {
+        rpLog("kill failed: " + error);
+    }
+}
+
+function rivalProxDied(event) {
+    try {
+        var victim = event.player;
+        if (!rpIsPlayer(victim)) return;
+        var source = null;
+        try { source = event.source; } catch (ignored) {}
+        rpHandleDeathToRival(victim, source);
+
+        var data = rpGetDMZ(victim);
+        rpApplyOffenseBonus(victim, data, 1.0);
+    } catch (error) {
+        rpLog("died failed: " + error);
+    }
+}
+
+function rivalProxLogout(event) {
+    try {
+        var player = event.player;
+        if (!rpIsPlayer(player)) return;
+        var data = rpGetDMZ(player);
+        rpApplyOffenseBonus(player, data, 1.0);
+    } catch (error) {
+        rpLog("logout failed: " + error);
+    }
+}
+
+/* ========================= CHALLENGE ========================= */
+
+/* ========================= JAVA TYPES ========================= */
+
+/*
+ Avoid top-level System / RC_System bindings. Multiple Global Player
+ scripts can overwrite similarly named variables in CustomNPCs.
+*/
+var RIVAL_CH_API = null;
+var RIVAL_CH_STATS_PROVIDER = null;
+var RIVAL_CH_STATS_CAP = null;
+var RIVAL_CH_SYNC = null;
+var RIVAL_CH_NETWORK = null;
+var RIVAL_CH_KI = null;
+
+function chApi() {
+    if (RIVAL_CH_API === null) RIVAL_CH_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RIVAL_CH_API;
+}
+
+function chStatsProvider() {
+    if (RIVAL_CH_STATS_PROVIDER === null) {
+        RIVAL_CH_STATS_PROVIDER = Java.type("com.dragonminez.common.stats.StatsProvider");
+    }
+    return RIVAL_CH_STATS_PROVIDER;
+}
+
+function chStatsCap() {
+    if (RIVAL_CH_STATS_CAP === null) {
+        RIVAL_CH_STATS_CAP = Java.type("com.dragonminez.common.stats.StatsCapability");
+    }
+    return RIVAL_CH_STATS_CAP;
+}
+
+function chSyncPacket() {
+    if (RIVAL_CH_SYNC === null) {
+        RIVAL_CH_SYNC = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
+    }
+    return RIVAL_CH_SYNC;
+}
+
+function chNetwork() {
+    if (RIVAL_CH_NETWORK === null) {
+        RIVAL_CH_NETWORK = Java.type("com.dragonminez.common.network.NetworkHandler");
+    }
+    return RIVAL_CH_NETWORK;
+}
+
+function chKiClass() {
+    if (RIVAL_CH_KI === null) {
+        RIVAL_CH_KI = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile");
+    }
+    return RIVAL_CH_KI;
+}
+
+/* ========================= CONFIGURATION ========================= */
+
+var CH_DEBUG = false;
+var CH_COLOR = String.fromCharCode(167);
+
+var CH_CORE_DB_KEY = "dlr.rivalry.v4.database";
+var CH_CORE_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
+var CH_DB_KEY = "dlr.rivalry.v4.challenges";
+var CH_DB_BACKUP_KEY = "dlr.rivalry.v4.challenges.backup";
+
+var CH_REQUEST_EXPIRE_MS = 30 * 1000;
+var CH_COUNTDOWN_MS = 5 * 1000;
+var CH_DURATION_MS = 60 * 1000;
+var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
+var CH_MAX_DISTANCE = 64;
+var CH_TICK_MS = 250;
+
+var CH_WIN_TP = 3500;
+var CH_LOSE_TP = 1200;
+var CH_DRAW_TP = 1800;
+var CH_KO_WIN_TP_BONUS = 2500;
+
+var CH_WIN_RP = 18;
+var CH_LOSE_RP = 35;
+var CH_DRAW_RP = 12;
+var CH_KO_LOSE_RP_BONUS = 15;
+var CH_FORFEIT_RP_PENALTY = 10;
+
+var CH_NON_RIVAL_WIN_TP = 2000;
+
+var CH_ALLOW_NON_RIVAL = true;
+
+/* ========================= HELPERS ========================= */
+
+function chNow() {
+    try {
+        return Number(new Date().getTime());
+    } catch (ignored) {
+        try {
+            return Number(Java.type("java.lang.System").currentTimeMillis());
+        } catch (ignored2) {
+            return 0;
+        }
+    }
+}
+
+function chString(value) {
+    if (value === null || value === undefined) return "";
+    return String(value);
+}
+
+function chNumber(value, fallback) {
+    var number = Number(value);
+    return isNaN(number) || !isFinite(number) ? fallback : number;
+}
+
+function chMessage(player, message) {
+    try {
+        if (player !== null && player !== undefined) player.message(message);
+    } catch (ignored) {}
+}
+
+function chLog(message) {
+    if (!CH_DEBUG) return;
+    try { print("[RivalChallenge v4] " + message); } catch (ignored) {}
+}
+
+function chUuid(player) {
+    try { return chString(player.getUUID()); } catch (ignored) { return ""; }
+}
+
+function chName(player) {
+    try { return chString(player.getName()); } catch (ignored) { return "Unknown"; }
+}
+
+function chIsPlayer(entity) {
+    if (entity === null || entity === undefined) return false;
+    try { return Number(entity.getType()) === 1; } catch (ignored) { return false; }
+}
+
+function chArgs(event) {
+    var result = [];
+    if (event === null || event.arguments === null || event.arguments === undefined) return result;
+    for (var i = 0; i < event.arguments.length; i++) result.push(chString(event.arguments[i]));
+    return result;
+}
+
+function chDistance(a, b) {
+    try {
+        var dx = a.getX() - b.getX();
+        var dy = a.getY() - b.getY();
+        var dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    } catch (ignored) {
+        return 999999;
+    }
+}
+
+function chCommas(value) {
+    var number = Math.floor(chNumber(value, 0));
+    var raw = String(number);
+    var out = "";
+    while (raw.length > 3) {
+        out = "," + raw.substring(raw.length - 3) + out;
+        raw = raw.substring(0, raw.length - 3);
+    }
+    return raw + out;
+}
+
+function chFormatMs(ms) {
+    var seconds = Math.max(0, Math.ceil(chNumber(ms, 0) / 1000));
+    var minutes = Math.floor(seconds / 60);
+    seconds = seconds % 60;
+    if (minutes <= 0) return seconds + "s";
+    return minutes + "m " + seconds + "s";
+}
+
+/* ========================= STORAGE ========================= */
+
+function chDataWorld(fallbackPlayer) {
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = chApi().Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (ignored1) {}
+    }
+    try { return fallbackPlayer.getWorld(); } catch (ignored2) { return null; }
+}
+
+function chFreshChallengeDb() {
+    return {
+        version: 4,
+        nextId: 1,
+        pending: {},
+        sessions: {},
+        playerSessions: {},
+        cooldowns: {},
+        updatedAt: chNow()
+    };
+}
+
+function chNormalizeChallengeDb(database) {
+    if (database === null || typeof database !== "object") database = chFreshChallengeDb();
+    database.version = 4;
+    database.nextId = Math.max(1, chNumber(database.nextId, 1));
+    if (database.pending === null || typeof database.pending !== "object") database.pending = {};
+    if (database.sessions === null || typeof database.sessions !== "object") database.sessions = {};
+    if (database.playerSessions === null || typeof database.playerSessions !== "object") database.playerSessions = {};
+    if (database.cooldowns === null || typeof database.cooldowns !== "object") database.cooldowns = {};
+    database.updatedAt = chNumber(database.updatedAt, chNow());
+    return database;
+}
+
+function chLoadChallengeDb(player) {
+    var world = chDataWorld(player);
+    if (world === null) throw new Error("No challenge storage world.");
+    var stored = world.getStoreddata();
+    var database;
+    try {
+        database = stored.has(CH_DB_KEY)
+            ? JSON.parse(chString(stored.get(CH_DB_KEY)))
+            : chFreshChallengeDb();
+    } catch (mainError) {
+        chLog("Challenge DB failed: " + mainError);
+        try {
+            database = stored.has(CH_DB_BACKUP_KEY)
+                ? JSON.parse(chString(stored.get(CH_DB_BACKUP_KEY)))
+                : chFreshChallengeDb();
+        } catch (backupError) {
+            database = chFreshChallengeDb();
+        }
+    }
+    return chNormalizeChallengeDb(database);
+}
+
+function chSaveChallengeDb(player, database) {
+    var world = chDataWorld(player);
+    if (world === null) return;
+    var stored = world.getStoreddata();
+    database = chNormalizeChallengeDb(database);
+    database.updatedAt = chNow();
+    var json = JSON.stringify(database);
+    if (stored.has(CH_DB_KEY)) stored.put(CH_DB_BACKUP_KEY, chString(stored.get(CH_DB_KEY)));
+    stored.put(CH_DB_KEY, json);
+}
+
+function chLoadCoreDb(player) {
+    var world = chDataWorld(player);
+    if (world === null) return null;
+    try {
+        var stored = world.getStoreddata();
+        if (!stored.has(CH_CORE_DB_KEY)) return null;
+        return JSON.parse(chString(stored.get(CH_CORE_DB_KEY)));
+    } catch (error) {
+        chLog("Core DB read failed: " + error);
+        return null;
+    }
+}
+
+function chSaveCoreDb(player, database) {
+    var world = chDataWorld(player);
+    if (world === null) return;
+    try {
+        var stored = world.getStoreddata();
+        database.updatedAt = chNow();
+        var json = JSON.stringify(database);
+        if (stored.has(CH_CORE_DB_KEY)) {
+            stored.put(CH_CORE_BACKUP_KEY, chString(stored.get(CH_CORE_DB_KEY)));
+        }
+        stored.put(CH_CORE_DB_KEY, json);
+    } catch (error) {
+        chLog("Core DB save failed: " + error);
+    }
+}
+
+/* ========================= LOOKUPS ========================= */
+
+function chFindOnlineAnyWorld(name) {
+    try {
+        var worlds = chApi().Instance().getIWorlds();
+        var wanted = chString(name).toLowerCase();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) {
+                    if (chString(players[p].getName()).toLowerCase() === wanted) return players[p];
+                }
+            } catch (ignored) {}
+        }
+    } catch (error) {
+        chLog("Player lookup failed: " + error);
+    }
+    return null;
+}
+
+function chFindOnlineByUuid(uuid) {
+    try {
+        var worlds = chApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) {
+                    if (chUuid(players[p]) === uuid) return players[p];
+                }
+            } catch (ignored) {}
+        }
+    } catch (error) {}
+    return null;
+}
+
+function chGetSession(db, uuid) {
+    if (db === null || db.playerSessions === null) return null;
+    var id = db.playerSessions[uuid];
+    if (id === null || id === undefined) return null;
+    return db.sessions[String(id)] || null;
+}
+
+function chFreshCombat() {
+    return {
+        damage: 0,
+        physical: 0,
+        ki: 0,
+        hits: 0,
+        biggestHit: 0,
+        combo: 0,
+        longestCombo: 0,
+        lastHitAt: 0
+    };
+}
+
+/* ========================= DMZ ========================= */
+
+function chGetDMZ(player) {
+    try {
+        var mcPlayer = player.getMCEntity();
+        if (mcPlayer === null) return null;
+        return chStatsProvider().get(chStatsCap().INSTANCE, mcPlayer).orElse(null);
+    } catch (ignored) {
+        return null;
+    }
+}
+
+function chAwardTP(player, amount, reason) {
+    try {
+        amount = Math.floor(chNumber(amount, 0));
+        if (amount <= 0) return false;
+        var data = chGetDMZ(player);
+        if (data === null) return false;
+        data.getResources().addTrainingPoints(amount);
+        var mcPlayer = player.getMCEntity();
+        chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
+        chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
+            (reason ? CH_COLOR + "7 (" + reason + ")" : ""));
+        return true;
+    } catch (error) {
+        chMessage(player, CH_COLOR + "c[Challenge] TP award failed: " + error);
+        return false;
+    }
+}
+
+function chIsKiDamage(event) {
+    try {
+        var source = event.damageSource;
+        if (source === null || source === undefined) return false;
+
+        try {
+            var immediate = source.getImmediateSource();
+            if (immediate !== null) {
+                var mc = null;
+                try { mc = immediate.getMCEntity(); } catch (ignoredMc) { mc = immediate; }
+                var KiClass = chKiClass();
+                if (mc !== null && KiClass.isInstance(mc)) return true;
+            }
+        } catch (ignored1) {}
+
+        try {
+            var type = chString(source.getType()).toLowerCase();
+            if (type.indexOf("ki") >= 0 || type.indexOf("energy") >= 0) return true;
+        } catch (ignored2) {}
+    } catch (ignored3) {}
+    return false;
+}
+
+/* ========================= CORE RP HELPERS ========================= */
+
+function chEnsureCorePlayer(core, player) {
+    var uuid = chUuid(player);
+    var name = chName(player);
+    if (core.players === null || typeof core.players !== "object") core.players = {};
+    var record = core.players[uuid];
+    if (record === null || record === undefined) {
+        record = {
+            uuid: uuid,
+            name: name,
+            nameLower: name.toLowerCase(),
+            rivals: {},
+            career: {
+                rivalPointsTotal: 0,
+                officialWins: 0,
+                officialLosses: 0,
+                officialDraws: 0,
+                knockouts: 0,
+                currentStreak: 0,
+                bestStreak: 0,
+                damageDealt: 0,
+                damageTaken: 0,
+                biggestHit: 0,
+                highestCombo: 0,
+                challengesPlayed: 0,
+                presenceMs: 0,
+                killsNearRival: 0,
+                surpassAwards: 0
+            },
+            totals: {
+                declarationsSent: 0,
+                declarationsAccepted: 0,
+                declarationsDeclined: 0,
+                rivalsRemoved: 0
+            }
+        };
+        core.players[uuid] = record;
+    }
+    record.name = name;
+    record.nameLower = name.toLowerCase();
+    if (record.rivals === null || typeof record.rivals !== "object") record.rivals = {};
+    if (record.career === null || typeof record.career !== "object") record.career = {};
+    return record;
+}
+
+function chEnsureLink(owner, target) {
+    if (owner.rivals[target.uuid] === undefined) {
+        owner.rivals[target.uuid] = {
+            uuid: target.uuid,
+            name: target.name,
+            nameLower: target.name.toLowerCase(),
+            mutual: false,
+            declaredByMe: false,
+            declaredByThem: false,
+            points: 0,
+            wins: 0,
+            losses: 0,
+            draws: 0,
+            damageDealt: 0,
+            damageTaken: 0,
+            presenceMs: 0,
+            createdAt: chNow(),
+            updatedAt: chNow(),
+            mutualSince: 0,
+            lastBattleAt: chNow(),
+            lastSeenTogetherAt: 0,
+            history: []
+        };
+    }
+    var link = owner.rivals[target.uuid];
+    link.name = target.name;
+    link.updatedAt = chNow();
+    return link;
+}
+
+function chRecalcRp(record) {
+    var total = 0;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        total += Math.max(0, chNumber(record.rivals[uuid].points, 0));
+    }
+    record.career.rivalPointsTotal = total;
+    return total;
+}
+
+function chAwardRp(record, rivalUuid, amount, reason) {
+    var link = record.rivals[rivalUuid];
+    if (link === null || link === undefined) return 0;
+    amount = Math.floor(chNumber(amount, 0));
+    link.points = Math.max(0, chNumber(link.points, 0) + amount);
+    link.updatedAt = chNow();
+    if (!(link.history instanceof Array)) link.history = [];
+    link.history.push({ time: chNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
+    while (link.history.length > 30) link.history.shift();
+    chRecalcRp(record);
+    return amount;
+}
+
+function chAreRelated(core, aUuid, bUuid) {
+    var a = core.players[aUuid];
+    var b = core.players[bUuid];
+    if (a === null || a === undefined || b === null || b === undefined) return false;
+    return a.rivals[bUuid] !== undefined || b.rivals[aUuid] !== undefined;
+}
+
+/* ========================= CHALLENGE FLOW ========================= */
+
+function chBusy(db, uuid) {
+    if (db.playerSessions[uuid] !== undefined) return true;
+    for (var key in db.pending) {
+        if (!db.pending.hasOwnProperty(key)) continue;
+        var pending = db.pending[key];
+        if (pending.fromUuid === uuid || pending.toUuid === uuid) return true;
+    }
+    return false;
+}
+
+function chChallenge(player, targetName) {
+    var clean = chString(targetName).replace(/^\s+|\s+$/g, "");
+    if (clean === "") {
+        chMessage(player, CH_COLOR + "cUsage: /challenge rival <player>");
+        return;
+    }
+
+    var target = chFindOnlineAnyWorld(clean);
+    if (target === null) {
+        chMessage(player, CH_COLOR + "cThat player must be online.");
+        return;
+    }
+    if (chUuid(player) === chUuid(target)) {
+        chMessage(player, CH_COLOR + "cYou cannot challenge yourself.");
+        return;
+    }
+    if (chDistance(player, target) > CH_MAX_DISTANCE) {
+        chMessage(player, CH_COLOR + "cGet within " + CH_MAX_DISTANCE + " blocks to challenge.");
+        return;
+    }
+
+    var db = chLoadChallengeDb(player);
+    var core = chLoadCoreDb(player);
+    if (core === null) {
+        chMessage(player, CH_COLOR + "cRival database missing. Declare a rival first with /rival.");
+        return;
+    }
+
+    var fromUuid = chUuid(player);
+    var toUuid = chUuid(target);
+
+    if (!CH_ALLOW_NON_RIVAL && !chAreRelated(core, fromUuid, toUuid)) {
+        chMessage(player, CH_COLOR + "cYou can only challenge declared rivals.");
+        return;
+    }
+
+    if (chBusy(db, fromUuid)) {
+        chMessage(player, CH_COLOR + "cYou already have a pending or active challenge.");
+        return;
+    }
+    if (chBusy(db, toUuid)) {
+        chMessage(player, CH_COLOR + "cThat player is already in a challenge.");
+        return;
+    }
+
+    var cooldownKey = fromUuid + ">" + toUuid;
+    var remaining = CH_REQUEST_COOLDOWN_MS - (chNow() - chNumber(db.cooldowns[cooldownKey], 0));
+    if (remaining > 0) {
+        chMessage(player, CH_COLOR + "cWait " + Math.ceil(remaining / 1000) + "s before challenging them again.");
+        return;
+    }
+
+    var id = String(db.nextId++);
+    db.pending[id] = {
+        id: id,
+        fromUuid: fromUuid,
+        fromName: chName(player),
+        toUuid: toUuid,
+        toName: chName(target),
+        createdAt: chNow(),
+        related: chAreRelated(core, fromUuid, toUuid)
+    };
+    db.cooldowns[cooldownKey] = chNow();
+    chSaveChallengeDb(player, db);
+
+    chMessage(player, CH_COLOR + "aChallenge sent to " + CH_COLOR + "e" + chName(target) + CH_COLOR + "a.");
+    chMessage(target, CH_COLOR + "6" + chName(player) + CH_COLOR + "e challenged you to a Rival Battle!");
+    chMessage(target, CH_COLOR + "7Most damage in 60 seconds. Accept: " + CH_COLOR + "f/challenge accept");
+    chMessage(target, CH_COLOR + "7Decline: " + CH_COLOR + "f/challenge decline");
+}
+
+function chFindPendingFor(db, playerUuid, optionalFromName) {
+    var wanted = chString(optionalFromName).toLowerCase();
+    for (var id in db.pending) {
+        if (!db.pending.hasOwnProperty(id)) continue;
+        var pending = db.pending[id];
+        if (pending.toUuid !== playerUuid) continue;
+        if (wanted !== "" && chString(pending.fromName).toLowerCase() !== wanted) continue;
+        return pending;
+    }
+    return null;
+}
+
+function chStartCountdown(player, db, pending) {
+    delete db.pending[pending.id];
+
+    var sessionId = String(db.nextId++);
+    var now = chNow();
+    var session = {
+        id: sessionId,
+        state: "countdown",
+        challengerUuid: pending.fromUuid,
+        challengerName: pending.fromName,
+        opponentUuid: pending.toUuid,
+        opponentName: pending.toName,
+        related: pending.related === true,
+        createdAt: now,
+        countdownEndsAt: now + CH_COUNTDOWN_MS,
+        battleEndsAt: 0,
+        endedAt: 0,
+        endReason: "",
+        winnerUuid: "",
+        loserUuid: "",
+        combat: {}
+    };
+    session.combat[pending.fromUuid] = chFreshCombat();
+    session.combat[pending.toUuid] = chFreshCombat();
+
+    db.sessions[sessionId] = session;
+    db.playerSessions[pending.fromUuid] = sessionId;
+    db.playerSessions[pending.toUuid] = sessionId;
+    chSaveChallengeDb(player, db);
+
+    var a = chFindOnlineByUuid(pending.fromUuid);
+    var b = chFindOnlineByUuid(pending.toUuid);
+    if (a !== null) chMessage(a, CH_COLOR + "6Rival Challenge accepted! Countdown...");
+    if (b !== null) chMessage(b, CH_COLOR + "6Rival Challenge accepted! Countdown...");
+}
+
+function chAccept(player, fromName) {
+    var db = chLoadChallengeDb(player);
+    var pending = chFindPendingFor(db, chUuid(player), fromName);
+    if (pending === null) {
+        chMessage(player, CH_COLOR + "cNo pending challenge to accept.");
+        return;
+    }
+
+    var challenger = chFindOnlineByUuid(pending.fromUuid);
+    if (challenger === null) {
+        delete db.pending[pending.id];
+        chSaveChallengeDb(player, db);
+        chMessage(player, CH_COLOR + "cThe challenger went offline.");
+        return;
+    }
+    if (chDistance(player, challenger) > CH_MAX_DISTANCE) {
+        chMessage(player, CH_COLOR + "cGet within " + CH_MAX_DISTANCE + " blocks to accept.");
+        return;
+    }
+
+    chStartCountdown(player, db, pending);
+}
+
+function chDecline(player, fromName) {
+    var db = chLoadChallengeDb(player);
+    var pending = chFindPendingFor(db, chUuid(player), fromName);
+    if (pending === null) {
+        chMessage(player, CH_COLOR + "cNo pending challenge to decline.");
+        return;
+    }
+    delete db.pending[pending.id];
+    chSaveChallengeDb(player, db);
+    chMessage(player, CH_COLOR + "eDeclined challenge from " + pending.fromName + ".");
+    var online = chFindOnlineByUuid(pending.fromUuid);
+    if (online !== null) chMessage(online, CH_COLOR + "c" + chName(player) + " declined your challenge.");
+}
+
+function chCancel(player) {
+    var db = chLoadChallengeDb(player);
+    var uuid = chUuid(player);
+
+    for (var id in db.pending) {
+        if (!db.pending.hasOwnProperty(id)) continue;
+        var pending = db.pending[id];
+        if (pending.fromUuid === uuid || pending.toUuid === uuid) {
+            delete db.pending[id];
+            chSaveChallengeDb(player, db);
+            chMessage(player, CH_COLOR + "eChallenge request cancelled.");
+            var otherUuid = pending.fromUuid === uuid ? pending.toUuid : pending.fromUuid;
+            var other = chFindOnlineByUuid(otherUuid);
+            if (other !== null) chMessage(other, CH_COLOR + "7Challenge with " + chName(player) + " was cancelled.");
+            return;
+        }
+    }
+
+    var session = chGetSession(db, uuid);
+    if (session === null) {
+        chMessage(player, CH_COLOR + "cYou have no active challenge.");
+        return;
+    }
+
+    chEndSession(player, db, session, {
+        reason: "forfeit",
+        winnerUuid: session.challengerUuid === uuid ? session.opponentUuid : session.challengerUuid,
+        loserUuid: uuid,
+        knockout: false
+    });
+}
+
+/* ========================= SESSION LIFECYCLE ========================= */
+
+function chBeginBattle(player, db, session) {
+    session.state = "active";
+    session.battleEndsAt = chNow() + CH_DURATION_MS;
+    chSaveChallengeDb(player, db);
+
+    var a = chFindOnlineByUuid(session.challengerUuid);
+    var b = chFindOnlineByUuid(session.opponentUuid);
+    if (a !== null) chMessage(a, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
+    if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
+}
+
+function chBuildReport(session, winnerName, loserName) {
+    var lines = [];
+    lines.push(CH_COLOR + "6━━━━━━━━━━━━━━━━━━━━━━");
+    lines.push(CH_COLOR + "eOfficial Rival Challenge");
+    lines.push(CH_COLOR + "7Winner: " + CH_COLOR + "a" + (winnerName || "Draw"));
+    if (loserName) lines.push(CH_COLOR + "7Runner-up: " + CH_COLOR + "c" + loserName);
+    lines.push(CH_COLOR + "7Duration: " + CH_COLOR + "f" + chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))));
+    lines.push(CH_COLOR + "7Reason: " + CH_COLOR + "f" + session.endReason);
+
+    var ids = [session.challengerUuid, session.opponentUuid];
+    for (var i = 0; i < ids.length; i++) {
+        var combat = session.combat[ids[i]] || chFreshCombat();
+        var name = ids[i] === session.challengerUuid ? session.challengerName : session.opponentName;
+        lines.push(CH_COLOR + "6--- " + CH_COLOR + "f" + name + CH_COLOR + "6 ---");
+        lines.push(CH_COLOR + "7Damage: " + CH_COLOR + "f" + chCommas(combat.damage) +
+            CH_COLOR + "8 (Phy " + chCommas(combat.physical) + " / Ki " + chCommas(combat.ki) + ")");
+        lines.push(CH_COLOR + "7Hits: " + CH_COLOR + "f" + combat.hits +
+            CH_COLOR + "7  Best Hit: " + CH_COLOR + "f" + chCommas(combat.biggestHit) +
+            CH_COLOR + "7  Combo: " + CH_COLOR + "f" + combat.longestCombo);
+    }
+    lines.push(CH_COLOR + "6━━━━━━━━━━━━━━━━━━━━━━");
+    return lines;
+}
+
+
+function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journalKey, extras) {
+    if (onlinePlayer === null) return;
+    try {
+        var combat = session.combat[chUuid(onlinePlayer)] || chFreshCombat();
+        var otherUuid = chUuid(onlinePlayer) === session.challengerUuid
+            ? session.opponentUuid
+            : session.challengerUuid;
+        var otherCombat = session.combat[otherUuid] || chFreshCombat();
+        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+        var payload = {
+            won: won === true,
+            seasonRp: chNumber(seasonRp, 0),
+            journalKey: chString(journalKey),
+            damageDealt: chNumber(combat.damage, 0),
+            damageTaken: chNumber(otherCombat.damage, 0),
+            physical: chNumber(combat.physical, 0),
+            ki: chNumber(combat.ki, 0),
+            longestCombo: chNumber(combat.longestCombo, 0),
+            biggestHit: chNumber(combat.biggestHit, 0),
+            fullDuration: duration >= (CH_DURATION_MS - 1500),
+            durationMs: duration,
+            knockout: result.knockout === true,
+            reason: chString(result.reason),
+            firstWin: extras && extras.firstWin === true,
+            comeback: extras && extras.comeback === true,
+            beatHigherRp: extras && extras.beatHigherRp === true,
+            remainingHpPct: extras && extras.remainingHpPct != null ? extras.remainingHpPct : -1
+        };
+        onlinePlayer.getTempdata().put("rival.v4.battleResult", JSON.stringify(payload));
+    } catch (e) {
+        chLog("battleResult write failed: " + e);
+    }
+}
+
+function chApplyRewards(player, session, result) {
+    var core = chLoadCoreDb(player);
+    if (core === null) return;
+
+    var challenger = chFindOnlineByUuid(session.challengerUuid);
+    var opponent = chFindOnlineByUuid(session.opponentUuid);
+
+    var challengerRecord = null;
+    var opponentRecord = null;
+    if (challenger !== null) challengerRecord = chEnsureCorePlayer(core, challenger);
+    if (opponent !== null) opponentRecord = chEnsureCorePlayer(core, opponent);
+
+    /* Offline-safe: still update stored records if present */
+    if (challengerRecord === null) challengerRecord = core.players[session.challengerUuid] || null;
+    if (opponentRecord === null) opponentRecord = core.players[session.opponentUuid] || null;
+
+    function bumpCombatStats(record, combat, takenCombat) {
+        if (record === null) return;
+        record.career.challengesPlayed = chNumber(record.career.challengesPlayed, 0) + 1;
+        record.career.damageDealt = chNumber(record.career.damageDealt, 0) + chNumber(combat.damage, 0);
+        record.career.damageTaken = chNumber(record.career.damageTaken, 0) + chNumber(takenCombat.damage, 0);
+        record.career.biggestHit = Math.max(chNumber(record.career.biggestHit, 0), chNumber(combat.biggestHit, 0));
+        record.career.highestCombo = Math.max(chNumber(record.career.highestCombo, 0), chNumber(combat.longestCombo, 0));
+    }
+
+    var cCombat = session.combat[session.challengerUuid] || chFreshCombat();
+    var oCombat = session.combat[session.opponentUuid] || chFreshCombat();
+    bumpCombatStats(challengerRecord, cCombat, oCombat);
+    bumpCombatStats(opponentRecord, oCombat, cCombat);
+
+    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    function touchDuration(record, wonFlag) {
+        if (record === null) return;
+        record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
+        if (wonFlag === true) {
+            var fastest = chNumber(record.career.fastestWinMs, 0);
+            if (fastest <= 0 || battleDuration < fastest) record.career.fastestWinMs = battleDuration;
+        }
+    }
+
+    var related = session.related === true;
+    if (challengerRecord !== null && opponentRecord !== null && related) {
+        chEnsureLink(challengerRecord, opponentRecord);
+        chEnsureLink(opponentRecord, challengerRecord);
+    }
+
+    if (result.reason === "draw") {
+        if (challenger !== null) chAwardTP(challenger, CH_DRAW_TP, "Draw");
+        if (opponent !== null) chAwardTP(opponent, CH_DRAW_TP, "Draw");
+        if (related && challengerRecord !== null && opponentRecord !== null) {
+            chAwardRp(challengerRecord, opponentRecord.uuid, CH_DRAW_RP, "challenge_draw");
+            chAwardRp(opponentRecord, challengerRecord.uuid, CH_DRAW_RP, "challenge_draw");
+            challengerRecord.rivals[opponentRecord.uuid].draws++;
+            opponentRecord.rivals[challengerRecord.uuid].draws++;
+            challengerRecord.career.officialDraws = chNumber(challengerRecord.career.officialDraws, 0) + 1;
+            opponentRecord.career.officialDraws = chNumber(opponentRecord.career.officialDraws, 0) + 1;
+            chWriteBattleResult(challenger, session, result, false, CH_DRAW_RP,
+                challengerRecord.uuid + ">" + opponentRecord.uuid, {});
+            chWriteBattleResult(opponent, session, result, false, CH_DRAW_RP,
+                opponentRecord.uuid + ">" + challengerRecord.uuid, {});
+        }
+        chSaveCoreDb(player, core);
+        return;
+    }
+
+    var winnerUuid = result.winnerUuid;
+    var loserUuid = result.loserUuid;
+    var winnerIsChallenger = winnerUuid === session.challengerUuid;
+    var winnerPlayer = winnerIsChallenger ? challenger : opponent;
+    var loserPlayer = winnerIsChallenger ? opponent : challenger;
+    var winnerRecord = winnerIsChallenger ? challengerRecord : opponentRecord;
+    var loserRecord = winnerIsChallenger ? opponentRecord : challengerRecord;
+
+    var winTp = CH_WIN_TP + (result.knockout ? CH_KO_WIN_TP_BONUS : 0);
+    var loseTp = CH_LOSE_TP;
+    if (!related) winTp = CH_NON_RIVAL_WIN_TP;
+
+    if (winnerPlayer !== null) chAwardTP(winnerPlayer, winTp, result.knockout ? "KO Victory" : "Victory");
+    if (loserPlayer !== null && result.reason !== "forfeit" && result.reason !== "disconnect") {
+        chAwardTP(loserPlayer, loseTp, "Participation");
+    }
+
+    touchDuration(winnerRecord, true);
+    touchDuration(loserRecord, false);
+
+    if (!related) {
+        chWriteBattleResult(winnerPlayer, session, result, true, 0, "", {});
+        chWriteBattleResult(loserPlayer, session, result, false, 0, "", {});
+        chSaveCoreDb(player, core);
+        return;
+    }
+
+    if (related && winnerRecord !== null && loserRecord !== null) {
+        var winRp = CH_WIN_RP;
+        var loseRp = CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0);
+        if (result.reason === "forfeit" || result.reason === "disconnect") {
+            loseRp = -CH_FORFEIT_RP_PENALTY;
+            winRp = CH_WIN_RP;
+        }
+
+        chAwardRp(winnerRecord, loserRecord.uuid, winRp, "challenge_win");
+        chAwardRp(loserRecord, winnerRecord.uuid, loseRp, result.reason === "forfeit" ? "forfeit" : "challenge_loss");
+
+        winnerRecord.rivals[loserRecord.uuid].wins++;
+        loserRecord.rivals[winnerRecord.uuid].losses++;
+        winnerRecord.rivals[loserRecord.uuid].lastBattleAt = chNow();
+        loserRecord.rivals[winnerRecord.uuid].lastBattleAt = chNow();
+        winnerRecord.rivals[loserRecord.uuid].damageDealt =
+            chNumber(winnerRecord.rivals[loserRecord.uuid].damageDealt, 0) +
+            chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0);
+        loserRecord.rivals[winnerRecord.uuid].damageDealt =
+            chNumber(loserRecord.rivals[winnerRecord.uuid].damageDealt, 0) +
+            chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0);
+
+        winnerRecord.career.officialWins = chNumber(winnerRecord.career.officialWins, 0) + 1;
+        loserRecord.career.officialLosses = chNumber(loserRecord.career.officialLosses, 0) + 1;
+        if (result.knockout) {
+            winnerRecord.career.knockouts = chNumber(winnerRecord.career.knockouts, 0) + 1;
+        }
+
+        winnerRecord.career.currentStreak = chNumber(winnerRecord.career.currentStreak, 0) + 1;
+        winnerRecord.career.bestStreak = Math.max(
+            chNumber(winnerRecord.career.bestStreak, 0),
+            winnerRecord.career.currentStreak
+        );
+        loserRecord.career.currentStreak = 0;
+
+        if (core.leaderboard === null || typeof core.leaderboard !== "object") core.leaderboard = {};
+        core.leaderboard[winnerRecord.uuid] = {
+            uuid: winnerRecord.uuid,
+            name: winnerRecord.name,
+            rp: chNumber(winnerRecord.career.rivalPointsTotal, 0),
+            wins: chNumber(winnerRecord.career.officialWins, 0),
+            streak: chNumber(winnerRecord.career.bestStreak, 0),
+            updatedAt: chNow()
+        };
+        core.leaderboard[loserRecord.uuid] = {
+            uuid: loserRecord.uuid,
+            name: loserRecord.name,
+            rp: chNumber(loserRecord.career.rivalPointsTotal, 0),
+            wins: chNumber(loserRecord.career.officialWins, 0),
+            streak: chNumber(loserRecord.career.bestStreak, 0),
+            updatedAt: chNow()
+        };
+
+        touchDuration(winnerRecord, true);
+        touchDuration(loserRecord, false);
+
+        var winRpFinal = CH_WIN_RP;
+        var loseRpFinal = (result.reason === "forfeit" || result.reason === "disconnect")
+            ? 0
+            : (CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0));
+        var winLinkPts = chNumber(winnerRecord.rivals[loserRecord.uuid].points, 0);
+        var loseLinkPts = chNumber(loserRecord.rivals[winnerRecord.uuid].points, 0);
+        var firstWin = chNumber(winnerRecord.career.officialWins, 0) === 1;
+        var comeback = chNumber(cCombat.damage, 0) < chNumber(oCombat.damage, 0) && winnerIsChallenger
+            ? false
+            : (chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) > 0 &&
+               chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
+               chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) * 0.75);
+        /* simpler comeback: winner took more damage than dealt */
+        comeback = chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
+                   chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0);
+        var beatHigher = loseLinkPts > winLinkPts;
+
+        chWriteBattleResult(winnerPlayer, session, result, true, winRpFinal,
+            winnerRecord.uuid + ">" + loserRecord.uuid,
+            { firstWin: firstWin, comeback: comeback, beatHigherRp: beatHigher });
+        chWriteBattleResult(loserPlayer, session, result, false, loseRpFinal,
+            loserRecord.uuid + ">" + winnerRecord.uuid,
+            { firstWin: false, comeback: false, beatHigherRp: false });
+    }
+
+    chSaveCoreDb(player, core);
+}
+
+function chEndSession(player, db, session, result) {
+    if (session.state === "ended") return;
+
+    session.state = "ended";
+    session.endedAt = chNow();
+    session.endReason = result.reason;
+    session.winnerUuid = chString(result.winnerUuid);
+    session.loserUuid = chString(result.loserUuid);
+
+    delete db.playerSessions[session.challengerUuid];
+    delete db.playerSessions[session.opponentUuid];
+    chSaveChallengeDb(player, db);
+
+    chApplyRewards(player, session, result);
+
+    var winnerName = "";
+    var loserName = "";
+    if (result.reason === "draw") {
+        winnerName = "Draw";
+    } else {
+        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+    }
+
+    var report = chBuildReport(session, winnerName, loserName);
+    var a = chFindOnlineByUuid(session.challengerUuid);
+    var b = chFindOnlineByUuid(session.opponentUuid);
+    for (var i = 0; i < report.length; i++) {
+        if (a !== null) chMessage(a, report[i]);
+        if (b !== null) chMessage(b, report[i]);
+    }
+
+    if (result.reason !== "draw") {
+        if (a !== null) {
+            if (chUuid(a) === result.winnerUuid) chMessage(a, CH_COLOR + "aVictory!");
+            else chMessage(a, CH_COLOR + "cDefeat!");
+        }
+        if (b !== null) {
+            if (chUuid(b) === result.winnerUuid) chMessage(b, CH_COLOR + "aVictory!");
+            else chMessage(b, CH_COLOR + "cDefeat!");
+        }
+    }
+
+    delete db.sessions[session.id];
+    chSaveChallengeDb(player, db);
+}
+
+function chResolveByDamage(player, db, session, reason) {
+    var c = session.combat[session.challengerUuid] || chFreshCombat();
+    var o = session.combat[session.opponentUuid] || chFreshCombat();
+    var cDmg = chNumber(c.damage, 0);
+    var oDmg = chNumber(o.damage, 0);
+
+    if (Math.abs(cDmg - oDmg) < 0.01) {
+        chEndSession(player, db, session, {
+            reason: "draw",
+            winnerUuid: "",
+            loserUuid: "",
+            knockout: false
+        });
+        return;
+    }
+
+    if (cDmg > oDmg) {
+        chEndSession(player, db, session, {
+            reason: reason || "time",
+            winnerUuid: session.challengerUuid,
+            loserUuid: session.opponentUuid,
+            knockout: false
+        });
+    } else {
+        chEndSession(player, db, session, {
+            reason: reason || "time",
+            winnerUuid: session.opponentUuid,
+            loserUuid: session.challengerUuid,
+            knockout: false
+        });
+    }
+}
+
+function chRecordHit(session, attackerUuid, victimUuid, damage, isKi) {
+    damage = Math.max(0, chNumber(damage, 0));
+    if (damage <= 0) return;
+
+    if (session.combat[attackerUuid] === undefined) session.combat[attackerUuid] = chFreshCombat();
+    if (session.combat[victimUuid] === undefined) session.combat[victimUuid] = chFreshCombat();
+
+    var atk = session.combat[attackerUuid];
+    atk.damage += damage;
+    if (isKi) atk.ki += damage;
+    else atk.physical += damage;
+    atk.hits++;
+    if (damage > atk.biggestHit) atk.biggestHit = damage;
+    atk.combo++;
+    if (atk.combo > atk.longestCombo) atk.longestCombo = atk.combo;
+    atk.lastHitAt = chNow();
+
+    session.combat[victimUuid].combo = 0;
+}
+
+/* ========================= EVENTS ========================= */
+
+function rivalChInit(event) {
+    try {
+        if (!chIsPlayer(event.player)) return;
+        chLoadChallengeDb(event.player);
+    } catch (error) {
+        chLog("init failed: " + error);
+    }
+}
+
+function rivalChTick(event) {
+    try {
+        var player = event.player;
+        if (!chIsPlayer(player)) return;
+
+        var temp = player.getTempdata();
+        var now = chNow();
+        var last = 0;
+        try {
+            if (temp.has("rival.v4.challenge.tick")) last = chNumber(temp.get("rival.v4.challenge.tick"), 0);
+        } catch (ignored) {}
+        if (now - last < CH_TICK_MS) return;
+        try { temp.put("rival.v4.challenge.tick", chString(now)); } catch (ignored2) {}
+
+        var db = chLoadChallengeDb(player);
+
+        /* Expire pending requests */
+        for (var id in db.pending) {
+            if (!db.pending.hasOwnProperty(id)) continue;
+            var pending = db.pending[id];
+            if (now - chNumber(pending.createdAt, 0) > CH_REQUEST_EXPIRE_MS) {
+                delete db.pending[id];
+                chSaveChallengeDb(player, db);
+                var from = chFindOnlineByUuid(pending.fromUuid);
+                var to = chFindOnlineByUuid(pending.toUuid);
+                if (from !== null) chMessage(from, CH_COLOR + "7Your challenge to " + pending.toName + " expired.");
+                if (to !== null) chMessage(to, CH_COLOR + "7Challenge from " + pending.fromName + " expired.");
+            }
+        }
+
+        var session = chGetSession(db, chUuid(player));
+        if (session === null) return;
+
+        if (session.state === "countdown") {
+            var remaining = session.countdownEndsAt - now;
+            if (remaining <= 0) {
+                chBeginBattle(player, db, session);
+                return;
+            }
+            var sec = Math.ceil(remaining / 1000);
+            var markKey = "rival.v4.challenge.cd." + session.id;
+            var lastMark = 0;
+            try {
+                if (temp.has(markKey)) lastMark = chNumber(temp.get(markKey), 0);
+            } catch (ignored3) {}
+            if (sec !== lastMark && sec <= 5) {
+                try { temp.put(markKey, chString(sec)); } catch (ignored4) {}
+                chMessage(player, CH_COLOR + "e" + sec + "...");
+            }
+            return;
+        }
+
+        if (session.state === "active") {
+            var a = chFindOnlineByUuid(session.challengerUuid);
+            var b = chFindOnlineByUuid(session.opponentUuid);
+            if (a === null || b === null) {
+                var offlineUuid = a === null ? session.challengerUuid : session.opponentUuid;
+                var winnerUuid = offlineUuid === session.challengerUuid ? session.opponentUuid : session.challengerUuid;
+                chEndSession(player, db, session, {
+                    reason: "disconnect",
+                    winnerUuid: winnerUuid,
+                    loserUuid: offlineUuid,
+                    knockout: false
+                });
+                return;
+            }
+
+            if (chDistance(a, b) > CH_MAX_DISTANCE * 2) {
+                chMessage(a, CH_COLOR + "cToo far apart! Return within range!");
+                chMessage(b, CH_COLOR + "cToo far apart! Return within range!");
+            }
+
+            if (now >= session.battleEndsAt) {
+                chResolveByDamage(player, db, session, "time");
+                return;
+            }
+
+            var left = Math.ceil((session.battleEndsAt - now) / 1000);
+            if (left === 30 || left === 10 || left === 5) {
+                var tKey = "rival.v4.challenge.time." + session.id + "." + left;
+                if (!temp.has(tKey)) {
+                    try { temp.put(tKey, "1"); } catch (ignored5) {}
+                    chMessage(player, CH_COLOR + "e" + left + "s remaining!");
+                }
+            }
+        }
+    } catch (error) {
+        chLog("tick failed: " + error);
+    }
+}
+
+function rivalChDamagedEntity(event) {
+    try {
+        var attacker = event.player;
+        var target = event.target;
+        if (!chIsPlayer(attacker) || !chIsPlayer(target)) return;
+
+        var db = chLoadChallengeDb(attacker);
+        var session = chGetSession(db, chUuid(attacker));
+        if (session === null || session.state !== "active") return;
+
+        var atkUuid = chUuid(attacker);
+        var tgtUuid = chUuid(target);
+        if (tgtUuid !== session.challengerUuid && tgtUuid !== session.opponentUuid) return;
+        if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
+
+        chRecordHit(session, atkUuid, tgtUuid, Number(event.damage), chIsKiDamage(event));
+        chSaveChallengeDb(attacker, db);
+    } catch (error) {
+        chLog("damagedEntity failed: " + error);
+    }
+}
+
+function rivalChDamaged(event) {
+    try {
+        var victim = event.player;
+        if (!chIsPlayer(victim)) return;
+
+        var source = null;
+        try { source = event.source; } catch (ignored) {}
+        if (!chIsPlayer(source)) return;
+
+        var db = chLoadChallengeDb(victim);
+        var session = chGetSession(db, chUuid(victim));
+        if (session === null || session.state !== "active") return;
+
+        var atkUuid = chUuid(source);
+        var vicUuid = chUuid(victim);
+        if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
+        if (vicUuid !== session.challengerUuid && vicUuid !== session.opponentUuid) return;
+
+        chRecordHit(session, atkUuid, vicUuid, Number(event.damage), chIsKiDamage(event));
+        chSaveChallengeDb(victim, db);
+    } catch (error) {
+        chLog("damaged failed: " + error);
+    }
+}
+
+function rivalChKill(event) {
+    try {
+        var killer = event.player;
+        var victim = event.entity;
+        if (!chIsPlayer(killer) || !chIsPlayer(victim)) return;
+
+        var db = chLoadChallengeDb(killer);
+        var session = chGetSession(db, chUuid(killer));
+        if (session === null || session.state !== "active") return;
+
+        var killUuid = chUuid(killer);
+        var vicUuid = chUuid(victim);
+        if ((killUuid !== session.challengerUuid && killUuid !== session.opponentUuid) ||
+            (vicUuid !== session.challengerUuid && vicUuid !== session.opponentUuid)) {
+            return;
+        }
+
+        chEndSession(killer, db, session, {
+            reason: "knockout",
+            winnerUuid: killUuid,
+            loserUuid: vicUuid,
+            knockout: true
+        });
+    } catch (error) {
+        chLog("kill failed: " + error);
+    }
+}
+
+function rivalChDied(event) {
+    try {
+        var victim = event.player;
+        if (!chIsPlayer(victim)) return;
+
+        var db = chLoadChallengeDb(victim);
+        var session = chGetSession(db, chUuid(victim));
+        if (session === null || session.state !== "active") return;
+
+        var source = null;
+        try { source = event.source; } catch (ignored) {}
+        if (!chIsPlayer(source)) {
+            /* Treat mysterious death as loss for victim vs the other participant */
+            var winnerUuid = chUuid(victim) === session.challengerUuid
+                ? session.opponentUuid
+                : session.challengerUuid;
+            chEndSession(victim, db, session, {
+                reason: "knockout",
+                winnerUuid: winnerUuid,
+                loserUuid: chUuid(victim),
+                knockout: true
+            });
+            return;
+        }
+
+        chEndSession(victim, db, session, {
+            reason: "knockout",
+            winnerUuid: chUuid(source),
+            loserUuid: chUuid(victim),
+            knockout: true
+        });
+    } catch (error) {
+        chLog("died failed: " + error);
+    }
+}
+
+function rivalChLogout(event) {
+    try {
+        var player = event.player;
+        if (!chIsPlayer(player)) return;
+        var db = chLoadChallengeDb(player);
+        var session = chGetSession(db, chUuid(player));
+        if (session === null) return;
+
+        var uuid = chUuid(player);
+        var winnerUuid = uuid === session.challengerUuid ? session.opponentUuid : session.challengerUuid;
+        chEndSession(player, db, session, {
+            reason: "disconnect",
+            winnerUuid: winnerUuid,
+            loserUuid: uuid,
+            knockout: false
+        });
+    } catch (error) {
+        chLog("logout failed: " + error);
+    }
+}
+
+function chTriggerPlayer(event) {
+    /*
+     CustomNPCs ScriptTriggerEvent provides the player on event.entity.
+    */
+    if (event === null || event === undefined) return null;
+    if (chIsPlayer(event.entity)) return event.entity;
+    if (chIsPlayer(event.player)) return event.player;
+    return null;
+}
+
+/*
+ Commands live in Rival Command Handler.js (script-slot),
+ matching Sparring Command Handler. Global Player trigger unused.
+*/
+function rivalChTriggerUnused(event) {
+    return;
+}
+
+/* ========================= INSTINCT ========================= */
+
+var RI_StatsProvider = null;
+var RI_StatsCap = null;
+var RI_API = null;
+
+function riApi() {
+    if (RI_API === null) RI_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RI_API;
+}
+function riStatsProvider() {
+    if (RI_StatsProvider === null) RI_StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
+    return RI_StatsProvider;
+}
+function riStatsCap() {
+    if (RI_StatsCap === null) RI_StatsCap = Java.type("com.dragonminez.common.stats.StatsCapability");
+    return RI_StatsCap;
+}
+
+var RI_COLOR = String.fromCharCode(167);
+var RI_DB = "dlr.rivalry.v4.database";
+var RI_TICK_MS = 1500;
+var RI_ALERT_COOLDOWN_MS = 8000;
+
+var RI_TIERS = [
+    { min: 0,    range: 48,  relative: false, charging: false, battlePower: false, form: false, fusion: false, name: "Acquaintance" },
+    { min: 100,  range: 64,  relative: true,  charging: false, battlePower: false, form: false, fusion: false, name: "Competitor" },
+    { min: 300,  range: 80,  relative: true,  charging: true,  battlePower: false, form: false, fusion: false, name: "Adversary" },
+    { min: 700,  range: 96,  relative: true,  charging: true,  battlePower: true,  form: false, fusion: false, name: "Rival" },
+    { min: 1500, range: 128, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: false, name: "Nemesis" },
+    { min: 3000, range: 160, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: true,  name: "Legendary" },
+    { min: 5000, range: 176, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: true,  name: "Arch Rival" },
+    { min: 7500, range: 192, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: true,  name: "Mortal Enemy" },
+    { min: 10000,range: 208, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: true,  name: "Eternal Rival" },
+    { min: 15000,range: 224, relative: true,  charging: true,  battlePower: true,  form: true,  fusion: true,  name: "Mythic Rival" }
+];
+
+function riNow() {
+    try { return Number(new Date().getTime()); }
+    catch (e) { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+}
+function riStr(v) { return v == null ? "" : String(v); }
+function riNum(v, f) { var n = Number(v); return isNaN(n) || !isFinite(n) ? f : n; }
+function riMsg(p, t) { try { p.message(t); } catch (e) {} }
+function riUuid(p) { try { return riStr(p.getUUID()); } catch (e) { return ""; } }
+function riIsPlayer(e) {
+    if (e == null) return false;
+    try { return Number(e.getType()) === 1; } catch (ex) { return false; }
+}
+function riDist(a, b) {
+    try {
+        var dx = a.getX() - b.getX();
+        var dy = a.getY() - b.getY();
+        var dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    } catch (e) { return 999999; }
+}
+
+function riTier(points) {
+    var rp = Math.max(0, riNum(points, 0));
+    var t = RI_TIERS[0];
+    for (var i = 0; i < RI_TIERS.length; i++) if (rp >= RI_TIERS[i].min) t = RI_TIERS[i];
+    return t;
+}
+
+function riWorld(player) {
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var w = riApi().Instance().getIWorld(names[i]);
+            if (w != null) return w;
+        } catch (e) {}
+    }
+    try { return player.getWorld(); } catch (e2) { return null; }
+}
+
+function riLoad(player) {
+    try {
+        var w = riWorld(player);
+        if (w == null) return null;
+        var sd = w.getStoreddata();
+        if (!sd.has(RI_DB)) return null;
+        return JSON.parse(riStr(sd.get(RI_DB)));
+    } catch (e) { return null; }
+}
+
+function riDMZ(player) {
+    try {
+        return riStatsProvider().get(riStatsCap().INSTANCE, player.getMCEntity()).orElse(null);
+    } catch (e) { return null; }
+}
+
+function riBP(data) {
+    if (data == null) return 0;
+    try {
+        var exact = Number(data.getBattlePowerExact());
+        if (!isNaN(exact) && exact > 0) return exact;
+    } catch (e) {}
+    try {
+        var bp = Number(data.getBattlePower());
+        if (!isNaN(bp) && bp > 0) return bp;
+    } catch (e2) {}
+    return 0;
+}
+
+function riRelease(data) {
+    if (data == null) return 100;
+    try {
+        var r = Number(data.getResources().getPowerRelease());
+        if (isNaN(r) || r <= 0) return 100;
+        if (r <= 3) r *= 100;
+        return Math.max(0, Math.min(200, r));
+    } catch (e) { return 100; }
+}
+
+function riReleased(data) {
+    return riBP(data) * (riRelease(data) / 100.0);
+}
+
+function riStatus(data) {
+    try { return data.getStatus(); } catch (e) { return null; }
+}
+
+function riFind(uuid) {
+    try {
+        var worlds = riApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            var players = worlds[i].getAllPlayers();
+            for (var p = 0; p < players.length; p++) {
+                if (riUuid(players[p]) === uuid) return players[p];
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+function riFormat(n) {
+    n = Number(n);
+    if (!isFinite(n)) n = 0;
+    var u = [
+        { v: 1e15, s: "Q" }, { v: 1e12, s: "T" }, { v: 1e9, s: "B" },
+        { v: 1e6, s: "M" }, { v: 1e3, s: "K" }
+    ];
+    for (var i = 0; i < u.length; i++) {
+        if (Math.abs(n) >= u[i].v) return (n / u[i].v).toFixed(1).replace(/\.0$/, "") + u[i].s;
+    }
+    return String(Math.floor(n));
+}
+
+function riRelative(myBP, theirBP) {
+    if (myBP <= 0 || theirBP <= 0) return "unknown";
+    var ratio = theirBP / myBP;
+    if (ratio >= 2.0) return "overwhelmingly stronger";
+    if (ratio >= 1.25) return "stronger";
+    if (ratio >= 0.8) return "evenly matched";
+    if (ratio >= 0.5) return "weaker";
+    return "far weaker";
+}
+
+function riAlert(temp, key, message, player) {
+    var last = 0;
+    try { if (temp.has(key)) last = riNum(temp.get(key), 0); } catch (e) {}
+    if (riNow() - last < RI_ALERT_COOLDOWN_MS) return;
+    try { temp.put(key, String(riNow())); } catch (e2) {}
+    riMsg(player, message);
+}
+
+function riScan(player) {
+    var db = riLoad(player);
+    if (db == null) return;
+    var record = db.players[riUuid(player)];
+    if (record == null || record.rivals == null) return;
+
+    var myData = riDMZ(player);
+    var myReleased = riReleased(myData);
+    var temp = player.getTempdata();
+
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        var link = record.rivals[uuid];
+        if (link.declaredByMe !== true && link.mutual !== true && link.declaredByThem !== true) continue;
+
+        var rival = riFind(uuid);
+        if (rival == null) continue;
+
+        var tier = riTier(link.points);
+        var dist = riDist(player, rival);
+        if (dist > tier.range) continue;
+
+        var rivalData = riDMZ(rival);
+        var status = riStatus(rivalData);
+        var theirReleased = riReleased(rivalData);
+
+        riAlert(
+            temp,
+            "rival.v4.instinct.near." + uuid,
+            RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "f" + link.name +
+            RI_COLOR + "7 sensed nearby (" + Math.floor(dist) + "m) " +
+            RI_COLOR + "8[" + tier.name + "]",
+            player
+        );
+
+        if (tier.relative) {
+            riAlert(
+                temp,
+                "rival.v4.instinct.rel." + uuid,
+                RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                RI_COLOR + "7 feels " + riRelative(myReleased, theirReleased),
+                player
+            );
+        }
+
+        if (tier.charging && status != null) {
+            try {
+                if (status.isChargingKi() === true) {
+                    riAlert(
+                        temp,
+                        "rival.v4.instinct.charge." + uuid,
+                        RI_COLOR + "c[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                        RI_COLOR + "c is charging ki!",
+                        player
+                    );
+                }
+            } catch (e) {}
+        }
+
+        if (tier.battlePower) {
+            riAlert(
+                temp,
+                "rival.v4.instinct.bp." + uuid,
+                RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                RI_COLOR + "7 released BP ~ " + RI_COLOR + "f" + riFormat(theirReleased),
+                player
+            );
+        }
+
+        if (tier.form && status != null) {
+            try {
+                if (status.isAuraActive() === true) {
+                    riAlert(
+                        temp,
+                        "rival.v4.instinct.aura." + uuid,
+                        RI_COLOR + "d[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                        RI_COLOR + "d aura spike detected!",
+                        player
+                    );
+                }
+            } catch (e2) {}
+        }
+
+        if (tier.fusion && status != null) {
+            try {
+                if (status.isFused() === true) {
+                    var fname = "";
+                    try { fname = riStr(status.getFusionName()); } catch (e3) {}
+                    riAlert(
+                        temp,
+                        "rival.v4.instinct.fusion." + uuid,
+                        RI_COLOR + "5[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                        RI_COLOR + "5 is fused" + (fname !== "" ? " (" + fname + ")" : "") + "!",
+                        player
+                    );
+                }
+            } catch (e4) {}
+        }
+    }
+}
+
+function rivalInstinctTick(event) {
+    try {
+        var player = event.player;
+        if (!riIsPlayer(player)) return;
+        var temp = player.getTempdata();
+        var last = 0;
+        try { if (temp.has("rival.v4.instinct.tick")) last = riNum(temp.get("rival.v4.instinct.tick"), 0); } catch (e) {}
+        if (riNow() - last < RI_TICK_MS) return;
+        try { temp.put("rival.v4.instinct.tick", String(riNow())); } catch (e2) {}
+        riScan(player);
+    } catch (error) {
+        try { print("[RivalInstinct] " + error); } catch (e3) {}
+    }
+}
+
+function rivalInstinctLogin(event) {
+    try {
+        if (!riIsPlayer(event.player)) return;
+        riMsg(event.player, RI_COLOR + "8[Rival Instinct] Sensing online.");
+    } catch (e) {}
+}
+
+/* ========================= PROGRESSION ========================= */
+
+var RPROG_API = null;
+var RPROG_Bukkit = null;
+
+function rprogApi() {
+    if (RPROG_API === null) RPROG_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RPROG_API;
+}
+function rprogBukkit() {
+    if (RPROG_Bukkit === null) RPROG_Bukkit = Java.type("org.bukkit.Bukkit");
+    return RPROG_Bukkit;
+}
+
+var RPROG_C = String.fromCharCode(167);
+var RPROG_DB_KEY = "dlr.rivalry.v4.database";
+var RPROG_CH_KEY = "dlr.rivalry.v4.challenges";
+var RPROG_PROG_KEY = "dlr.rivalry.v4.progression";
+var RPROG_PROG_BACKUP = "dlr.rivalry.v4.progression.backup";
+
+var RPROG_TIERS = [
+    { min: 0, name: "Acquaintance" },
+    { min: 100, name: "Competitor" },
+    { min: 300, name: "Adversary" },
+    { min: 700, name: "Rival" },
+    { min: 1500, name: "Nemesis" },
+    { min: 3000, name: "Legendary" },
+    { min: 5000, name: "Arch Rival" },
+    { min: 7500, name: "Mortal Enemy" },
+    { min: 10000, name: "Eternal Rival" },
+    { min: 15000, name: "Mythic Rival" }
+];
+
+function rprogNow() {
+    try { return Number(new Date().getTime()); }
+    catch (e) { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+}
+function rprogStr(v) { return v == null ? "" : String(v); }
+function rprogNum(v, f) { var n = Number(v); return isNaN(n) || !isFinite(n) ? f : n; }
+function rprogMsg(p, t) { try { p.message(t); } catch (e) {} }
+function rprogIsPlayer(e) {
+    if (e == null) return false;
+    try { return Number(e.getType()) === 1; } catch (ex) { return false; }
+}
+function rprogUuid(p) { try { return rprogStr(p.getUUID()); } catch (e) { return ""; } }
+function rprogPname(p) { try { return rprogStr(p.getName()); } catch (e) { return "Unknown"; } }
+
+function rprogStore() {
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var w = rprogApi().Instance().getIWorld(names[i]);
+            if (w != null) return w.getStoreddata();
+        } catch (e) {}
+    }
+    return null;
+}
+
+function rprogLoad(key) {
+    var s = rprogStore();
+    if (s == null || !s.has(key)) return null;
+    try { return JSON.parse(rprogStr(s.get(key))); } catch (e) { return null; }
+}
+
+function rprogSave(key, backup, obj) {
+    var s = rprogStore();
+    if (s == null) return;
+    try {
+        if (s.has(key)) s.put(backup, rprogStr(s.get(key)));
+        obj.updatedAt = rprogNow();
+        s.put(key, JSON.stringify(obj));
+    } catch (e) {}
+}
+
+function rprogTierName(points) {
+    var rp = Math.max(0, rprogNum(points, 0));
+    var name = RPROG_TIERS[0].name;
+    for (var i = 0; i < RPROG_TIERS.length; i++) if (rp >= RPROG_TIERS[i].min) name = RPROG_TIERS[i].name;
+    return name;
+}
+
+function rprogEnsureProg() {
+    var prog = rprogLoad(RPROG_PROG_KEY);
+    if (prog == null || typeof prog != "object") {
+        prog = {
+            version: 4,
+            season: {
+                id: 1,
+                name: "Season 1",
+                startedAt: rprogNow(),
+                endsAt: rprogNow() + (75 * 86400000),
+                leaderboard: {}
+            },
+            achievements: {},
+            quests: {},
+            journal: {},
+            hallOfFame: {},
+            specialTitles: {},
+            processedBattles: {},
+            updatedAt: rprogNow()
+        };
+    }
+    if (prog.season == null) prog.season = { id: 1, name: "Season 1", startedAt: rprogNow(), endsAt: rprogNow() + (75 * 86400000), leaderboard: {} };
+    if (prog.achievements == null) prog.achievements = {};
+    if (prog.quests == null) prog.quests = {};
+    if (prog.journal == null) prog.journal = {};
+    if (prog.hallOfFame == null) prog.hallOfFame = {};
+    if (prog.specialTitles == null) prog.specialTitles = {};
+    if (prog.processedBattles == null) prog.processedBattles = {};
+    return prog;
+}
+
+function rprogWeekKey() { return String(Math.floor(rprogNow() / (7 * 86400000))); }
+
+function rprogEnsureQuests(prog, id) {
+    var key = rprogWeekKey();
+    if (prog.quests[id] == null || prog.quests[id].week != key) {
+        prog.quests[id] = {
+            week: key,
+            list: [
+                { id: "defeat_rival", name: "Defeat your rival", goal: 1, progress: 0, rp: 40 },
+                { id: "melee_hits", name: "Land 50 melee hits in challenges", goal: 50, progress: 0, rp: 25 },
+                { id: "ki_damage", name: "Deal 20,000 Ki damage in challenges", goal: 20000, progress: 0, rp: 25 },
+                { id: "three_battles", name: "Fight 3 official battles", goal: 3, progress: 0, rp: 30 },
+                { id: "long_battle", name: "Finish a full 60s battle", goal: 1, progress: 0, rp: 20 }
+            ]
+        };
+    }
+    return prog.quests[id];
+}
+
+function rprogBumpQuest(q, id, amount) {
+    for (var i = 0; i < q.list.length; i++) {
+        if (q.list[i].id == id) {
+            q.list[i].progress = rprogNum(q.list[i].progress, 0) + amount;
+        }
+    }
+}
+
+function rprogUnlock(prog, id, ach, player) {
+    if (prog.achievements[id] == null) prog.achievements[id] = {};
+    if (prog.achievements[id][ach] === true) return;
+    prog.achievements[id][ach] = true;
+    rprogMsg(player, RPROG_C + "6[Rival Achievement] " + RPROG_C + "e" + ach.replace(/_/g, " "));
+    if (ach == "legend_killer") prog.specialTitles[id] = "legend_killer";
+    if (ach == "god_rival") prog.specialTitles[id] = "god_slayer";
+}
+
+function rprogSyncTitle(player, title) {
+    try {
+        var safe = rprogStr(title).replace(/[^A-Za-z0-9 _\-]/g, "");
+        rprogBukkit().dispatchCommand(
+            rprogBukkit().getConsoleSender(),
+            "cmi usermeta " + rprogPname(player) + " set rival_title " + safe
+        );
+    } catch (e) {}
+}
+
+function recomputeHof(prog, db) {
+    if (db == null || db.players == null) return;
+    var bestRp = null;
+    var bestStreak = null;
+    var bestBattles = null;
+    for (var id in db.players) {
+        if (!db.players.hasOwnProperty(id)) continue;
+        var rec = db.players[id];
+        var career = rec.career || {};
+        var rp = rprogNum(career.rivalPointsTotal, 0);
+        var streak = rprogNum(career.bestStreak, 0);
+        var battles = rprogNum(career.challengesPlayed, 0);
+        if (bestRp == null || rp > bestRp.rp) bestRp = { name: rec.name + " (" + rp + ")", rp: rp };
+        if (bestStreak == null || streak > bestStreak.v) bestStreak = { name: rec.name + " (" + streak + ")", v: streak };
+        if (bestBattles == null || battles > bestBattles.v) bestBattles = { name: rec.name + " (" + battles + ")", v: battles };
+    }
+    var seasonRows = [];
+    for (var sid in prog.season.leaderboard) {
+        if (!prog.season.leaderboard.hasOwnProperty(sid)) continue;
+        seasonRows.push(prog.season.leaderboard[sid]);
+    }
+    seasonRows.sort(function (a, b) { return rprogNum(b.rp, 0) - rprogNum(a.rp, 0); });
+    prog.hallOfFame.seasonChampion = seasonRows.length > 0 ? seasonRows[0].name + " (" + seasonRows[0].rp + " SRP)" : "-";
+    prog.hallOfFame.highestRp = bestRp != null ? bestRp.name : "-";
+    prog.hallOfFame.longestStreak = bestStreak != null ? bestStreak.name : "-";
+    prog.hallOfFame.mostLegendary = bestBattles != null ? bestBattles.name : "-";
+    if (prog.hallOfFame.greatestComeback == null) prog.hallOfFame.greatestComeback = "-";
+}
+
+function processEndedSessions(player) {
+    var ch = rprogLoad(RPROG_CH_KEY);
+    var db = rprogLoad(RPROG_DB_KEY);
+    var prog = rprogEnsureProg();
+    if (ch == null || ch.sessions == null) {
+        /* ended sessions are deleted by Challenge; use career deltas via temp marker */
+        return;
+    }
+}
+
+/*
+ Challenge module deletes finished sessions. Progression is therefore applied
+ from player career snapshots + combat temp export hooks below.
+*/
+function onLoginProgress(player) {
+    var db = rprogLoad(RPROG_DB_KEY);
+    var prog = rprogEnsureProg();
+    if (db == null) return;
+    var rec = db.players[rprogUuid(player)];
+    if (rec == null) return;
+    var rp = rprogNum((rec.career || {}).rivalPointsTotal, 0);
+    var title = prog.specialTitles[rprogUuid(player)] || rprogTierName(rp);
+    if (title == "legend_killer") title = "Legend Killer";
+    if (title == "god_slayer") title = "God Slayer";
+    if (title == "world_rival") title = "World Rival";
+    if (title == "universe_rival") title = "Universe Rival";
+    rprogSyncTitle(player, typeof title == "string" && title.indexOf(" ") >= 0 ? title : rprogTierName(rp));
+    rprogEnsureQuests(prog, rprogUuid(player));
+    recomputeHof(prog, db);
+    rprogSave(RPROG_PROG_KEY, RPROG_PROG_BACKUP, prog);
+
+    if (rprogNum((rec.career || {}).rivalPointsTotal, 0) >= 1500) rprogUnlock(prog, rprogUuid(player), "nemesis", player);
+    if (rprogNum((rec.career || {}).bestStreak, 0) >= 5) rprogUnlock(prog, rprogUuid(player), "unbreakable", player);
+    if (rprogNum((rec.career || {}).challengesPlayed, 0) >= 25) rprogUnlock(prog, rprogUuid(player), "battle_hardened", player);
+    if (rprogNum((rec.career || {}).highestCombo, 0) >= 20) rprogUnlock(prog, rprogUuid(player), "combo_master", player);
+    if (rprogNum((rec.career || {}).rivalPointsTotal, 0) >= 15000) rprogUnlock(prog, rprogUuid(player), "god_rival", player);
+    rprogSave(RPROG_PROG_KEY, RPROG_PROG_BACKUP, prog);
+}
+
+function trackChallengeCombat(player) {
+    var ch = rprogLoad(RPROG_CH_KEY);
+    if (ch == null || ch.playerSessions == null) return;
+    var sid = ch.playerSessions[rprogUuid(player)];
+    if (sid == null) return;
+    var session = ch.sessions[String(sid)];
+    if (session == null || session.state != "active") return;
+
+    var combat = session.combat && session.combat[rprogUuid(player)] ? session.combat[rprogUuid(player)] : null;
+    if (combat == null) return;
+
+    var prog = rprogEnsureProg();
+    var q = rprogEnsureQuests(prog, rprogUuid(player));
+    var temp = player.getTempdata();
+    var lastHits = 0;
+    var lastKi = 0;
+    try {
+        if (temp.has("rival.v4.prog.hits")) lastHits = rprogNum(temp.get("rival.v4.prog.hits"), 0);
+        if (temp.has("rival.v4.prog.ki")) lastKi = rprogNum(temp.get("rival.v4.prog.ki"), 0);
+    } catch (e) {}
+
+    var hits = rprogNum(combat.hits, 0);
+    var ki = rprogNum(combat.ki, 0);
+    var phy = rprogNum(combat.physical, 0);
+    if (hits > lastHits) rprogBumpQuest(q, "melee_hits", hits - lastHits);
+    if (ki > lastKi) rprogBumpQuest(q, "ki_damage", Math.floor(ki - lastKi));
+    try {
+        temp.put("rival.v4.prog.hits", String(hits));
+        temp.put("rival.v4.prog.ki", String(ki));
+    } catch (e2) {}
+
+    if (ki >= 5000) rprogUnlock(prog, rprogUuid(player), "ki_dominator", player);
+    if (rprogNum(combat.longestCombo, 0) >= 20) rprogUnlock(prog, rprogUuid(player), "combo_master", player);
+    rprogSave(RPROG_PROG_KEY, RPROG_PROG_BACKUP, prog);
+}
+
+function noteBattleResult(player) {
+    /*
+     Detect win/loss messages already handled by Challenge.
+     Use career counters + temp flag set by Challenge export if present.
+    */
+    var temp = player.getTempdata();
+    if (!temp.has("rival.v4.battleResult")) return;
+    var raw = rprogStr(temp.get("rival.v4.battleResult"));
+    try { temp.remove("rival.v4.battleResult"); } catch (e) {}
+    var data = null;
+    try { data = JSON.parse(raw); } catch (e2) { return; }
+    if (data == null) return;
+
+    var prog = rprogEnsureProg();
+    var db = rprogLoad(RPROG_DB_KEY);
+    var id = rprogUuid(player);
+    var q = rprogEnsureQuests(prog, id);
+    rprogBumpQuest(q, "three_battles", 1);
+    if (data.fullDuration === true) rprogBumpQuest(q, "long_battle", 1);
+    if (data.won === true) rprogBumpQuest(q, "defeat_rival", 1);
+
+    if (data.won === true && rprogNum(data.damageTaken, 0) <= 0) rprogUnlock(prog, id, "untouchable", player);
+    if (data.won === true && rprogNum(data.remainingHpPct, 100) >= 90) rprogUnlock(prog, id, "perfect_victory", player);
+    if (data.comeback === true) {
+        rprogUnlock(prog, id, "comeback_king", player);
+        prog.hallOfFame.greatestComeback = rprogPname(player);
+    }
+    if (data.firstWin === true) rprogUnlock(prog, id, "first_blood", player);
+    if (data.beatHigherRp === true) rprogUnlock(prog, id, "legend_killer", player);
+
+    var jKey = rprogStr(data.journalKey || "");
+    if (jKey != "") {
+        if (prog.journal[jKey] == null) prog.journal[jKey] = {};
+        var j = prog.journal[jKey];
+        if (j.firstBattleAt == null) j.firstBattleAt = rprogNow();
+        if (data.won === true) {
+            if (j.firstWinAt == null) j.firstWinAt = rprogNow();
+            j.biggestWinDamage = Math.max(rprogNum(j.biggestWinDamage, 0), rprogNum(data.damageDealt, 0));
+        } else {
+            if (j.firstLossAt == null) j.firstLossAt = rprogNow();
+            j.biggestLossDamage = Math.max(rprogNum(j.biggestLossDamage, 0), rprogNum(data.damageTaken, 0));
+        }
+        j.lastBattleAt = rprogNow();
+        j.battlesThisSeason = rprogNum(j.battlesThisSeason, 0) + 1;
+    }
+
+    if (prog.season.leaderboard[id] == null) {
+        prog.season.leaderboard[id] = { rprogUuid: id, name: rprogPname(player), rp: 0, wins: 0 };
+    }
+    prog.season.leaderboard[id].name = rprogPname(player);
+    prog.season.leaderboard[id].rp = rprogNum(prog.season.leaderboard[id].rp, 0) + rprogNum(data.seasonRp, 0);
+    if (data.won === true) prog.season.leaderboard[id].wins = rprogNum(prog.season.leaderboard[id].wins, 0) + 1;
+
+    recomputeHof(prog, db);
+    rprogSave(RPROG_PROG_KEY, RPROG_PROG_BACKUP, prog);
+}
+
+function rivalProgLogin(event) {
+    try {
+        if (!rprogIsPlayer(event.player)) return;
+        onLoginProgress(event.player);
+    } catch (e) {
+        try { print("[RivalProgression] login " + e); } catch (e2) {}
+    }
+}
+
+function rivalProgTick(event) {
+    try {
+        var player = event.player;
+        if (!rprogIsPlayer(player)) return;
+        var temp = player.getTempdata();
+        var last = 0;
+        try { if (temp.has("rival.v4.prog.tick")) last = rprogNum(temp.get("rival.v4.prog.tick"), 0); } catch (e) {}
+        if (rprogNow() - last < 1000) return;
+        try { temp.put("rival.v4.prog.tick", String(rprogNow())); } catch (e2) {}
+        trackChallengeCombat(player);
+        noteBattleResult(player);
+    } catch (e3) {
+        try { print("[RivalProgression] tick " + e3); } catch (e4) {}
+    }
+}
+
+function rivalProgTrigger(event) {
+    try {
+        var player = event.entity != null ? event.entity : event.player;
+        if (!rprogIsPlayer(player)) return;
+        if (Number(event.id) != 240) return;
+        onLoginProgress(player);
+        rprogMsg(player, RPROG_C + "a[Rival] Titles / HOF refreshed.");
+    } catch (e) {}
+}
+
+/* ========================= SPECTATOR ========================= */
+
+var RS_API = null;
+function rsApi() {
+    if (RS_API === null) RS_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RS_API;
+}
+
+var RS_C = String.fromCharCode(167);
+var RS_CH_KEY = "dlr.rivalry.v4.challenges";
+
+function rsNow() {
+    try { return Number(new Date().getTime()); }
+    catch (e) { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+}
+function rsStr(v) { return v == null ? "" : String(v); }
+function rsNum(v, f) { var n = Number(v); return isNaN(n) || !isFinite(n) ? f : n; }
+function rsMsg(p, t) { try { p.message(t); } catch (e) {} }
+function rsIsPlayer(e) {
+    if (e == null) return false;
+    try { return Number(e.getType()) === 1; } catch (ex) { return false; }
+}
+function rsCommas(v) {
+    var n = Math.floor(rsNum(v, 0));
+    var raw = String(n);
+    var out = "";
+    while (raw.length > 3) {
+        out = "," + raw.substring(raw.length - 3) + out;
+        raw = raw.substring(0, raw.length - 3);
+    }
+    return raw + out;
+}
+
+function rsLoadCh() {
+    try {
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            var w = rsApi().Instance().getIWorld(names[i]);
+            if (w == null) continue;
+            var sd = w.getStoreddata();
+            if (!sd.has(RS_CH_KEY)) return null;
+            return JSON.parse(rsStr(sd.get(RS_CH_KEY)));
+        }
+    } catch (e) {}
+    return null;
+}
+
+function rivalSpecTick(event) {
+    try {
+        var player = event.player;
+        if (!rsIsPlayer(player)) return;
+        var temp = player.getTempdata();
+        if (!temp.has("rival.v4.spectateSession")) return;
+
+        var until = rsNum(temp.get("rival.v4.spectateUntil"), 0);
+        if (rsNow() > until) {
+            try { temp.remove("rival.v4.spectateSession"); temp.remove("rival.v4.spectateUntil"); } catch (e) {}
+            rsMsg(player, RS_C + "7Spectate ended.");
+            return;
+        }
+
+        var last = 0;
+        try { if (temp.has("rival.v4.spectate.tick")) last = rsNum(temp.get("rival.v4.spectate.tick"), 0); } catch (e2) {}
+        if (rsNow() - last < 2000) return;
+        try { temp.put("rival.v4.spectate.tick", String(rsNow())); } catch (e3) {}
+
+        var sid = rsStr(temp.get("rival.v4.spectateSession"));
+        var ch = rsLoadCh();
+        if (ch == null || ch.sessions == null || ch.sessions[sid] == null) {
+            rsMsg(player, RS_C + "eBattle ended.");
+            try { temp.remove("rival.v4.spectateSession"); } catch (e4) {}
+            return;
+        }
+        var session = ch.sessions[sid];
+        var a = (session.combat && session.combat[session.challengerUuid]) || {};
+        var b = (session.combat && session.combat[session.opponentUuid]) || {};
+        var left = session.state == "active"
+            ? Math.max(0, Math.ceil((rsNum(session.battleEndsAt, 0) - rsNow()) / 1000))
+            : 0;
+        rsMsg(player, RS_C + "8[Spec] " + RS_C + "f" + session.challengerName + " " + rsCommas(a.damage || 0) +
+            RS_C + "8 vs " + RS_C + "f" + session.opponentName + " " + rsCommas(b.damage || 0) +
+            (session.state == "active" ? RS_C + "7 (" + left + "s)" : RS_C + "7 [" + session.state + "]"));
+    } catch (error) {
+        try { print("[RivalSpectator] " + error); } catch (e) {}
+    }
+}
+
+/* ========================= DMZ / FUSION ========================= */
+
+var RF_StatsProvider = null;
+var RF_StatsCap = null;
+var RF_Sync = null;
+var RF_Network = null;
+var RF_API = null;
+
+function rfApi() {
+    if (RF_API === null) RF_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RF_API;
+}
+function rfStatsProvider() {
+    if (RF_StatsProvider === null) RF_StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
+    return RF_StatsProvider;
+}
+function rfStatsCap() {
+    if (RF_StatsCap === null) RF_StatsCap = Java.type("com.dragonminez.common.stats.StatsCapability");
+    return RF_StatsCap;
+}
+function rfSync() {
+    if (RF_Sync === null) RF_Sync = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
+    return RF_Sync;
+}
+function rfNetwork() {
+    if (RF_Network === null) RF_Network = Java.type("com.dragonminez.common.network.NetworkHandler");
+    return RF_Network;
+}
+
+var RF_C = String.fromCharCode(167);
+var RF_DB_KEY = "dlr.rivalry.v4.database";
+var RF_BONUS_NAME = "Rival Fusion";
+var RF_TICK_MS = 1000;
+var RF_KILL_TP = 400;
+var RF_MAX_FUSION_BONUS = 0.25;
+
+function rfNow() {
+    try { return Number(new Date().getTime()); }
+    catch (e) { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+}
+function rfStr(v) { return v == null ? "" : String(v); }
+function rfNum(v, f) { var n = Number(v); return isNaN(n) || !isFinite(n) ? f : n; }
+function rfMsg(p, t) { try { p.message(t); } catch (e) {} }
+function rfIsPlayer(e) {
+    if (e == null) return false;
+    try { return Number(e.getType()) === 1; } catch (ex) { return false; }
+}
+function rfUuid(p) { try { return rfStr(p.getUUID()); } catch (e) { return ""; } }
+
+function rfLoadDb() {
+    try {
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            var w = rfApi().Instance().getIWorld(names[i]);
+            if (w == null) continue;
+            var sd = w.getStoreddata();
+            if (!sd.has(RF_DB_KEY)) return null;
+            return JSON.parse(rfStr(sd.get(RF_DB_KEY)));
+        }
+    } catch (e) {}
+    return null;
+}
+
+function rfGetDmz(player) {
+    try {
+        return rfStatsProvider().get(rfStatsCap().INSTANCE, player.getMCEntity()).orElse(null);
+    } catch (e) { return null; }
+}
+
+function rfClearBonus(data) {
+    if (data == null) return;
+    try {
+        var b = data.getBonusStats();
+        b.removeBonus("STR", RF_BONUS_NAME);
+        b.removeBonus("SKP", RF_BONUS_NAME);
+    } catch (e) {}
+}
+
+function rfApplyBonus(player, data, mult) {
+    if (data == null) return;
+    try {
+        var b = data.getBonusStats();
+        rfClearBonus(data);
+        if (mult <= 1.001) {
+            rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(player.getMCEntity()), player.getMCEntity());
+            return;
+        }
+        var strVal = 0;
+        var skpVal = 0;
+        try { strVal = Number(data.getCurrentStatValue("STR")); } catch (e1) {}
+        try { skpVal = Number(data.getCurrentStatValue("SKP")); } catch (e2) {}
+        var key = skpVal > strVal ? "SKP" : "STR";
+        b.addBonus(key, RF_BONUS_NAME, "*", mult);
+        rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(player.getMCEntity()), player.getMCEntity());
+    } catch (e) {}
+}
+
+function rfFindByUuid(id) {
+    try {
+        var worlds = rfApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            var players = worlds[i].getAllPlayers();
+            for (var p = 0; p < players.length; p++) {
+                if (rfUuid(players[p]) === id) return players[p];
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+function rfMutualPoints(db, a, b) {
+    if (db == null || db.players == null) return 0;
+    var ra = db.players[a];
+    var rb = db.players[b];
+    if (ra == null || rb == null) return 0;
+    var la = ra.rivals && ra.rivals[b];
+    var lb = rb.rivals && rb.rivals[a];
+    if (la == null || lb == null) return 0;
+    if (la.mutual !== true || lb.mutual !== true) return 0;
+    return Math.max(0, rfNum(la.points, 0));
+}
+
+function rfFusionMult(points) {
+    var bonus = Math.min(RF_MAX_FUSION_BONUS, 0.05 + (Math.max(0, points) / 15000) * 0.20);
+    return 1.0 + bonus;
+}
+
+function rivalFusionTick(event) {
+    try {
+        var player = event.player;
+        if (!rfIsPlayer(player)) return;
+        var temp = player.getTempdata();
+        var last = 0;
+        try { if (temp.has("rival.v4.fusion.tick")) last = rfNum(temp.get("rival.v4.fusion.tick"), 0); } catch (e) {}
+        if (rfNow() - last < RF_TICK_MS) return;
+        try { temp.put("rival.v4.fusion.tick", String(rfNow())); } catch (e2) {}
+
+        var data = rfGetDmz(player);
+        if (data == null) return;
+        var status = null;
+        try { status = data.getStatus(); } catch (e3) { return; }
+        if (status == null || status.isFused() !== true) {
+            rfApplyBonus(player, data, 1.0);
+            try { temp.put("rival.v4.fusion.partner", ""); } catch (e4) {}
+            return;
+        }
+
+        var partnerId = "";
+        try { partnerId = rfStr(status.getFusionPartnerUUID()); } catch (e5) {}
+        if (partnerId === "") {
+            rfApplyBonus(player, data, 1.0);
+            return;
+        }
+
+        var db = rfLoadDb();
+        var pts = rfMutualPoints(db, rfUuid(player), partnerId);
+        if (pts <= 0) {
+            rfApplyBonus(player, data, 1.0);
+            return;
+        }
+
+        var mult = rfFusionMult(pts);
+        rfApplyBonus(player, data, mult);
+        try { temp.put("rival.v4.fusion.partner", partnerId); } catch (e6) {}
+    } catch (error) {
+        try { print("[RivalDMZHooks] tick " + error); } catch (e) {}
+    }
+}
+
+function rivalFusionKill(event) {
+    try {
+        var killer = event.player;
+        if (!rfIsPlayer(killer)) return;
+        var temp = killer.getTempdata();
+        if (!temp.has("rival.v4.fusion.partner")) return;
+        var partnerId = rfStr(temp.get("rival.v4.fusion.partner"));
+        if (partnerId === "") return;
+
+        var data = rfGetDmz(killer);
+        if (data == null) return;
+        try {
+            data.getResources().addTrainingPoints(RF_KILL_TP);
+            rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
+            rfMsg(killer, RF_C + "a[Rival Fusion] +" + RF_KILL_TP + " TP");
+        } catch (e) {}
+
+        var partner = rfFindByUuid(partnerId);
+        if (partner == null) return;
+        var pdata = rfGetDmz(partner);
+        if (pdata == null) return;
+        try {
+            pdata.getResources().addTrainingPoints(RF_KILL_TP);
+            rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
+            rfMsg(partner, RF_C + "a[Rival Fusion] +" + RF_KILL_TP + " TP (partner kill)");
+        } catch (e2) {}
+    } catch (error) {
+        try { print("[RivalDMZHooks] kill " + error); } catch (e3) {}
+    }
+}
+
+function rivalFusionLogout(event) {
+    try {
+        if (!rfIsPlayer(event.player)) return;
+        rfApplyBonus(event.player, rfGetDmz(event.player), 1.0);
+    } catch (e) {}
+}
+
+function rivalFusionDied(event) {
+    try {
+        if (!rfIsPlayer(event.player)) return;
+        rfApplyBonus(event.player, rfGetDmz(event.player), 1.0);
+    } catch (e) {}
+}
+
+/* ========================= UNIFIED EVENTS ========================= */
+
+function init(event) {
+    try { rivalCoreInit(event); } catch (e) { try { print("[RivalSystem] core init: " + e); } catch (x) {} }
+    try { rivalChInit(event); } catch (e) { try { print("[RivalSystem] challenge init: " + e); } catch (x) {} }
+}
+
+function login(event) {
+    try { rivalCoreLogin(event); } catch (e) { try { print("[RivalSystem] core login: " + e); } catch (x) {} }
+    try { rivalInstinctLogin(event); } catch (e) { try { print("[RivalSystem] instinct login: " + e); } catch (x) {} }
+    try { rivalProgLogin(event); } catch (e) { try { print("[RivalSystem] prog login: " + e); } catch (x) {} }
+}
+
+function tick(event) {
+    try { rivalProxTick(event); } catch (e) { try { print("[RivalSystem] prox tick: " + e); } catch (x) {} }
+    try { rivalChTick(event); } catch (e) { try { print("[RivalSystem] ch tick: " + e); } catch (x) {} }
+    try { rivalInstinctTick(event); } catch (e) { try { print("[RivalSystem] instinct tick: " + e); } catch (x) {} }
+    try { rivalProgTick(event); } catch (e) { try { print("[RivalSystem] prog tick: " + e); } catch (x) {} }
+    try { rivalSpecTick(event); } catch (e) { try { print("[RivalSystem] spec tick: " + e); } catch (x) {} }
+    try { rivalFusionTick(event); } catch (e) { try { print("[RivalSystem] fusion tick: " + e); } catch (x) {} }
+}
+
+function damagedEntity(event) {
+    try { rivalChDamagedEntity(event); } catch (e) { try { print("[RivalSystem] ch damagedEntity: " + e); } catch (x) {} }
+    try { rivalProxDamagedEntity(event); } catch (e) { try { print("[RivalSystem] prox damagedEntity: " + e); } catch (x) {} }
+}
+
+function damaged(event) {
+    try { rivalChDamaged(event); } catch (e) { try { print("[RivalSystem] ch damaged: " + e); } catch (x) {} }
+    try { rivalProxDamaged(event); } catch (e) { try { print("[RivalSystem] prox damaged: " + e); } catch (x) {} }
+}
+
+function kill(event) {
+    try { rivalChKill(event); } catch (e) { try { print("[RivalSystem] ch kill: " + e); } catch (x) {} }
+    try { rivalProxKill(event); } catch (e) { try { print("[RivalSystem] prox kill: " + e); } catch (x) {} }
+    try { rivalFusionKill(event); } catch (e) { try { print("[RivalSystem] fusion kill: " + e); } catch (x) {} }
+}
+
+function died(event) {
+    try { rivalChDied(event); } catch (e) { try { print("[RivalSystem] ch died: " + e); } catch (x) {} }
+    try { rivalProxDied(event); } catch (e) { try { print("[RivalSystem] prox died: " + e); } catch (x) {} }
+    try { rivalFusionDied(event); } catch (e) { try { print("[RivalSystem] fusion died: " + e); } catch (x) {} }
+}
+
+function logout(event) {
+    try { rivalChLogout(event); } catch (e) { try { print("[RivalSystem] ch logout: " + e); } catch (x) {} }
+    try { rivalProxLogout(event); } catch (e) { try { print("[RivalSystem] prox logout: " + e); } catch (x) {} }
+    try { rivalFusionLogout(event); } catch (e) { try { print("[RivalSystem] fusion logout: " + e); } catch (x) {} }
+}
+
+function trigger(event) {
+    /* Player commands are in Rival Command Handler.js.
+       Progression keeps admin refresh trigger 240. */
+    try { rivalProgTrigger(event); } catch (e) { try { print("[RivalSystem] prog trigger: " + e); } catch (x) {} }
+}
