@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.3.2
+ Version: 4.3.3
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1010,26 +1010,25 @@ var RP_SHOW_KILL_TP = true;
  * Level-based TP scaling (DMZ getLevel).
  * Applied to ALL rival TP awards (proximity, challenges, fusion kills).
  *
- * Log-interpolated anchors — TP need grows hard at high level, so the
- * curve steepens toward 100k instead of a tiny early-game cap.
+ * Buffed so rival loops stay competitive vs other TP sources.
  *
  *  Level        Mult
- *  1            1x
- *  10           1.5x
- *  100          3x
- *  1,000        8x
- *  5,000        20x
- *  10,000       40x
- *  25,000       90x
- *  50,000       180x
- *  75,000       300x
- *  100,000      500x
+ *  1            1.5x
+ *  10           2.5x
+ *  100          5x
+ *  1,000        14x
+ *  5,000        35x
+ *  10,000       70x
+ *  25,000       160x
+ *  50,000       320x
+ *  75,000       520x
+ *  100,000      850x
  *
- * Above 100k: +150x per extra decade of level (soft continue).
+ * Above 100k: +220x per extra decade of level (soft continue).
  */
 var RIVAL_LEVEL_TP_ENABLED = true;
 var RIVAL_LEVEL_TP_SHOW_IN_REASON = true;
-var RIVAL_LEVEL_TP_MAX = 2000.0;
+var RIVAL_LEVEL_TP_MAX = 3500.0;
 
 var RIVAL_LEVEL_TP_LEVEL_ANCHORS = [
     1,
@@ -1045,16 +1044,16 @@ var RIVAL_LEVEL_TP_LEVEL_ANCHORS = [
 ];
 
 var RIVAL_LEVEL_TP_MULT_ANCHORS = [
-    1.0,
     1.5,
-    3.0,
-    8.0,
-    20.0,
-    40.0,
-    90.0,
-    180.0,
-    300.0,
-    500.0
+    2.5,
+    5.0,
+    14.0,
+    35.0,
+    70.0,
+    160.0,
+    320.0,
+    520.0,
+    850.0
 ];
 
 /* Surpass rival BP award */
@@ -1391,9 +1390,9 @@ function rivalLevelTpMultiplierFromLevel(level) {
     var lastM = mults[mults.length - 1];
     var extraDecades =
         (Math.log(lvl) - Math.log(lastL)) / Math.log(10);
-    var continued = lastM + extraDecades * 150.0;
+    var continued = lastM + extraDecades * 220.0;
     var cap = Number(RIVAL_LEVEL_TP_MAX);
-    if (isNaN(cap) || cap < 1) cap = 2000;
+    if (isNaN(cap) || cap < 1) cap = 3500;
     return Math.min(cap, continued);
 }
 

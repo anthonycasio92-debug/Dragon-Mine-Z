@@ -86,12 +86,12 @@ TP sinks stay relevant:
 
 | Level | Mult |
 |---|---|
-| 1 | 1x |
-| 100 | 3x |
-| 1,000 | 8x |
-| 10,000 | 40x |
-| 50,000 | 180x |
-| 100,000 | 500x |
+| 1 | 1.5x |
+| 100 | 5x |
+| 1,000 | 14x |
+| 10,000 | 70x |
+| 50,000 | 320x |
+| 100,000 | 850x |
 
 Tune `RIVAL_LEVEL_TP_LEVEL_ANCHORS` / `RIVAL_LEVEL_TP_MULT_ANCHORS` in `Rival System.js`.
 
