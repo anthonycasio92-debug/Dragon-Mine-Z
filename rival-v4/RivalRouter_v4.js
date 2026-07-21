@@ -1,15 +1,21 @@
 /*
 ============================================================
- DBZ Legacy Reborn - Rival Router V4
- Version: 4.1.0
+ DBZ Legacy Reborn - Rival Router V4.2
+ Version: 4.2.0
 
- Script-slot command router for CMI asConsole! aliases.
- Same placement pattern as SkillCheckCommand / Sparring Command Handler.
+ FORGE / SCRIPT-SLOT command router for CMI asFakeOp! aliases.
+ Same placement as SkillCheckCommand / Sparring Command Handler.
 
  DO NOT place in Global Player Script slot.
 
+ WHY THIS EXISTS
+ CustomNPCs EventHooks skips FakePlayer for Global Player scripts,
+ but ALWAYS runs Forge/script-slot trigger handlers.
+ CMI asFakeOp! provides a player-like OP source that noppes accepts,
+ while this router reads the REAL player from arguments[0].
+
  CMI alias format:
-   asConsole! noppes script trigger <id> [playerName] [args...]
+   asFakeOp! noppes script trigger <id> [playerName] [args...]
 
  TRIGGERS:
  200 help
@@ -23,14 +29,8 @@
  211 accept challenge
  212 decline challenge
  213 cancel/forfeit
- 220 top [category]
- 221 title / perks
- 222 journal [player]
- 223 season
- 224 quests
- 225 achievements
- 226 hall of fame
- 230 spectate <player>
+ 220-226 displays
+ 230 spectate
 ============================================================
 */
 
@@ -41,7 +41,18 @@ var C = String.fromCharCode(167);
 var DB_KEY = "dlr.rivalry.v4.database";
 var DB_BACKUP = "dlr.rivalry.v4.database.backup";
 var CH_KEY = "dlr.rivalry.v4.challenges";
+var CH_BACKUP = "dlr.rivalry.v4.challenges.backup";
 var PROG_KEY = "dlr.rivalry.v4.progression";
+
+var MAX_MUTUAL = 3;
+var MAX_ONE_SIDED = 5;
+var REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
+var DECLARE_COOLDOWN_MS = 30 * 1000;
+var CH_REQUEST_EXPIRE_MS = 30 * 1000;
+var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
+var CH_COUNTDOWN_MS = 5 * 1000;
+var CH_DURATION_MS = 60 * 1000;
+var CH_MAX_DISTANCE = 64;
 
 var TIERS = [
     { min: 0,     name: "Acquaintance",  color: "7", perk: "None" },
@@ -56,23 +67,14 @@ var TIERS = [
     { min: 15000, name: "Mythic Rival",  color: "4", perk: "Mythic title + max perks" }
 ];
 
-var SPECIAL_TITLES = {
-    world_rival: "World Rival",
-    universe_rival: "Universe Rival",
-    god_slayer: "God Slayer",
-    legend_killer: "Legend Killer"
-};
-
 function now() {
     try { return Number(new Date().getTime()); }
     catch (e) { return Number(Java.type("java.lang.System").currentTimeMillis()); }
 }
-
 function str(v) { return v == null ? "" : String(v); }
 function num(v, f) { var n = Number(v); return isNaN(n) || !isFinite(n) ? f : n; }
 function lower(v) { return str(v).toLowerCase(); }
-function msg(p, t) { try { p.message(t); } catch (e) {} }
-
+function msg(p, t) { try { if (p != null) p.message(t); } catch (e) {} }
 function commas(v) {
     var n = Math.floor(num(v, 0));
     var raw = String(n);
@@ -83,15 +85,24 @@ function commas(v) {
     }
     return raw + out;
 }
-
 function getTier(points) {
     var rp = Math.max(0, num(points, 0));
     var tier = TIERS[0];
     for (var i = 0; i < TIERS.length; i++) if (rp >= TIERS[i].min) tier = TIERS[i];
     return tier;
 }
-
 function api() { return NpcAPI.Instance(); }
+function uuidOf(p) { try { return str(p.getUUID()); } catch (e) { return ""; } }
+function nameOf(p) { try { return str(p.getName()); } catch (e) { return "Unknown"; } }
+
+function dist(a, b) {
+    try {
+        var dx = a.getX() - b.getX();
+        var dy = a.getY() - b.getY();
+        var dz = a.getZ() - b.getZ();
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    } catch (e) { return 999999; }
+}
 
 function worldStore() {
     var names = ["minecraft:overworld", "overworld"];
@@ -112,12 +123,10 @@ function loadJson(key) {
 
 function saveJson(key, backup, obj) {
     var store = worldStore();
-    if (store == null) return;
-    try {
-        if (store.has(key)) store.put(backup, str(store.get(key)));
-        obj.updatedAt = now();
-        store.put(key, JSON.stringify(obj));
-    } catch (e) {}
+    if (store == null) throw new Error("No world storeddata");
+    if (store.has(key)) store.put(backup, str(store.get(key)));
+    obj.updatedAt = now();
+    store.put(key, JSON.stringify(obj));
 }
 
 function onlineByName(name) {
@@ -133,147 +142,522 @@ function onlineByName(name) {
     return null;
 }
 
+function freshDb() {
+    return { version: 4, players: {}, requests: {}, cooldowns: {}, leaderboard: {}, updatedAt: now() };
+}
+
+function freshChallengeDb() {
+    return { version: 4, nextId: 1, pending: {}, sessions: {}, playerSessions: {}, cooldowns: {}, updatedAt: now() };
+}
+
+function loadDb() {
+    var db = loadJson(DB_KEY);
+    if (db == null || typeof db != "object") db = freshDb();
+    if (db.players == null) db.players = {};
+    if (db.requests == null) db.requests = {};
+    if (db.cooldowns == null) db.cooldowns = {};
+    if (db.leaderboard == null) db.leaderboard = {};
+    return db;
+}
+
+function saveDb(db) { saveJson(DB_KEY, DB_BACKUP, db); }
+
+function loadCh() {
+    var db = loadJson(CH_KEY);
+    if (db == null || typeof db != "object") db = freshChallengeDb();
+    if (db.pending == null) db.pending = {};
+    if (db.sessions == null) db.sessions = {};
+    if (db.playerSessions == null) db.playerSessions = {};
+    if (db.cooldowns == null) db.cooldowns = {};
+    db.nextId = Math.max(1, num(db.nextId, 1));
+    return db;
+}
+
+function saveCh(db) { saveJson(CH_KEY, CH_BACKUP, db); }
+
+function freshPlayer(u, n) {
+    return {
+        uuid: u,
+        name: n,
+        nameLower: lower(n),
+        createdAt: now(),
+        lastSeenAt: now(),
+        rivals: {},
+        career: {
+            rivalPointsTotal: 0, officialWins: 0, officialLosses: 0, officialDraws: 0,
+            knockouts: 0, currentStreak: 0, bestStreak: 0, damageDealt: 0, damageTaken: 0,
+            biggestHit: 0, highestCombo: 0, challengesPlayed: 0, presenceMs: 0,
+            killsNearRival: 0, surpassAwards: 0, fastestWinMs: 0, longestBattleMs: 0
+        },
+        totals: { declarationsSent: 0, declarationsAccepted: 0, declarationsDeclined: 0, rivalsRemoved: 0 }
+    };
+}
+
+function ensurePlayer(db, player) {
+    var u = uuidOf(player);
+    var n = nameOf(player);
+    if (db.players[u] == null) db.players[u] = freshPlayer(u, n);
+    var rec = db.players[u];
+    rec.uuid = u;
+    rec.name = n;
+    rec.nameLower = lower(n);
+    rec.lastSeenAt = now();
+    if (rec.rivals == null) rec.rivals = {};
+    if (rec.career == null) rec.career = freshPlayer(u, n).career;
+    if (rec.totals == null) rec.totals = freshPlayer(u, n).totals;
+    return rec;
+}
+
 function findRecord(db, name) {
-    if (db == null || db.players == null) return null;
     var wanted = lower(name);
-    for (var uuid in db.players) {
-        if (!db.players.hasOwnProperty(uuid)) continue;
-        if (lower(db.players[uuid].name) == wanted) return db.players[uuid];
+    for (var u in db.players) {
+        if (!db.players.hasOwnProperty(u)) continue;
+        if (lower(db.players[u].name) == wanted) return db.players[u];
     }
     return null;
+}
+
+function ensureLink(owner, target) {
+    if (owner.rivals[target.uuid] == null) {
+        owner.rivals[target.uuid] = {
+            uuid: target.uuid, name: target.name, nameLower: lower(target.name),
+            mutual: false, declaredByMe: false, declaredByThem: false,
+            points: 0, wins: 0, losses: 0, draws: 0, damageDealt: 0, damageTaken: 0,
+            presenceMs: 0, createdAt: now(), updatedAt: now(), mutualSince: 0,
+            lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
+        };
+    }
+    var link = owner.rivals[target.uuid];
+    link.name = target.name;
+    link.updatedAt = now();
+    return link;
+}
+
+function pushHistory(link, type, note) {
+    if (!(link.history instanceof Array)) link.history = [];
+    link.history.push({ time: now(), type: type, note: note });
+    while (link.history.length > 30) link.history.shift();
+}
+
+function countMutual(rec) {
+    var c = 0;
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        if (rec.rivals[u].mutual === true) c++;
+    }
+    return c;
+}
+
+function countOneSided(rec) {
+    var c = 0;
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        var l = rec.rivals[u];
+        if (l.declaredByMe === true && l.mutual !== true) c++;
+    }
+    return c;
+}
+
+function reqKey(a, b) { return a + ">" + b; }
+
+function getRequest(db, fromU, toU) {
+    var key = reqKey(fromU, toU);
+    var req = db.requests[key];
+    if (req == null) return null;
+    if (now() - num(req.createdAt, 0) > REQUEST_EXPIRE_MS) {
+        delete db.requests[key];
+        return null;
+    }
+    return req;
+}
+
+function removeRequests(db, a, b) {
+    delete db.requests[reqKey(a, b)];
+    delete db.requests[reqKey(b, a)];
+}
+
+function formMutual(db, a, b, note) {
+    var la = ensureLink(a, b);
+    var lb = ensureLink(b, a);
+    var t = now();
+    la.mutual = true; la.declaredByMe = true; la.declaredByThem = true; la.mutualSince = t;
+    lb.mutual = true; lb.declaredByMe = true; lb.declaredByThem = true; lb.mutualSince = t;
+    pushHistory(la, "mutual", note);
+    pushHistory(lb, "mutual", note);
+}
+
+function areRelated(db, a, b) {
+    var ra = db.players[a];
+    var rb = db.players[b];
+    if (ra == null || rb == null) return false;
+    return ra.rivals[b] != null || rb.rivals[a] != null;
+}
+
+function busy(ch, u) {
+    if (ch.playerSessions[u] != null) return true;
+    for (var id in ch.pending) {
+        if (!ch.pending.hasOwnProperty(id)) continue;
+        var p = ch.pending[id];
+        if (p.fromUuid == u || p.toUuid == u) return true;
+    }
+    return false;
+}
+
+function freshCombat() {
+    return { damage: 0, physical: 0, ki: 0, hits: 0, biggestHit: 0, combo: 0, longestCombo: 0, lastHitAt: 0 };
 }
 
 function syncCmiTitle(playerName, title) {
     try {
         var safe = str(title).replace(/[^A-Za-z0-9 _\-]/g, "");
-        Bukkit.dispatchCommand(
-            Bukkit.getConsoleSender(),
-            "cmi usermeta " + playerName + " set rival_title " + safe
-        );
-        Bukkit.dispatchCommand(
-            Bukkit.getConsoleSender(),
-            "cmi usermeta " + playerName + " set rival_rank " + safe.replace(/ /g, "_")
-        );
+        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "cmi usermeta " + playerName + " set rival_title " + safe);
     } catch (e) {}
 }
 
-function ensureProg() {
-    var prog = loadJson(PROG_KEY);
-    if (prog == null || typeof prog != "object") {
-        prog = {
-            version: 4,
-            season: {
-                id: 1,
-                name: "Season 1",
-                startedAt: now(),
-                endsAt: now() + (75 * 24 * 60 * 60 * 1000),
-                leaderboard: {}
-            },
-            achievements: {},
-            quests: {},
-            journal: {},
-            hallOfFame: {},
-            specialTitles: {},
-            updatedAt: now()
-        };
-    }
-    if (prog.season == null) prog.season = { id: 1, name: "Season 1", startedAt: now(), endsAt: now() + (75 * 86400000), leaderboard: {} };
-    if (prog.achievements == null) prog.achievements = {};
-    if (prog.quests == null) prog.quests = {};
-    if (prog.journal == null) prog.journal = {};
-    if (prog.hallOfFame == null) prog.hallOfFame = {};
-    if (prog.specialTitles == null) prog.specialTitles = {};
-    return prog;
-}
+/* ========================= COMMANDS ========================= */
 
-function weekKey() {
-    return String(Math.floor(now() / (7 * 24 * 60 * 60 * 1000)));
-}
-
-function ensureQuests(prog, uuid) {
-    var key = weekKey();
-    if (prog.quests[uuid] == null || prog.quests[uuid].week != key) {
-        prog.quests[uuid] = {
-            week: key,
-            list: [
-                { id: "defeat_rival", name: "Defeat your rival", goal: 1, progress: 0, reward: 40 },
-                { id: "melee_hits", name: "Land 50 melee hits in challenges", goal: 50, progress: 0, reward: 25 },
-                { id: "ki_damage", name: "Deal 20,000 Ki damage in challenges", goal: 20000, progress: 0, reward: 25 },
-                { id: "three_battles", name: "Fight 3 official battles", goal: 3, progress: 0, reward: 30 },
-                { id: "long_battle", name: "Battle for over 60 seconds", goal: 1, progress: 0, reward: 20 }
-            ]
-        };
-    }
-    return prog.quests[uuid];
-}
-
-function showHelp(player) {
+function cmdHelp(player) {
     msg(player, C + "6===== Rival System V4 =====");
-    msg(player, C + "e/rival declare <player> " + C + "7Declare rival");
+    msg(player, C + "e/rival declare <player>");
     msg(player, C + "e/rivalaccept|rivaldecline|rivalremove <player>");
-    msg(player, C + "e/rivallist " + C + "7Your rivals");
-    msg(player, C + "e/rivalstats [player] " + C + "7Career stats");
-    msg(player, C + "e/rivaltop [rp|wins|streak|damage|combo|hit]");
-    msg(player, C + "e/rivaltitle " + C + "7Title + perks");
-    msg(player, C + "e/rivaljournal [player] " + C + "7Rival history journal");
-    msg(player, C + "e/rivalseason " + C + "7Season standing");
-    msg(player, C + "e/rivalquests " + C + "7Weekly quests");
-    msg(player, C + "e/rivalachievements");
-    msg(player, C + "e/rivalhof " + C + "7Hall of Fame");
-    msg(player, C + "e/challenge <player> " + C + "7Official 60s battle");
+    msg(player, C + "e/rivallist  /rivalstats [player]  /rivaltop [cat]");
+    msg(player, C + "e/rivaltitle /rivaljournal /rivalseason /rivalquests");
+    msg(player, C + "e/rivalachievements /rivalhof");
+    msg(player, C + "e/challenge <player>");
     msg(player, C + "e/challengeaccept|challengedecline|challengecancel");
     msg(player, C + "e/spectaterival <player>");
 }
 
+function cmdDeclare(player, targetName) {
+    var clean = str(targetName).replace(/^\s+|\s+$/g, "");
+    if (clean == "") { msg(player, C + "cUsage: /rival declare <player>"); return; }
+    var target = onlineByName(clean);
+    if (target == null) { msg(player, C + "cThat player must be online."); return; }
+    if (uuidOf(player) == uuidOf(target)) { msg(player, C + "cYou cannot declare yourself."); return; }
+
+    var db = loadDb();
+    var pref = ensurePlayer(db, player);
+    var tref = ensurePlayer(db, target);
+    var pu = pref.uuid;
+    var tu = tref.uuid;
+
+    if (pref.rivals[tu] != null && pref.rivals[tu].mutual === true) {
+        msg(player, C + "eAlready mutual rivals with " + tref.name); return;
+    }
+    if (pref.rivals[tu] != null && pref.rivals[tu].declaredByMe === true && pref.rivals[tu].mutual !== true) {
+        msg(player, C + "eAlready waiting on " + tref.name); return;
+    }
+
+    var cdKey = reqKey(pu, tu);
+    var rem = DECLARE_COOLDOWN_MS - (now() - num(db.cooldowns[cdKey], 0));
+    if (rem > 0) { msg(player, C + "cWait " + Math.ceil(rem / 1000) + "s."); return; }
+
+    var reverse = getRequest(db, tu, pu);
+    if (reverse != null) {
+        if (countMutual(pref) >= MAX_MUTUAL || countMutual(tref) >= MAX_MUTUAL) {
+            msg(player, C + "cMutual rival limit reached."); return;
+        }
+        formMutual(db, pref, tref, "Crossed declarations");
+        removeRequests(db, pu, tu);
+        db.cooldowns[cdKey] = now();
+        pref.totals.declarationsAccepted++;
+        tref.totals.declarationsAccepted++;
+        saveDb(db);
+        msg(player, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + tref.name);
+        msg(target, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + pref.name);
+        return;
+    }
+
+    if (countOneSided(pref) >= MAX_ONE_SIDED) {
+        msg(player, C + "cToo many one-sided declarations."); return;
+    }
+
+    var pl = ensureLink(pref, tref);
+    pl.declaredByMe = true;
+    pl.mutual = false;
+    pushHistory(pl, "declare", "Declared rivalry");
+
+    var tl = ensureLink(tref, pref);
+    tl.declaredByThem = true;
+    tl.mutual = false;
+    pushHistory(tl, "declared_by", "Was declared");
+
+    db.requests[reqKey(pu, tu)] = {
+        fromUuid: pu, fromName: pref.name, toUuid: tu, toName: tref.name, createdAt: now()
+    };
+    db.cooldowns[cdKey] = now();
+    pref.totals.declarationsSent++;
+    saveDb(db);
+
+    msg(player, C + "aDeclared " + C + "e" + tref.name + C + "a as a rival.");
+    msg(target, C + "6" + pref.name + C + "e declared you as a rival!");
+    msg(target, C + "7Accept: " + C + "f/rivalaccept " + pref.name);
+}
+
+function cmdAccept(player, fromName) {
+    var clean = str(fromName).replace(/^\s+|\s+$/g, "");
+    if (clean == "") { msg(player, C + "cUsage: /rivalaccept <player>"); return; }
+    var db = loadDb();
+    var pref = ensurePlayer(db, player);
+    var from = findRecord(db, clean);
+    if (from == null) { msg(player, C + "cNo request from that player."); return; }
+    if (getRequest(db, from.uuid, pref.uuid) == null) {
+        msg(player, C + "cNo active request from " + from.name); return;
+    }
+    if (countMutual(pref) >= MAX_MUTUAL || countMutual(from) >= MAX_MUTUAL) {
+        msg(player, C + "cMutual rival limit reached."); return;
+    }
+    formMutual(db, pref, from, "Accepted");
+    removeRequests(db, from.uuid, pref.uuid);
+    pref.totals.declarationsAccepted++;
+    from.totals.declarationsAccepted++;
+    saveDb(db);
+    msg(player, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + from.name);
+    var online = onlineByName(from.name);
+    if (online != null) msg(online, C + "6" + pref.name + C + "e accepted your rivalry!");
+}
+
+function cmdDecline(player, fromName) {
+    var clean = str(fromName).replace(/^\s+|\s+$/g, "");
+    if (clean == "") { msg(player, C + "cUsage: /rivaldecline <player>"); return; }
+    var db = loadDb();
+    var pref = ensurePlayer(db, player);
+    var from = findRecord(db, clean);
+    if (from == null || getRequest(db, from.uuid, pref.uuid) == null) {
+        msg(player, C + "cNo active request."); return;
+    }
+    removeRequests(db, from.uuid, pref.uuid);
+    pref.totals.declarationsDeclined++;
+    saveDb(db);
+    msg(player, C + "eDeclined " + from.name);
+    var online = onlineByName(from.name);
+    if (online != null) msg(online, C + "c" + pref.name + " declined your rivalry.");
+}
+
+function cmdRemove(player, targetName) {
+    var clean = str(targetName).replace(/^\s+|\s+$/g, "");
+    if (clean == "") { msg(player, C + "cUsage: /rivalremove <player>"); return; }
+    var db = loadDb();
+    var pref = ensurePlayer(db, player);
+    var target = findRecord(db, clean);
+    if (target == null || pref.rivals[target.uuid] == null) {
+        msg(player, C + "cYou do not have that rival."); return;
+    }
+    var wasMutual = pref.rivals[target.uuid].mutual === true;
+    delete pref.rivals[target.uuid];
+    if (target.rivals[pref.uuid] != null) {
+        var their = target.rivals[pref.uuid];
+        if (wasMutual) {
+            their.mutual = false;
+            their.declaredByThem = false;
+            if (their.declaredByMe !== true) delete target.rivals[pref.uuid];
+        } else {
+            their.declaredByThem = false;
+            if (their.declaredByMe !== true) delete target.rivals[pref.uuid];
+        }
+    }
+    removeRequests(db, pref.uuid, target.uuid);
+    pref.totals.rivalsRemoved++;
+    saveDb(db);
+    msg(player, C + "eRemoved rivalry with " + target.name);
+    var online = onlineByName(target.name);
+    if (online != null) msg(online, C + "c" + pref.name + " ended rivalry with you.");
+}
+
+function cmdList(player) {
+    var db = loadDb();
+    var pref = ensurePlayer(db, player);
+    saveDb(db);
+    msg(player, C + "6========== Your Rivals ==========");
+    msg(player, C + "7Career RP: " + C + "f" + commas(pref.career.rivalPointsTotal) +
+        C + "7 | " + C + "a" + pref.career.officialWins + C + "7-" + C + "c" + pref.career.officialLosses);
+    var count = 0;
+    for (var u in pref.rivals) {
+        if (!pref.rivals.hasOwnProperty(u)) continue;
+        var link = pref.rivals[u];
+        count++;
+        var status = link.mutual === true ? C + "6Mutual" :
+            (link.declaredByMe === true ? C + "eDeclared" : C + "7Incoming");
+        var tier = getTier(link.points);
+        msg(player, C + "7- " + C + "f" + link.name + " " + status +
+            C + "7 | " + C + tier.color + tier.name + C + "7 (" + commas(link.points) + " RP)");
+    }
+    if (count == 0) msg(player, C + "8No rivals yet.");
+    for (var key in db.requests) {
+        if (!db.requests.hasOwnProperty(key)) continue;
+        if (str(db.requests[key].toUuid) == pref.uuid) {
+            msg(player, C + "dPending from " + C + "f" + db.requests[key].fromName);
+        }
+    }
+}
+
+function cmdChallenge(player, targetName) {
+    var clean = str(targetName).replace(/^\s+|\s+$/g, "");
+    if (clean == "") { msg(player, C + "cUsage: /challenge <player>"); return; }
+    var target = onlineByName(clean);
+    if (target == null) { msg(player, C + "cPlayer must be online."); return; }
+    if (uuidOf(player) == uuidOf(target)) { msg(player, C + "cCannot challenge yourself."); return; }
+    if (dist(player, target) > CH_MAX_DISTANCE) {
+        msg(player, C + "cGet within " + CH_MAX_DISTANCE + " blocks."); return;
+    }
+
+    var db = loadDb();
+    ensurePlayer(db, player);
+    ensurePlayer(db, target);
+    var ch = loadCh();
+    var fromU = uuidOf(player);
+    var toU = uuidOf(target);
+    if (busy(ch, fromU)) { msg(player, C + "cYou already have a challenge."); return; }
+    if (busy(ch, toU)) { msg(player, C + "cThey are busy."); return; }
+
+    var cdKey = fromU + ">" + toU;
+    var rem = CH_REQUEST_COOLDOWN_MS - (now() - num(ch.cooldowns[cdKey], 0));
+    if (rem > 0) { msg(player, C + "cWait " + Math.ceil(rem / 1000) + "s."); return; }
+
+    var id = String(ch.nextId++);
+    ch.pending[id] = {
+        id: id,
+        fromUuid: fromU,
+        fromName: nameOf(player),
+        toUuid: toU,
+        toName: nameOf(target),
+        createdAt: now(),
+        related: areRelated(db, fromU, toU)
+    };
+    ch.cooldowns[cdKey] = now();
+    saveCh(ch);
+    saveDb(db);
+
+    msg(player, C + "aChallenge sent to " + C + "e" + nameOf(target));
+    msg(target, C + "6" + nameOf(player) + C + "e challenged you! 60s most damage.");
+    msg(target, C + "7/challengeaccept   or   /challengedecline");
+}
+
+function findPendingFor(ch, toUuid, optionalFrom) {
+    var wanted = lower(optionalFrom || "");
+    for (var id in ch.pending) {
+        if (!ch.pending.hasOwnProperty(id)) continue;
+        var p = ch.pending[id];
+        if (p.toUuid != toUuid) continue;
+        if (wanted != "" && lower(p.fromName) != wanted) continue;
+        return p;
+    }
+    return null;
+}
+
+function startCountdown(ch, pending) {
+    delete ch.pending[pending.id];
+    var sid = String(ch.nextId++);
+    var t = now();
+    var session = {
+        id: sid,
+        state: "countdown",
+        challengerUuid: pending.fromUuid,
+        challengerName: pending.fromName,
+        opponentUuid: pending.toUuid,
+        opponentName: pending.toName,
+        related: pending.related === true,
+        createdAt: t,
+        countdownEndsAt: t + CH_COUNTDOWN_MS,
+        battleEndsAt: 0,
+        endedAt: 0,
+        endReason: "",
+        winnerUuid: "",
+        loserUuid: "",
+        combat: {}
+    };
+    session.combat[pending.fromUuid] = freshCombat();
+    session.combat[pending.toUuid] = freshCombat();
+    ch.sessions[sid] = session;
+    ch.playerSessions[pending.fromUuid] = sid;
+    ch.playerSessions[pending.toUuid] = sid;
+    saveCh(ch);
+
+    var a = onlineByName(pending.fromName);
+    var b = onlineByName(pending.toName);
+    if (a != null) msg(a, C + "6Challenge accepted! Countdown...");
+    if (b != null) msg(b, C + "6Challenge accepted! Countdown...");
+}
+
+function cmdChallengeAccept(player, fromName) {
+    var ch = loadCh();
+    var pending = findPendingFor(ch, uuidOf(player), fromName);
+    if (pending == null) { msg(player, C + "cNo pending challenge."); return; }
+    var challenger = onlineByName(pending.fromName);
+    if (challenger == null) {
+        delete ch.pending[pending.id];
+        saveCh(ch);
+        msg(player, C + "cChallenger went offline.");
+        return;
+    }
+    if (dist(player, challenger) > CH_MAX_DISTANCE) {
+        msg(player, C + "cGet closer to accept."); return;
+    }
+    startCountdown(ch, pending);
+}
+
+function cmdChallengeDecline(player, fromName) {
+    var ch = loadCh();
+    var pending = findPendingFor(ch, uuidOf(player), fromName);
+    if (pending == null) { msg(player, C + "cNo pending challenge."); return; }
+    delete ch.pending[pending.id];
+    saveCh(ch);
+    msg(player, C + "eDeclined challenge from " + pending.fromName);
+    var online = onlineByName(pending.fromName);
+    if (online != null) msg(online, C + "c" + nameOf(player) + " declined.");
+}
+
+function cmdChallengeCancel(player) {
+    var ch = loadCh();
+    var u = uuidOf(player);
+    for (var id in ch.pending) {
+        if (!ch.pending.hasOwnProperty(id)) continue;
+        var p = ch.pending[id];
+        if (p.fromUuid == u || p.toUuid == u) {
+            delete ch.pending[id];
+            saveCh(ch);
+            msg(player, C + "eChallenge cancelled.");
+            return;
+        }
+    }
+    var sid = ch.playerSessions[u];
+    if (sid == null || ch.sessions[String(sid)] == null) {
+        msg(player, C + "cNo active challenge."); return;
+    }
+    var session = ch.sessions[String(sid)];
+    session.state = "ended";
+    session.endedAt = now();
+    session.endReason = "forfeit";
+    session.winnerUuid = (u == session.challengerUuid) ? session.opponentUuid : session.challengerUuid;
+    session.loserUuid = u;
+    delete ch.playerSessions[session.challengerUuid];
+    delete ch.playerSessions[session.opponentUuid];
+    delete ch.sessions[String(sid)];
+    saveCh(ch);
+    msg(player, C + "cYou forfeited.");
+    var winner = onlineByName(session.winnerUuid == session.challengerUuid ? session.challengerName : session.opponentName);
+    if (winner != null) msg(winner, C + "aOpponent forfeited. You win.");
+}
+
 function showStats(player, targetName) {
-    var db = loadJson(DB_KEY);
-    if (db == null) { msg(player, C + "cNo rivalry data yet."); return; }
-    var name = targetName != "" ? targetName : str(player.getName());
+    var db = loadDb();
+    var name = targetName != "" ? targetName : nameOf(player);
     var record = findRecord(db, name);
     if (record == null) { msg(player, C + "cNo record for " + name); return; }
     var career = record.career || {};
-    var rp = num(career.rivalPointsTotal, 0);
-    var tier = getTier(rp);
-    var wins = num(career.officialWins, 0);
-    var losses = num(career.officialLosses, 0);
-    var draws = num(career.officialDraws, 0);
-    var played = wins + losses + draws;
-    var pct = played > 0 ? ((wins / played) * 100).toFixed(1) : "0.0";
-
+    var tier = getTier(career.rivalPointsTotal);
     msg(player, C + "6━━━━━━━━━━━━━━━━━━━━━━");
     msg(player, C + "eRival Stats: " + C + "f" + record.name);
-    msg(player, C + "7Rank: " + C + tier.color + tier.name + C + "7 (" + commas(rp) + " RP)");
-    msg(player, C + "7Record: " + C + "a" + wins + C + "7-" + C + "c" + losses + C + "7-" + C + "e" + draws + C + "8 (" + pct + "%)");
-    msg(player, C + "7Streak: " + C + "f" + num(career.currentStreak, 0) + C + "7  Best: " + C + "f" + num(career.bestStreak, 0));
-    msg(player, C + "7Knockouts: " + C + "f" + num(career.knockouts, 0));
-    msg(player, C + "7Damage: " + C + "f" + commas(career.damageDealt) + C + "7 dealt / " + C + "f" + commas(career.damageTaken) + C + "7 taken");
-    msg(player, C + "7Best Hit: " + C + "f" + commas(career.biggestHit) + C + "7  Combo: " + C + "f" + num(career.highestCombo, 0));
-    msg(player, C + "7Fastest Win: " + C + "f" + (num(career.fastestWinMs, 0) > 0 ? Math.ceil(career.fastestWinMs / 1000) + "s" : "-"));
-    msg(player, C + "7Longest Battle: " + C + "f" + (num(career.longestBattleMs, 0) > 0 ? Math.ceil(career.longestBattleMs / 1000) + "s" : "-"));
-    msg(player, C + "7Challenges: " + C + "f" + num(career.challengesPlayed, 0));
+    msg(player, C + "7Rank: " + C + tier.color + tier.name + C + "7 (" + commas(career.rivalPointsTotal) + " RP)");
+    msg(player, C + "7Record: " + C + "a" + num(career.officialWins, 0) + C + "7-" + C + "c" + num(career.officialLosses, 0));
+    msg(player, C + "7Streak: " + C + "f" + num(career.currentStreak, 0) + C + "7 Best: " + C + "f" + num(career.bestStreak, 0));
+    msg(player, C + "7Damage: " + C + "f" + commas(career.damageDealt));
     msg(player, C + "6━━━━━━━━━━━━━━━━━━━━━━");
 }
 
 function showTop(player, category) {
-    var db = loadJson(DB_KEY);
-    if (db == null) { msg(player, C + "cNo rivalry data yet."); return; }
+    var db = loadDb();
     var cat = lower(category || "rp");
-    var rows = [];
-    for (var uuid in db.players) {
-        if (!db.players.hasOwnProperty(uuid)) continue;
-        var rec = db.players[uuid];
-        var career = rec.career || {};
-        rows.push({
-            name: rec.name,
-            rp: num(career.rivalPointsTotal, 0),
-            wins: num(career.officialWins, 0),
-            streak: num(career.bestStreak, 0),
-            damage: num(career.damageDealt, 0),
-            combo: num(career.highestCombo, 0),
-            hit: num(career.biggestHit, 0),
-            battles: num(career.challengesPlayed, 0)
-        });
-    }
     var key = "rp";
     if (cat == "wins") key = "wins";
     else if (cat == "streak") key = "streak";
@@ -281,189 +665,148 @@ function showTop(player, category) {
     else if (cat == "combo") key = "combo";
     else if (cat == "hit") key = "hit";
     else if (cat == "battles") key = "battles";
-    else key = "rp";
-
+    var rows = [];
+    for (var u in db.players) {
+        if (!db.players.hasOwnProperty(u)) continue;
+        var rec = db.players[u];
+        var c = rec.career || {};
+        rows.push({
+            name: rec.name,
+            rp: num(c.rivalPointsTotal, 0),
+            wins: num(c.officialWins, 0),
+            streak: num(c.bestStreak, 0),
+            damage: num(c.damageDealt, 0),
+            combo: num(c.highestCombo, 0),
+            hit: num(c.biggestHit, 0),
+            battles: num(c.challengesPlayed, 0)
+        });
+    }
     rows.sort(function (a, b) { return num(b[key], 0) - num(a[key], 0); });
     msg(player, C + "6===== Rival Top (" + key + ") =====");
-    if (rows.length == 0) { msg(player, C + "8No entries."); return; }
     for (var i = 0; i < rows.length && i < 10; i++) {
-        var r = rows[i];
-        msg(player, C + "e#" + (i + 1) + " " + C + "f" + r.name + C + "7 - " + C + "a" + commas(r[key]));
+        msg(player, C + "e#" + (i + 1) + " " + C + "f" + rows[i].name + C + "7 - " + commas(rows[i][key]));
     }
 }
 
 function showTitle(player) {
-    var db = loadJson(DB_KEY);
-    var prog = ensureProg();
-    if (db == null) { msg(player, C + "cNo rivalry data yet."); return; }
-    var record = findRecord(db, player.getName());
-    if (record == null) { msg(player, C + "cNo record."); return; }
-    var rp = num((record.career || {}).rivalPointsTotal, 0);
-    var tier = getTier(rp);
-    var special = prog.specialTitles[str(player.getUUID())];
-    var title = special != null ? SPECIAL_TITLES[special] || special : tier.name;
-    syncCmiTitle(str(player.getName()), title);
-
-    msg(player, C + "6===== Rival Title =====");
-    msg(player, C + "7Title: " + C + tier.color + title);
-    msg(player, C + "7RP: " + C + "f" + commas(rp));
+    var db = loadDb();
+    var rec = findRecord(db, nameOf(player));
+    if (rec == null) { msg(player, C + "cNo record."); return; }
+    var tier = getTier(num(rec.career.rivalPointsTotal, 0));
+    syncCmiTitle(nameOf(player), tier.name);
+    msg(player, C + "6Title: " + C + tier.color + tier.name);
     msg(player, C + "7Perk: " + C + "e" + tier.perk);
-    msg(player, C + "8Synced to CMI usermeta rival_title / rival_rank");
-    msg(player, C + "8Placeholder idea: %cmi_user_meta_rival_title%");
+    msg(player, C + "8Synced CMI usermeta rival_title");
 }
 
 function showJournal(player, targetName) {
-    var db = loadJson(DB_KEY);
-    var prog = ensureProg();
-    if (db == null) { msg(player, C + "cNo rivalry data yet."); return; }
-    var name = targetName != "" ? targetName : str(player.getName());
-    var record = findRecord(db, name);
-    if (record == null) { msg(player, C + "cNo record for " + name); return; }
-
-    msg(player, C + "6===== Rival Journal: " + record.name + " =====");
-    var count = 0;
-    for (var uuid in record.rivals) {
-        if (!record.rivals.hasOwnProperty(uuid)) continue;
-        var link = record.rivals[uuid];
-        count++;
-        var jKey = record.uuid + ">" + uuid;
-        var j = prog.journal[jKey] || {};
-        msg(player, C + "e" + link.name + C + "7 | " + getTier(link.points).name + " (" + commas(link.points) + " RP)");
-        msg(player, C + "8  W/L " + num(link.wins, 0) + "/" + num(link.losses, 0) +
-            " | First: " + (j.firstBattleAt ? "yes" : "no") +
-            " | Biggest win dmg: " + commas(j.biggestWinDamage || 0));
+    var db = loadDb();
+    var name = targetName != "" ? targetName : nameOf(player);
+    var rec = findRecord(db, name);
+    if (rec == null) { msg(player, C + "cNo record."); return; }
+    msg(player, C + "6===== Rival Journal: " + rec.name + " =====");
+    var n = 0;
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        var l = rec.rivals[u];
+        n++;
+        msg(player, C + "e" + l.name + C + "7 | " + getTier(l.points).name +
+            " | W/L " + num(l.wins, 0) + "/" + num(l.losses, 0));
     }
-    if (count == 0) msg(player, C + "8No rival entries.");
+    if (n == 0) msg(player, C + "8Empty.");
 }
 
 function showSeason(player) {
-    var db = loadJson(DB_KEY);
-    var prog = ensureProg();
-    saveJson(PROG_KEY, PROG_KEY + ".backup", prog);
-    var season = prog.season;
-    var left = Math.max(0, num(season.endsAt, 0) - now());
-    var days = Math.ceil(left / 86400000);
-    msg(player, C + "6===== " + season.name + " =====");
-    msg(player, C + "7Season ID: " + C + "f" + season.id + C + "7  Ends in: " + C + "f" + days + "d");
-
-    var record = db != null ? findRecord(db, player.getName()) : null;
-    var uuid = record != null ? record.uuid : str(player.getUUID());
-    var entry = season.leaderboard[uuid] || { rp: 0, wins: 0 };
+    var prog = loadJson(PROG_KEY);
+    if (prog == null || prog.season == null) {
+        msg(player, C + "eSeason data will appear after first login with RivalProgression installed.");
+        return;
+    }
+    var s = prog.season;
+    var left = Math.max(0, num(s.endsAt, 0) - now());
+    msg(player, C + "6===== " + s.name + " =====");
+    msg(player, C + "7Ends in " + C + "f" + Math.ceil(left / 86400000) + "d");
+    var entry = s.leaderboard[uuidOf(player)] || { rp: 0, wins: 0 };
     msg(player, C + "7Your Season RP: " + C + "f" + commas(entry.rp));
-    msg(player, C + "7Your Season Wins: " + C + "f" + commas(entry.wins));
-
-    var rows = [];
-    for (var id in season.leaderboard) {
-        if (!season.leaderboard.hasOwnProperty(id)) continue;
-        rows.push(season.leaderboard[id]);
-    }
-    rows.sort(function (a, b) { return num(b.rp, 0) - num(a.rp, 0); });
-    msg(player, C + "6--- Season Top 5 ---");
-    for (var i = 0; i < rows.length && i < 5; i++) {
-        msg(player, C + "e#" + (i + 1) + " " + C + "f" + rows[i].name + C + "7 - " + commas(rows[i].rp) + " SRP");
-    }
 }
 
 function showQuests(player) {
-    var prog = ensureProg();
-    var q = ensureQuests(prog, str(player.getUUID()));
-    saveJson(PROG_KEY, PROG_KEY + ".backup", prog);
     msg(player, C + "6===== Weekly Rival Quests =====");
+    msg(player, C + "7Install/keep RivalProgression_v4 enabled for live quest tracking.");
+    msg(player, C + "8Use /rivalquests after progression login tick.");
+    var prog = loadJson(PROG_KEY);
+    if (prog == null || prog.quests == null || prog.quests[uuidOf(player)] == null) return;
+    var q = prog.quests[uuidOf(player)];
     for (var i = 0; i < q.list.length; i++) {
         var item = q.list[i];
-        var done = num(item.progress, 0) >= num(item.goal, 1);
-        msg(player, (done ? C + "a✔ " : C + "7• ") + C + "f" + item.name +
-            C + "8 (" + Math.min(num(item.progress, 0), item.goal) + "/" + item.goal + ")" +
-            C + "7 +" + item.rp + " RP");
+        msg(player, C + "7• " + item.name + C + "8 (" + Math.min(num(item.progress, 0), item.goal) + "/" + item.goal + ")");
     }
 }
 
 function showAchievements(player) {
-    var prog = ensureProg();
-    var list = prog.achievements[str(player.getUUID())] || {};
-    var defs = [
-        ["first_blood", "First Blood"],
-        ["nemesis", "Nemesis"],
-        ["unbreakable", "Unbreakable"],
-        ["comeback_king", "Comeback King"],
-        ["legend_killer", "Legend Killer"],
-        ["perfect_victory", "Perfect Victory"],
-        ["untouchable", "Untouchable"],
-        ["combo_master", "Combo Master"],
-        ["ki_dominator", "Ki Dominator"],
-        ["battle_hardened", "Battle Hardened"],
-        ["god_rival", "God Rival"]
-    ];
-    msg(player, C + "6===== Rival Achievements =====");
+    var prog = loadJson(PROG_KEY);
+    var list = prog != null && prog.achievements != null ? (prog.achievements[uuidOf(player)] || {}) : {};
+    var defs = ["first_blood", "nemesis", "unbreakable", "comeback_king", "legend_killer",
+        "perfect_victory", "untouchable", "combo_master", "ki_dominator", "battle_hardened", "god_rival"];
+    msg(player, C + "6===== Achievements =====");
     for (var i = 0; i < defs.length; i++) {
-        var unlocked = list[defs[i][0]] === true;
-        msg(player, (unlocked ? C + "a✔ " : C + "8□ ") + C + "f" + defs[i][1]);
+        msg(player, (list[defs[i]] === true ? C + "a✔ " : C + "8□ ") + C + "f" + defs[i].replace(/_/g, " "));
     }
 }
 
 function showHof(player) {
-    var prog = ensureProg();
-    var hof = prog.hallOfFame;
-    msg(player, C + "6===== Rival Hall of Fame =====");
+    var prog = loadJson(PROG_KEY);
+    var hof = prog != null && prog.hallOfFame != null ? prog.hallOfFame : {};
+    msg(player, C + "6===== Hall of Fame =====");
     msg(player, C + "7Season Champion: " + C + "f" + (hof.seasonChampion || "-"));
     msg(player, C + "7Highest RP: " + C + "f" + (hof.highestRp || "-"));
-    msg(player, C + "7Longest Win Streak: " + C + "f" + (hof.longestStreak || "-"));
+    msg(player, C + "7Longest Streak: " + C + "f" + (hof.longestStreak || "-"));
     msg(player, C + "7Greatest Comeback: " + C + "f" + (hof.greatestComeback || "-"));
-    msg(player, C + "7Most Legendary Battles: " + C + "f" + (hof.mostLegendary || "-"));
+    msg(player, C + "7Most Battles: " + C + "f" + (hof.mostLegendary || "-"));
 }
 
 function showSpectate(player, targetName) {
-    if (targetName == "") {
-        msg(player, C + "cUsage: /spectaterival <player>");
-        return;
-    }
+    if (targetName == "") { msg(player, C + "cUsage: /spectaterival <player>"); return; }
     var target = onlineByName(targetName);
-    if (target == null) { msg(player, C + "cThat player is offline."); return; }
-    var ch = loadJson(CH_KEY);
-    if (ch == null || ch.playerSessions == null) {
-        msg(player, C + "cNo active rival battles.");
-        return;
-    }
-    var sid = ch.playerSessions[str(target.getUUID())];
-    if (sid == null || ch.sessions == null || ch.sessions[String(sid)] == null) {
-        msg(player, C + "cThat player is not in an official rival battle.");
-        return;
+    if (target == null) { msg(player, C + "cOffline."); return; }
+    var ch = loadCh();
+    var sid = ch.playerSessions[uuidOf(target)];
+    if (sid == null || ch.sessions[String(sid)] == null) {
+        msg(player, C + "cNot in an official battle."); return;
     }
     var session = ch.sessions[String(sid)];
-    var cA = (session.combat && session.combat[session.challengerUuid]) || {};
-    var cB = (session.combat && session.combat[session.opponentUuid]) || {};
-    msg(player, C + "6===== Spectating Rival Battle =====");
-    msg(player, C + "7State: " + C + "f" + session.state);
-    msg(player, C + "e" + session.challengerName + C + "7 dmg " + C + "f" + commas(cA.damage || 0));
-    msg(player, C + "e" + session.opponentName + C + "7 dmg " + C + "f" + commas(cB.damage || 0));
-    if (session.state == "active") {
-        var left = Math.max(0, num(session.battleEndsAt, 0) - now());
-        msg(player, C + "7Time Left: " + C + "f" + Math.ceil(left / 1000) + "s");
-    }
+    var a = (session.combat && session.combat[session.challengerUuid]) || {};
+    var b = (session.combat && session.combat[session.opponentUuid]) || {};
+    msg(player, C + "6===== Spectating =====");
+    msg(player, C + "f" + session.challengerName + C + "7 dmg " + commas(a.damage || 0));
+    msg(player, C + "f" + session.opponentName + C + "7 dmg " + commas(b.damage || 0));
     try {
         player.getTempdata().put("rival.v4.spectateSession", String(sid));
         player.getTempdata().put("rival.v4.spectateUntil", String(now() + 120000));
     } catch (e) {}
-    msg(player, C + "aSpectating for 2 minutes. Live updates require RivalSpectator_v4.");
+    msg(player, C + "aSpectating 2 minutes.");
 }
 
-/*
- Forward gameplay commands into Global Player scripts by invoking the same
- trigger IDs while temporarily unavailable from console.
- For declare/accept/challenge we replicate enough by messaging players to use
- Global handlers: actually we dispatch a player-context run via execute.
-*/
-function runAsPlayerNoppes(player, id, argsLine) {
-    try {
-        var cmd = "noppes script trigger " + id;
-        if (argsLine != null && str(argsLine) != "") cmd += " " + argsLine;
-        var name = str(player.getName());
-        Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "execute as " + name + " at " + name + " run " + cmd);
-        return true;
-    } catch (e) {
-        msg(player, C + "cFailed to dispatch trigger: " + e);
-        return false;
+/* ========================= TRIGGER ========================= */
+
+function resolvePlayer(event, args) {
+    /*
+     asFakeOp! => event.entity is FakePlayer (unusable).
+     Real player is ALWAYS arguments[0] from CMI [playerName].
+    */
+    if (args.length > 0) {
+        var byName = onlineByName(args[0]);
+        if (byName != null) return { player: byName, cmdArgs: args.slice(1), shifted: true };
     }
+    try {
+        if (event.entity != null && Number(event.entity.getType()) == 1) {
+            var ent = event.entity;
+            /* Reject likely fake names if args provided */
+            return { player: ent, cmdArgs: args, shifted: false };
+        }
+    } catch (e) {}
+    if (event.player != null) return { player: event.player, cmdArgs: args, shifted: false };
+    return null;
 }
 
 function trigger(event) {
@@ -474,28 +817,26 @@ function trigger(event) {
             for (var i = 0; i < event.arguments.length; i++) args.push(str(event.arguments[i]));
         }
 
-        var player = null;
-        if (event.entity != null) {
-            try { if (Number(event.entity.getType()) == 1) player = event.entity; } catch (e1) {}
+        var resolved = resolvePlayer(event, args);
+        if (resolved == null || resolved.player == null) {
+            try { print("[RivalRouter] No online player for trigger " + id + " args=" + args.join(",")); } catch (e) {}
+            return;
         }
-        if (player == null && event.player != null) player = event.player;
 
-        var cmdArgs = [];
-        if (player == null) {
-            if (args.length == 0) return;
-            player = onlineByName(args[0]);
-            for (var a = 1; a < args.length; a++) cmdArgs.push(args[a]);
-        } else {
-            if (args.length > 0 && lower(args[0]) == lower(player.getName())) {
-                for (var b = 1; b < args.length; b++) cmdArgs.push(args[b]);
-            } else {
-                cmdArgs = args;
-            }
-        }
-        if (player == null) return;
+        var player = resolved.player;
+        var cmdArgs = resolved.cmdArgs;
 
-        if (id == 200) { showHelp(player); return; }
+        if (id == 200) { cmdHelp(player); return; }
+        if (id == 201) { cmdDeclare(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 202) { cmdAccept(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 203) { cmdDecline(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 204) { cmdRemove(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 205) { cmdList(player); return; }
         if (id == 206) { showStats(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 210) { cmdChallenge(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 211) { cmdChallengeAccept(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 212) { cmdChallengeDecline(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
+        if (id == 213) { cmdChallengeCancel(player); return; }
         if (id == 220) { showTop(player, cmdArgs.length > 0 ? cmdArgs[0] : "rp"); return; }
         if (id == 221) { showTitle(player); return; }
         if (id == 222) { showJournal(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
@@ -504,20 +845,13 @@ function trigger(event) {
         if (id == 225) { showAchievements(player); return; }
         if (id == 226) { showHof(player); return; }
         if (id == 230) { showSpectate(player, cmdArgs.length > 0 ? cmdArgs[0] : ""); return; }
-
-        /*
-         Declare / challenge actions must run in player entity context so
-         RivalCore / RivalChallenge Global Player scripts receive event.entity.
-        */
-        if (id == 201 || id == 202 || id == 203 || id == 204 || id == 205 ||
-            id == 210 || id == 211 || id == 212 || id == 213) {
-            runAsPlayerNoppes(player, id, cmdArgs.join(" "));
-            return;
-        }
     } catch (error) {
+        try { print("[RivalRouter v4.2] " + error); } catch (e2) {}
         try {
-            if (event.player != null) event.player.message(C + "c[RivalRouter] " + error);
-        } catch (e2) {}
-        try { print("[RivalRouter v4] " + error); } catch (e3) {}
+            if (event.arguments != null && event.arguments.length > 0) {
+                var p = onlineByName(str(event.arguments[0]));
+                if (p != null) msg(p, C + "c[RivalRouter] " + error);
+            }
+        } catch (e3) {}
     }
 }
