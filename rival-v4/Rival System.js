@@ -1011,9 +1011,9 @@ function rcList(player) {
     }
     rcMessage(player, RC_COLOR + "7Slots: " + RC_COLOR + "6Mutual " +
         RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
-        RC_COLOR + "8  | Declared/Unknown unlimited");
+        RC_COLOR + "8  | Declared and Unknown unlimited");
     rcMessage(player, RC_COLOR + "7Nemesis: " + RC_COLOR + "c" + nemName +
-        RC_COLOR + "8  (auto - only one, from history)");
+        RC_COLOR + "8  (auto: only one, from history)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var uuid in record.rivals) {
@@ -1063,7 +1063,7 @@ function rcList(player) {
 
 function rcHelp(player) {
     rcMessage(player, RC_COLOR + "6===== Rival System V4 =====");
-    rcMessage(player, RC_COLOR + "7Statuses: Unknown -> Declared -> Mutual -> Nemesis");
+    rcMessage(player, RC_COLOR + "7Statuses: Unknown to Declared to Mutual to Nemesis");
     rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
     rcMessage(player, RC_COLOR + "7RP from official battles only - unlocks instinct, titles, records.");
     rcMessage(player, RC_COLOR + "7TP still rewards: near rivals, kills, surpass, challenges, fusion.");
@@ -4078,7 +4078,7 @@ function recomputeHof(prog, db) {
                 if (longestRivalry == null || age > longestRivalry.v) {
                     var days = Math.floor(age / (24 * 60 * 60 * 1000));
                     longestRivalry = {
-                        name: rec.name + " & " + link.name + " (" + days + "d)",
+                        name: rec.name + " and " + link.name + " (" + days + "d)",
                         v: age
                     };
                 }

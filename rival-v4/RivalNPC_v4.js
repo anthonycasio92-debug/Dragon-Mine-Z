@@ -30,7 +30,7 @@ function line(player) {
 function showRivalGuide(player) {
     line(player);
     msg(player, C + "6" + C_BOLD + "Rival Master" + C_RESET);
-    msg(player, C + "7Unknown -> Declared -> Mutual -> Nemesis");
+    msg(player, C + "7Unknown to Declared to Mutual to Nemesis");
     msg(player, C + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
     msg(player, C + "7RP from official battles only. TP rewards still apply.");
     line(player);

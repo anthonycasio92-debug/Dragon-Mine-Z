@@ -62,7 +62,7 @@ var PROG_KEY = "dlr.rivalry.v4.progression";
 /*
  Statuses: unknown | declared | mutual | nemesis
  Max 2 Mutual (3rd demotes oldest). One Nemesis from history.
- Declared/Unknown unlimited. RP from official battles only.
+ Declared and Unknown unlimited. RP from official battles only.
 */
 var MAX_MUTUAL = 2;
 var MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -468,10 +468,10 @@ function cmdHelp(player) {
     line(player);
     message(player, C + "6" + C_BOLD + "Rival System" + C_RESET);
     line(player);
-    message(player, C + "6Statuses: " + C_RESET + C + "7Unknown -> Declared -> Mutual -> Nemesis");
+    message(player, C + "6Statuses: " + C_RESET + C + "7Unknown to Declared to Mutual to Nemesis");
     message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest)");
     message(player, C + "7Declared and Unknown are unlimited");
-    message(player, C + "7One Nemesis - auto from official battle history");
+    message(player, C + "7One Nemesis: auto from official battle history");
     message(player, C + "7RP from official battles only");
     message(player, C + "7TP rewards: near rivals, kills, surpass, challenges, fusion");
     line(player);
@@ -544,7 +544,7 @@ function cmdDeclare(player, targetName) {
     saveDb(db);
 
     msg(player, C + "aDeclared Rival: " + C + "e" + tref.name);
-    msg(target, C + "6" + pref.name + C + "e declared you - status: " + C + "7Unknown");
+    msg(target, C + "6" + pref.name + C + "e declared you. Status: " + C + "7Unknown");
     msg(target, C + "7Accept: " + C + "f/rival accept " + pref.name);
 }
 
@@ -636,8 +636,8 @@ function cmdList(player) {
     var nemName = "-";
     if (pref.nemesisUuid && pref.rivals[pref.nemesisUuid]) nemName = pref.rivals[pref.nemesisUuid].name;
     msg(player, C + "7Mutual: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
-        C + "8  | Declared & Unknown unlimited");
-    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto - only one)");
+        C + "8  | Declared and Unknown unlimited");
+    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto: only one)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var u in pref.rivals) {
@@ -837,7 +837,7 @@ function showStats(player, targetName) {
     message(player, C + "6" + C_BOLD + "Rival Statistics" + C_RESET);
     message(player, C + "7Player: " + C + "f" + record.name);
     line(player);
-    message(player, C + "7Rank: " + C + tier.color + tier.name +
+    message(player, C + "7Rank: " + C + tier.color + tier.name + C_RESET +
         C + "7 (" + C + "a" + commas(career.rivalPointsTotal) + C + "7 RP)");
     message(player, C + "7Official Record: " + C + "a" + num(career.officialWins, 0) +
         C + "7-" + C + "c" + num(career.officialLosses, 0));
@@ -909,8 +909,8 @@ function showTitle(player) {
     if (rec == null) { msg(player, C + "cNo record."); return; }
     var tier = getTier(num(rec.career.rivalPointsTotal, 0));
     syncCmiTitle(nameOf(player), tier.name);
-    msg(player, C + "6Title: " + C + tier.color + tier.name);
-    msg(player, C + "7Perk: " + C + "e" + tier.perk);
+    msg(player, C + "6Title: " + C + tier.color + tier.name + C_RESET);
+    msg(player, C + "7Perk: " + C + "e" + tier.perk + C_RESET);
     msg(player, C + "8Synced CMI usermeta rival_title");
 }
 
