@@ -13,7 +13,7 @@
  - tick
  - damagedEntity
  - damaged
- - killedEntity
+ - kill
  - logout
  - died
 
@@ -353,12 +353,12 @@ function rpGetReleasedBP(data) {
 function rpGetStat(data, key) {
     if (data === null) return 0;
     try {
-        return Math.max(0, rpNumber(data.getStat(key), 0));
+        return Math.max(0, rpNumber(data.getCurrentStatValue(key), 0));
     } catch (ignored1) {}
     try {
         var stats = data.getStats();
         if (key === "STR") return Math.max(0, rpNumber(stats.getStrength(), 0));
-        if (key === "SKP") return Math.max(0, rpNumber(stats.getStrike(), stats.getStrikePower ? stats.getStrikePower() : 0));
+        if (key === "SKP") return Math.max(0, rpNumber(stats.getStrikePower(), 0));
     } catch (ignored2) {}
     return 0;
 }
@@ -824,14 +824,14 @@ function damaged(event) {
     }
 }
 
-function killedEntity(event) {
+function kill(event) {
     try {
         var killer = event.player;
-        var victim = event.target;
+        var victim = event.entity;
         if (!rpIsPlayer(killer) || victim === null) return;
         rpHandleKillNearRivals(killer, victim);
     } catch (error) {
-        rpLog("killedEntity failed: " + error);
+        rpLog("kill failed: " + error);
     }
 }
 

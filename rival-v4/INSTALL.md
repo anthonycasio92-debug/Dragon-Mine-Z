@@ -19,10 +19,10 @@ Add these as **separate Global Player scripts** and enable the listed events:
 Events: `init`, `login`, `trigger`
 
 ### 2. `RivalProximity_v4.js`
-Events: `tick`, `damagedEntity`, `damaged`, `killedEntity`, `logout`, `died`
+Events: `tick`, `damagedEntity`, `damaged`, `kill`, `logout`, `died`
 
 ### 3. `RivalChallenge_v4.js`
-Events: `init`, `tick`, `damagedEntity`, `damaged`, `killedEntity`, `died`, `logout`, `trigger`
+Events: `init`, `tick`, `damagedEntity`, `damaged`, `kill`, `died`, `logout`, `trigger`
 
 ## Install command display script
 
@@ -34,40 +34,42 @@ Events: `trigger`
 
 Example using `noppes script trigger`:
 
-```text
-/rival                -> trigger 200 <player>
-/rival <name>         -> trigger 201 <player> <name>
-/rival accept <name>  -> trigger 202 <player> <name>
-/rival decline <name> -> trigger 203 <player> <name>
-/rival remove <name>  -> trigger 204 <player> <name>
-/rival list           -> trigger 205 <player>
-/rival stats [name]   -> trigger 206 <player> [name]
-/rival top            -> trigger 220 <player>
+Native CustomNPCs command (player is `event.entity`, args are only the text after the id):
 
-/challenge rival <name> -> trigger 210 <player> <name>
-/challenge accept       -> trigger 211 <player>
-/challenge decline      -> trigger 212 <player>
-/challenge cancel       -> trigger 213 <player>
+```text
+/noppes script trigger 200
+/noppes script trigger 201 <targetName>
+/noppes script trigger 202 <targetName>
+/noppes script trigger 203 <targetName>
+/noppes script trigger 204 <targetName>
+/noppes script trigger 205
+/noppes script trigger 206 [targetName]
+/noppes script trigger 220
+
+/noppes script trigger 210 <targetName>
+/noppes script trigger 211
+/noppes script trigger 212
+/noppes script trigger 213
 ```
 
-If you use MyCommand / DeluxeMenus / etc., point those commands at the same trigger IDs.
+If a command plugin runs the trigger as console/NPC and passes the player name as arg0,
+use the RivalCommands script-slot handler pattern (lookup by name), not Global Player `event.entity`.
+
+See `VERIFIED_API.md` for jar-confirmed field/function names.
 
 ## Quick test
 
 After installing `RivalCore_v4.js` as a Global Player script with `trigger` enabled:
 
-```text
-noppes script trigger 200 <YourName>
-```
-
-You should see the Rival System V4 help menu.
+Run these **as the player** (or with the player as command source entity):
 
 ```text
-noppes script trigger 201 <YourName> <OtherPlayer>
-noppes script trigger 205 <YourName>
+/noppes script trigger 200
+/noppes script trigger 201 OtherPlayer
+/noppes script trigger 205
 ```
 
-Important: CustomNPCs Global Player triggers use `event.entity` for the player.
+Verified from CNPC jar: trigger player is `event.entity`; args do **not** include your own name.
 If nothing happens, confirm the script has the **trigger** event checkbox enabled.
 
 

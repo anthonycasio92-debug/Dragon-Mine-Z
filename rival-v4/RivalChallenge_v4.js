@@ -13,7 +13,7 @@
  - tick
  - damagedEntity
  - damaged
- - killedEntity
+ - kill
  - died
  - logout
  - trigger
@@ -391,17 +391,21 @@ function chAwardTP(player, amount, reason) {
 function chIsKiDamage(event) {
     try {
         var source = event.damageSource;
-        if (source === null || source === undefined) source = event.source;
         if (source === null || source === undefined) return false;
 
         try {
-            var immediate = source.getImmediateSource ? source.getImmediateSource() : null;
-            if (immediate !== null && immediate instanceof chKiClass()) return true;
+            var immediate = source.getImmediateSource();
+            if (immediate !== null) {
+                var mc = null;
+                try { mc = immediate.getMCEntity(); } catch (ignoredMc) { mc = immediate; }
+                var KiClass = chKiClass();
+                if (mc !== null && KiClass.isInstance(mc)) return true;
+            }
         } catch (ignored1) {}
 
         try {
-            var msg = chString(source.getMsgId ? source.getMsgId() : source.getType()).toLowerCase();
-            if (msg.indexOf("ki") >= 0 || msg.indexOf("energy") >= 0) return true;
+            var type = chString(source.getType()).toLowerCase();
+            if (type.indexOf("ki") >= 0 || type.indexOf("energy") >= 0) return true;
         } catch (ignored2) {}
     } catch (ignored3) {}
     return false;
@@ -1124,10 +1128,10 @@ function damaged(event) {
     }
 }
 
-function killedEntity(event) {
+function kill(event) {
     try {
         var killer = event.player;
-        var victim = event.target;
+        var victim = event.entity;
         if (!chIsPlayer(killer) || !chIsPlayer(victim)) return;
 
         var db = chLoadChallengeDb(killer);
@@ -1148,7 +1152,7 @@ function killedEntity(event) {
             knockout: true
         });
     } catch (error) {
-        chLog("killedEntity failed: " + error);
+        chLog("kill failed: " + error);
     }
 }
 
