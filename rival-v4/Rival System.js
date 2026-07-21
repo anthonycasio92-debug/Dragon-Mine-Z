@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.3.1
+ Version: 4.3.2
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1010,17 +1010,52 @@ var RP_SHOW_KILL_TP = true;
  * Level-based TP scaling (DMZ getLevel).
  * Applied to ALL rival TP awards (proximity, challenges, fusion kills).
  *
- * Examples with +2.5%/level, cap 4.0x:
- *  Level 0   = 1.00x
- *  Level 20  = 1.50x
- *  Level 40  = 2.00x
- *  Level 80  = 3.00x
- *  Level 120+= 4.00x
+ * Log-interpolated anchors — TP need grows hard at high level, so the
+ * curve steepens toward 100k instead of a tiny early-game cap.
+ *
+ *  Level        Mult
+ *  1            1x
+ *  10           1.5x
+ *  100          3x
+ *  1,000        8x
+ *  5,000        20x
+ *  10,000       40x
+ *  25,000       90x
+ *  50,000       180x
+ *  75,000       300x
+ *  100,000      500x
+ *
+ * Above 100k: +150x per extra decade of level (soft continue).
  */
 var RIVAL_LEVEL_TP_ENABLED = true;
-var RIVAL_LEVEL_TP_PER_LEVEL = 0.025;
-var RIVAL_LEVEL_TP_CAP = 4.0;
 var RIVAL_LEVEL_TP_SHOW_IN_REASON = true;
+var RIVAL_LEVEL_TP_MAX = 2000.0;
+
+var RIVAL_LEVEL_TP_LEVEL_ANCHORS = [
+    1,
+    10,
+    100,
+    1000,
+    5000,
+    10000,
+    25000,
+    50000,
+    75000,
+    100000
+];
+
+var RIVAL_LEVEL_TP_MULT_ANCHORS = [
+    1.0,
+    1.5,
+    3.0,
+    8.0,
+    20.0,
+    40.0,
+    90.0,
+    180.0,
+    300.0,
+    500.0
+];
 
 /* Surpass rival BP award */
 var RP_SURPASS_ENABLED = true;
@@ -1311,14 +1346,59 @@ function rivalGetDmzLevel(data) {
     }
 }
 
-function rivalLevelTpMultiplier(data) {
+function rivalFormatMult(mult) {
+    var n = Number(mult);
+    if (isNaN(n) || !isFinite(n)) return "1x";
+    if (n >= 100) return String(Math.round(n)) + "x";
+    if (n >= 10) return n.toFixed(1) + "x";
+    return n.toFixed(2) + "x";
+}
+
+/*
+ * Smooth log10 interpolation between level anchors (same style as
+ * Sparring BP TP curve). Keeps early levels gentle and late-game
+ * payouts large enough for 100k-level TP sinks.
+ */
+function rivalLevelTpMultiplierFromLevel(level) {
     if (RIVAL_LEVEL_TP_ENABLED !== true) return 1.0;
-    var level = rivalGetDmzLevel(data);
-    var mult = 1.0 + level * Number(RIVAL_LEVEL_TP_PER_LEVEL);
-    if (isNaN(mult) || !isFinite(mult)) return 1.0;
-    if (mult < 1.0) mult = 1.0;
-    if (mult > Number(RIVAL_LEVEL_TP_CAP)) mult = Number(RIVAL_LEVEL_TP_CAP);
-    return mult;
+
+    var lvl = Math.max(1, Math.floor(Number(level)));
+    if (isNaN(lvl) || !isFinite(lvl)) lvl = 1;
+
+    var levels = RIVAL_LEVEL_TP_LEVEL_ANCHORS;
+    var mults = RIVAL_LEVEL_TP_MULT_ANCHORS;
+    if (levels == null || mults == null || levels.length < 2) return 1.0;
+
+    if (lvl <= levels[0]) return mults[0];
+
+    for (var i = 0; i < levels.length - 1; i++) {
+        var loL = levels[i];
+        var hiL = levels[i + 1];
+        if (lvl <= hiL) {
+            var loM = mults[i];
+            var hiM = mults[i + 1];
+            var loLog = Math.log(loL) / Math.log(10);
+            var hiLog = Math.log(hiL) / Math.log(10);
+            var curLog = Math.log(lvl) / Math.log(10);
+            var progress = (curLog - loLog) / (hiLog - loLog);
+            if (progress < 0) progress = 0;
+            if (progress > 1) progress = 1;
+            return loM + (hiM - loM) * progress;
+        }
+    }
+
+    var lastL = levels[levels.length - 1];
+    var lastM = mults[mults.length - 1];
+    var extraDecades =
+        (Math.log(lvl) - Math.log(lastL)) / Math.log(10);
+    var continued = lastM + extraDecades * 150.0;
+    var cap = Number(RIVAL_LEVEL_TP_MAX);
+    if (isNaN(cap) || cap < 1) cap = 2000;
+    return Math.min(cap, continued);
+}
+
+function rivalLevelTpMultiplier(data) {
+    return rivalLevelTpMultiplierFromLevel(rivalGetDmzLevel(data));
 }
 
 function rivalScaleTpByLevel(data, amount) {
@@ -1340,8 +1420,8 @@ function rpAwardTP(player, data, amount, reason) {
             var note = reason ? String(reason) : "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 var lvl = rivalGetDmzLevel(data);
-                var m = rivalLevelTpMultiplier(data);
-                note = (note ? note + " | " : "") + "Lv" + lvl + " x" + m.toFixed(2);
+                note = (note ? note + " | " : "") +
+                    "Lv" + rpCommas(lvl) + " " + rivalFormatMult(rivalLevelTpMultiplier(data));
             }
             rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
                 (note ? RP_COLOR + "7 (" + note + ")" : ""));
@@ -2174,8 +2254,8 @@ function chAwardTP(player, amount, reason) {
         var note = reason ? String(reason) : "";
         if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
             note = (note ? note + " | " : "") +
-                "Lv" + rivalGetDmzLevel(data) +
-                " x" + rivalLevelTpMultiplier(data).toFixed(2);
+                "Lv" + chCommas(rivalGetDmzLevel(data)) + " " +
+                rivalFormatMult(rivalLevelTpMultiplier(data));
         }
         chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
             (note ? CH_COLOR + "7 (" + note + ")" : ""));

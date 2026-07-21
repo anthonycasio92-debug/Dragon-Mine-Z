@@ -79,13 +79,21 @@ underdog, surpass, catch-up, mutual fusion bonus, and 60s damage challenges.
 All multipliers live in top-of-section CONFIG blocks inside `Rival System.js`
 (same style as Sparring).
 
-Level TP scaling (DMZ `getLevel()`), applied to every rival TP award:
+Level TP scaling (DMZ `getLevel()`, supports up to 100k+), applied to every rival TP award.
 
-```js
-RIVAL_LEVEL_TP_ENABLED = true
-RIVAL_LEVEL_TP_PER_LEVEL = 0.025   // +2.5% per level
-RIVAL_LEVEL_TP_CAP = 4.0           // max 4x
-```
+Uses log-interpolated anchors (same idea as Sparring BP TP curve) so late-game
+TP sinks stay relevant:
+
+| Level | Mult |
+|---|---|
+| 1 | 1x |
+| 100 | 3x |
+| 1,000 | 8x |
+| 10,000 | 40x |
+| 50,000 | 180x |
+| 100,000 | 500x |
+
+Tune `RIVAL_LEVEL_TP_LEVEL_ANCHORS` / `RIVAL_LEVEL_TP_MULT_ANCHORS` in `Rival System.js`.
 
 ## Storage keys
 
