@@ -57,17 +57,17 @@ function rcApi() {
 
 var RC_DEBUG = false;
 var RC_VERSION = 4;
-var RC_COLOR = String.fromCharCode(167);
+var RC_COLOR = "\u00A7";
 
 /*
- Rival relationship statuses (per-link) — original concept:
-  unknown  — they declared you (incoming); unlimited
-  declared — you declared them (one-sided); unlimited
-  mutual   — both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
-  nemesis  — your single greatest mutual rival (history-chosen, only ONE)
+ Rival relationship statuses (per-link) - original concept:
+  unknown  - they declared you (incoming); unlimited
+  declared - you declared them (one-sided); unlimited
+  mutual   - both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
+  nemesis  - your single greatest mutual rival (history-chosen, only ONE)
 
  If a 3rd mutual would form, the oldest mutual is demoted automatically.
- Nemesis is recomputed from battles / wins / losses / rivalry age — not an RP gate.
+ Nemesis is recomputed from battles / wins / losses / rivalry age - not an RP gate.
 */
 var RC_MAX_MUTUAL_RIVALS = 2;
 var RC_REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -357,11 +357,11 @@ function rcLinkStatus(link) {
 }
 
 function rcLinkStatusLabel(status) {
-    if (status === "nemesis") return RC_COLOR + "c" + RC_COLOR + "lNemesis";
-    if (status === "mutual") return RC_COLOR + "6Mutual";
-    if (status === "declared") return RC_COLOR + "eDeclared";
-    if (status === "unknown") return RC_COLOR + "7Unknown";
-    return RC_COLOR + "8None";
+    if (status === "nemesis") return RC_COLOR + "c" + RC_COLOR + "lNemesis" + RC_COLOR + "r";
+    if (status === "mutual") return RC_COLOR + "6Mutual" + RC_COLOR + "r";
+    if (status === "declared") return RC_COLOR + "eDeclared" + RC_COLOR + "r";
+    if (status === "unknown") return RC_COLOR + "7Unknown" + RC_COLOR + "r";
+    return RC_COLOR + "8None" + RC_COLOR + "r";
 }
 
 function rcRefreshLinkStatus(link) {
@@ -481,7 +481,7 @@ function rcFindOnlinePlayerAnyWorld(name) {
     return null;
 }
 
-/* Mutual rivals only — Nemesis is one of those mutuals (max 1 Nemesis). */
+/* Mutual rivals only - Nemesis is one of those mutuals (max 1 Nemesis). */
 function rcCountMutual(record) {
     var count = 0;
     for (var uuid in record.rivals) {
@@ -737,7 +737,7 @@ function rcCleanupExpiredRequests(database) {
 /* ========================= CORE OPERATIONS ========================= */
 
 function rcFormMutual(database, playerRecord, targetRecord, note) {
-    /* Max 2 mutuals — demote oldest automatically if needed. */
+    /* Max 2 mutuals - demote oldest automatically if needed. */
     rcEnsureMutualRoom(database, playerRecord, targetRecord.uuid);
     rcEnsureMutualRoom(database, targetRecord, playerRecord.uuid);
 
@@ -1013,7 +1013,7 @@ function rcList(player) {
         RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
         RC_COLOR + "8  | Declared/Unknown unlimited");
     rcMessage(player, RC_COLOR + "7Nemesis: " + RC_COLOR + "c" + nemName +
-        RC_COLOR + "8  (auto — only one, from history)");
+        RC_COLOR + "8  (auto - only one, from history)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var uuid in record.rivals) {
@@ -1063,9 +1063,9 @@ function rcList(player) {
 
 function rcHelp(player) {
     rcMessage(player, RC_COLOR + "6===== Rival System V4 =====");
-    rcMessage(player, RC_COLOR + "7Statuses: Unknown → Declared → Mutual → Nemesis");
+    rcMessage(player, RC_COLOR + "7Statuses: Unknown -> Declared -> Mutual -> Nemesis");
     rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
-    rcMessage(player, RC_COLOR + "7RP from official battles only — unlocks instinct, titles, records.");
+    rcMessage(player, RC_COLOR + "7RP from official battles only - unlocks instinct, titles, records.");
     rcMessage(player, RC_COLOR + "7TP still rewards: near rivals, kills, surpass, challenges, fusion.");
     rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
     rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
@@ -1173,7 +1173,7 @@ function rpNetwork() {
 /* ========================= CONFIGURATION ========================= */
 
 var RP_DEBUG = false;
-var RP_COLOR = String.fromCharCode(167);
+var RP_COLOR = "\u00A7";
 
 var RP_DATABASE_KEY = "dlr.rivalry.v4.database";
 var RP_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
@@ -1188,7 +1188,7 @@ var RP_MAX_RANGE = 160;
 
 /* Offensive proximity bonus on highest of STR / SKP */
 /*
- Original concept: RP unlocks sensing / records / titles — NOT raw combat stats.
+ Original concept: RP unlocks sensing / records / titles - NOT raw combat stats.
  Offense bonus stays off; proximity is for instinct presence only.
 */
 var RP_OFFENSE_ENABLED = false;
@@ -1197,7 +1197,7 @@ var RP_BASE_OFFENSE_BONUS = 0.04;      // unused while RP_OFFENSE_ENABLED is fal
 var RP_OFFENSE_PER_TIER = 0.025;       // +2.5% per tier above
 var RP_PRESENCE_BONUS_CAP = 0.12;      // extra +12% from long presence
 var RP_PRESENCE_FULL_MS = 10 * 60 * 1000;
-var RP_MAX_OFFENSE_BONUS = 0.55;       // hard cap — catch-up can push past stronger rivals
+var RP_MAX_OFFENSE_BONUS = 0.55;       // hard cap - catch-up can push past stronger rivals
 
 /* Catch-up: if your RP > theirs and they have higher released BP */
 var RP_CATCHUP_ENABLED = true;
@@ -1224,8 +1224,8 @@ var RP_SHOW_KILL_TP = true;
  * Applied to ALL rival TP awards.
  *
  * Two curves:
- *  burst — challenges, kills, surpass, underdog wins, fusion
- *  drip  — presence / engage / light anti-gank (gentler so AFK near
+ *  burst - challenges, kills, surpass, underdog wins, fusion
+ *  drip  - presence / engage / light anti-gank (gentler so AFK near
  *          a rival cannot outpace official battles at high level)
  *
  * Burst anchors:
@@ -1847,7 +1847,7 @@ function rpProcessPlayer(player) {
         if (mult > bestMultiplier) bestMultiplier = mult;
 
         /*
-         Presence RP ticks — both sides of an active rivalry gain rank while near.
+         Presence RP ticks - both sides of an active rivalry gain rank while near.
          Mutual gains a bit more than one-sided links.
         */
         var presenceKey = "rival.v4.presenceRp." + rivalUuid;
@@ -2241,7 +2241,7 @@ function chKiClass() {
 /* ========================= CONFIGURATION ========================= */
 
 var CH_DEBUG = false;
-var CH_COLOR = String.fromCharCode(167);
+var CH_COLOR = "\u00A7";
 
 var CH_CORE_DB_KEY = "dlr.rivalry.v4.database";
 var CH_CORE_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
@@ -3571,7 +3571,7 @@ function riStatsCap() {
     return RI_StatsCap;
 }
 
-var RI_COLOR = String.fromCharCode(167);
+var RI_COLOR = "\u00A7";
 var RI_DB = "dlr.rivalry.v4.database";
 var RI_TICK_MS = 1500;
 var RI_ALERT_COOLDOWN_MS = 8000;
@@ -3886,7 +3886,7 @@ function rprogBukkit() {
     return RPROG_Bukkit;
 }
 
-var RPROG_C = String.fromCharCode(167);
+var RPROG_C = "\u00A7";
 var RPROG_DB_KEY = "dlr.rivalry.v4.database";
 var RPROG_CH_KEY = "dlr.rivalry.v4.challenges";
 var RPROG_PROG_KEY = "dlr.rivalry.v4.progression";
@@ -4280,7 +4280,7 @@ function rsApi() {
     return RS_API;
 }
 
-var RS_C = String.fromCharCode(167);
+var RS_C = "\u00A7";
 var RS_CH_KEY = "dlr.rivalry.v4.challenges";
 
 function rsNow() {
@@ -4388,7 +4388,7 @@ function rfNetwork() {
     return RF_Network;
 }
 
-var RF_C = String.fromCharCode(167);
+var RF_C = "\u00A7";
 var RF_DB_KEY = "dlr.rivalry.v4.database";
 var RF_BONUS_NAME = "Rival Fusion";
 var RF_TICK_MS = 1000;

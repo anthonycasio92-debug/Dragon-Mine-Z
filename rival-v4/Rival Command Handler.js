@@ -9,7 +9,7 @@
  DO NOT place this in the Global Player Script slot.
 
  Gameplay stays in Rival System.js (Global Player).
- This file is the command display / action handler only —
+ This file is the command display / action handler only -
  same split as Sparring TP System + Sparring Command Handler.
 
  TRIGGERS:
@@ -45,7 +45,14 @@
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var Bukkit = Java.type("org.bukkit.Bukkit");
 
-var C = String.fromCharCode(167);
+/*
+ Color codes use \u00A7 escapes (same as SkillCheck) so chat formatting
+ stays reliable. Player-facing text is ASCII-only (no unicode arrows /
+ checkmarks) to avoid broken glyphs/"images" in client chat.
+*/
+var C = "\u00A7";
+var C_RESET = "\u00A7r";
+var C_BOLD = "\u00A7l";
 var DB_KEY = "dlr.rivalry.v4.database";
 var DB_BACKUP = "dlr.rivalry.v4.database.backup";
 var CH_KEY = "dlr.rivalry.v4.challenges";
@@ -252,11 +259,11 @@ function linkStatus(link) {
 }
 
 function linkStatusLabel(status) {
-    if (status == "nemesis") return C + "c" + C + "lNemesis";
-    if (status == "mutual") return C + "6Mutual";
-    if (status == "declared") return C + "eDeclared";
-    if (status == "unknown") return C + "7Unknown";
-    return C + "8None";
+    if (status == "nemesis") return C + "c" + C_BOLD + "Nemesis" + C_RESET;
+    if (status == "mutual") return C + "6Mutual" + C_RESET;
+    if (status == "declared") return C + "eDeclared" + C_RESET;
+    if (status == "unknown") return C + "7Unknown" + C_RESET;
+    return C + "8None" + C_RESET;
 }
 
 function refreshLinkStatus(link) {
@@ -341,7 +348,7 @@ function recomputeNemesis(rec) {
     if (bestUuid != null && bestUuid !== prev) {
         var online = onlineByName(rec.name);
         if (online != null) {
-            msg(online, C + "c" + C + "lNEMESIS! " + C + "e" + rec.rivals[bestUuid].name +
+            msg(online, C + "c" + C_BOLD + "NEMESIS! " + C_RESET + C + "e" + rec.rivals[bestUuid].name +
                 C + "7 is now your greatest rival.");
         }
     }
@@ -459,18 +466,19 @@ function syncCmiTitle(playerName, title) {
 
 function cmdHelp(player) {
     line(player);
-    message(player, C + "6" + C + "lRival System");
+    message(player, C + "6" + C_BOLD + "Rival System" + C_RESET);
     line(player);
-    message(player, C + "6Statuses: " + C + "7Unknown → Declared → Mutual → Nemesis");
-    message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest) | Declared & Unknown unlimited");
-    message(player, C + "7One Nemesis — auto from official battle history");
-    message(player, C + "7RP from official battles only (instinct, titles, records — not raw power)");
-    message(player, C + "7TP rewards stay on: near rivals, kills, surpass, challenges, fusion");
+    message(player, C + "6Statuses: " + C_RESET + C + "7Unknown -> Declared -> Mutual -> Nemesis");
+    message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest)");
+    message(player, C + "7Declared and Unknown are unlimited");
+    message(player, C + "7One Nemesis - auto from official battle history");
+    message(player, C + "7RP from official battles only");
+    message(player, C + "7TP rewards: near rivals, kills, surpass, challenges, fusion");
     line(player);
-    message(player, C + "e/rival <player>  " + C + "8(or /rival declare <player>)");
+    message(player, C + "e/rival <player>" + C_RESET + C + "8  (or /rival declare <player>)");
     message(player, C + "e/rival accept|decline|remove <player>");
     message(player, C + "e/rival list | stats [player] | top [cat]");
-    message(player, C + "e/challenge <player>  " + C + "8(or /challenge rival <player>)");
+    message(player, C + "e/challenge <player>" + C_RESET + C + "8  (or /challenge rival <player>)");
     message(player, C + "e/challenge accept | decline | cancel");
     line(player);
 }
@@ -509,9 +517,9 @@ function cmdDeclare(player, targetName) {
         pref.totals.declarationsAccepted++;
         tref.totals.declarationsAccepted++;
         saveDb(db);
-        msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + tref.name);
+        msg(player, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + tref.name);
         msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
-        msg(target, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name);
+        msg(target, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + pref.name);
         msg(target, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
         return;
     }
@@ -536,7 +544,7 @@ function cmdDeclare(player, targetName) {
     saveDb(db);
 
     msg(player, C + "aDeclared Rival: " + C + "e" + tref.name);
-    msg(target, C + "6" + pref.name + C + "e declared you — status: " + C + "7Unknown");
+    msg(target, C + "6" + pref.name + C + "e declared you - status: " + C + "7Unknown");
     msg(target, C + "7Accept: " + C + "f/rival accept " + pref.name);
 }
 
@@ -555,11 +563,11 @@ function cmdAccept(player, fromName) {
     pref.totals.declarationsAccepted++;
     from.totals.declarationsAccepted++;
     saveDb(db);
-    msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + from.name);
+    msg(player, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + from.name);
     msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
     var online = onlineByName(from.name);
     if (online != null) {
-        msg(online, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name + C + "a accepted!");
+        msg(online, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + pref.name + C + "a accepted!");
         msg(online, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
     }
 }
@@ -629,7 +637,7 @@ function cmdList(player) {
     if (pref.nemesisUuid && pref.rivals[pref.nemesisUuid]) nemName = pref.rivals[pref.nemesisUuid].name;
     msg(player, C + "7Mutual: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
         C + "8  | Declared & Unknown unlimited");
-    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto — only one)");
+    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto - only one)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var u in pref.rivals) {
@@ -826,7 +834,7 @@ function showStats(player, targetName) {
     var tier = getTier(career.rivalPointsTotal);
 
     line(player);
-    message(player, C + "6" + C + "lRival Statistics");
+    message(player, C + "6" + C_BOLD + "Rival Statistics" + C_RESET);
     message(player, C + "7Player: " + C + "f" + record.name);
     line(player);
     message(player, C + "7Rank: " + C + tier.color + tier.name +
@@ -871,7 +879,7 @@ function showTop(player, category) {
     rows.sort(function (a, b) { return num(b[key], 0) - num(a[key], 0); });
 
     line(player);
-    message(player, C + "6" + C + "l" + title);
+    message(player, C + "6" + C_BOLD + title + C_RESET);
     line(player);
 
     if (rows.length == 0 || num(rows[0][key], 0) <= 0) {
@@ -946,7 +954,7 @@ function showQuests(player) {
     var q = prog.quests[uuidOf(player)];
     for (var i = 0; i < q.list.length; i++) {
         var item = q.list[i];
-        msg(player, C + "7• " + item.name + C + "8 (" + Math.min(num(item.progress, 0), item.goal) + "/" + item.goal + ")");
+        msg(player, C + "7* " + item.name + C + "8 (" + Math.min(num(item.progress, 0), item.goal) + "/" + item.goal + ")");
     }
 }
 
@@ -957,7 +965,7 @@ function showAchievements(player) {
         "perfect_victory", "untouchable", "combo_master", "ki_dominator", "battle_hardened", "god_rival"];
     msg(player, C + "6===== Achievements =====");
     for (var i = 0; i < defs.length; i++) {
-        msg(player, (list[defs[i]] === true ? C + "a✔ " : C + "8□ ") + C + "f" + defs[i].replace(/_/g, " "));
+        msg(player, (list[defs[i]] === true ? C + "a[+] " : C + "8[ ] ") + C + "f" + defs[i].replace(/_/g, " "));
     }
 }
 
@@ -1003,7 +1011,7 @@ function message(player, text) {
 }
 
 function line(player) {
-    message(player, C + "8" + "--------------------------------");
+    message(player, C + "8--------------------------------" + C_RESET);
 }
 
 function argAt(event, index) {
