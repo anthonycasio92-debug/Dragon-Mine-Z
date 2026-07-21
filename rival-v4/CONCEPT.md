@@ -65,6 +65,21 @@ Challenge → Accept → Countdown → 60s Official Battle → Winner → Histor
 | Close battles / long rivalries bonus RP | Done |
 | Combat log: hits, damage, ki, combo, duration, W/L | Done |
 
+## Training Points (TP)
+
+TP rewards stay active (separate from RP history):
+
+| Source | Status |
+|---|---|
+| Presence near rivals (tick) | Done |
+| Kills near rivals | Done |
+| Surpass rival power | Done |
+| Underdog engage / win | Done |
+| Anti-gank witness / hit | Done |
+| Official challenge win/lose/draw | Done |
+| Fusion kill TP split (mutual) | Done |
+| Level-scaled via `StatsData.getLevel()` | Done |
+
 ## Rival Points
 
 RP = history, not power.

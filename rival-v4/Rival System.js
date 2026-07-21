@@ -297,6 +297,7 @@ function rcFreshPlayerRecord(uuid, name) {
         nameLower: rcLower(name),
         createdAt: now,
         lastSeenAt: now,
+        nemesisUuid: "",
         rivals: {},
         career: {
             rivalPointsTotal: 0,
@@ -1065,6 +1066,7 @@ function rcHelp(player) {
     rcMessage(player, RC_COLOR + "7Statuses: Unknown → Declared → Mutual → Nemesis");
     rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
     rcMessage(player, RC_COLOR + "7RP from official battles only — unlocks instinct, titles, records.");
+    rcMessage(player, RC_COLOR + "7TP still rewards: near rivals, kills, surpass, challenges, fusion.");
     rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
     rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
     rcMessage(player, RC_COLOR + "e/rival decline <player> " + RC_COLOR + "7- Decline a request");
@@ -1097,6 +1099,7 @@ function rivalCoreLogin(event) {
         var database = rcLoadDatabase(player);
         var record = rcEnsurePlayer(database, player);
         rcCleanupExpiredRequests(database);
+        rcRecomputeNemesis(record);
         rcSaveDatabase(player, database);
 
         var incoming = 0;
@@ -1106,6 +1109,10 @@ function rivalCoreLogin(event) {
         }
         if (incoming > 0) {
             rcMessage(player, RC_COLOR + "6[Rival] " + RC_COLOR + "eYou have " + incoming + " pending rivalry request(s). /rival list");
+        }
+        if (record.nemesisUuid && record.rivals[record.nemesisUuid]) {
+            rcMessage(player, RC_COLOR + "c[Rival] Nemesis: " + RC_COLOR + "e" +
+                record.rivals[record.nemesisUuid].name);
         }
     } catch (error) {
         rcLog("login failed: " + error);
@@ -1197,10 +1204,14 @@ var RP_CATCHUP_ENABLED = true;
 var RP_CATCHUP_MAX = 0.40;             // up to +40% extra from RP lead vs stronger rival
 var RP_CATCHUP_BP_RATIO = 1.15;        // rival must be at least 15% stronger released BP
 
-/* Presence RP from hanging out (both sides of an active rivalry link) */
+/* Presence: RP stays official-battle-only; TP still rewards training near rivals */
 var RP_PRESENCE_RP_INTERVAL_MS = 60 * 1000;
-var RP_PRESENCE_RP_MUTUAL = 4;
-var RP_PRESENCE_RP_ONE_SIDED = 3;
+var RP_PRESENCE_RP_MUTUAL = 4;          // unused while RP_PRESENCE_RP_ENABLED is false
+var RP_PRESENCE_RP_ONE_SIDED = 3;       // unused while RP_PRESENCE_RP_ENABLED is false
+var RP_PRESENCE_TP_ENABLED = true;
+var RP_PRESENCE_TP_ONE_SIDED = 180;
+var RP_PRESENCE_TP_MUTUAL = 280;
+var RP_PRESENCE_TP_NEMESIS = 360;
 
 /* Kill TP near rival */
 var RP_KILL_TP_BASE = 400;
@@ -1817,14 +1828,26 @@ function rpProcessPlayer(player) {
         */
         var presenceKey = "rival.v4.presenceRp." + rivalUuid;
         var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
-        /* Presence tracks history time near rivals; RP only from official battles. */
-        if (RP_PRESENCE_RP_ENABLED === true && now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
-            rpTempPut(temp, presenceKey, now);
-        } else if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
+        /* Presence tracks time near rivals; awards TP. RP stays official-battle-only. */
+        if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
             link.presenceMs = rpNumber(link.presenceMs, 0) + RP_PRESENCE_RP_INTERVAL_MS;
             link.lastSeenTogetherAt = now;
             dirty = true;
             rpTempPut(temp, presenceKey, now);
+
+            if (RP_PRESENCE_TP_ENABLED === true) {
+                var pStatus = rcLinkStatus(link);
+                var presenceTp = RP_PRESENCE_TP_ONE_SIDED;
+                if (pStatus === "mutual") presenceTp = RP_PRESENCE_TP_MUTUAL;
+                if (pStatus === "nemesis") presenceTp = RP_PRESENCE_TP_NEMESIS;
+                rpAwardTP(player, data, presenceTp, "Near " + pStatus + " " + link.name);
+            }
+            if (RP_PRESENCE_RP_ENABLED === true) {
+                var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
+                if (rcLinkStatus(link) === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
+                if (rcLinkStatus(link) === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
+                rpAwardPoints(record, rivalUuid, presenceRp, "presence");
+            }
         }
 
         /* Surpass award */
@@ -2573,6 +2596,7 @@ function chEnsureCorePlayer(core, player) {
 
 function chEnsureLink(owner, target) {
     if (owner.rivals[target.uuid] === undefined) {
+        var t = chNow();
         owner.rivals[target.uuid] = {
             uuid: target.uuid,
             name: target.name,
@@ -2580,17 +2604,24 @@ function chEnsureLink(owner, target) {
             mutual: false,
             declaredByMe: false,
             declaredByThem: false,
+            isNemesis: false,
             points: 0,
             wins: 0,
             losses: 0,
             draws: 0,
+            battles: 0,
+            currentStreak: 0,
+            bestStreak: 0,
             damageDealt: 0,
             damageTaken: 0,
+            timeFoughtMs: 0,
             presenceMs: 0,
-            createdAt: chNow(),
-            updatedAt: chNow(),
+            createdAt: t,
+            firstMetAt: t,
+            firstBattleAt: 0,
+            updatedAt: t,
             mutualSince: 0,
-            lastBattleAt: chNow(),
+            lastBattleAt: 0,
             lastSeenTogetherAt: 0,
             history: []
         };
@@ -2598,6 +2629,7 @@ function chEnsureLink(owner, target) {
     var link = owner.rivals[target.uuid];
     link.name = target.name;
     link.updatedAt = chNow();
+    if (link.isNemesis !== true) link.isNemesis = false;
     return link;
 }
 

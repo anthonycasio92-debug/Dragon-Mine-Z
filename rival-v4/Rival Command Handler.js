@@ -465,6 +465,7 @@ function cmdHelp(player) {
     message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest) | Declared & Unknown unlimited");
     message(player, C + "7One Nemesis — auto from official battle history");
     message(player, C + "7RP from official battles only (instinct, titles, records — not raw power)");
+    message(player, C + "7TP rewards stay on: near rivals, kills, surpass, challenges, fusion");
     line(player);
     message(player, C + "e/rival <player>  " + C + "8(or /rival declare <player>)");
     message(player, C + "e/rival accept|decline|remove <player>");
