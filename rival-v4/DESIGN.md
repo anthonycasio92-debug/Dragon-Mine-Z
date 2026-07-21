@@ -1,10 +1,10 @@
-# Rival System V4.5 — Design
+# Rival System V4.6 — Design
 
 ## Vision
 
 Recreate the feeling of iconic DBZ rivalries through **history**, not another PvP ladder.
 
-Up to two Mutual rivals matter. Official battles write the story. One Nemesis emerges from that history.
+Up to two Mutual rivals matter. Official battles write the story. One Nemesis emerges from that history. Each rivalry can earn a named **Proving Grounds** battlefield.
 
 ## Layout
 
@@ -47,9 +47,11 @@ Note: the **Nemesis link status** is history-chosen (one Mutual). The career tit
 
 1. Declare → accept → Mutual (auto-demote oldest if at 2)
 2. Official `/challenge` battles write history + RP (Mutual only)
-3. Instinct senses Mutual/Nemesis rivals (arrive, ki, power, form, fusion)
-4. Nemesis recomputed after battles
-5. Hall of Legends remembers the server’s greatest rivalries
+3. Defeat marks **Proving Grounds** (biome/landmark name); return fights grant bonus TP/RP + underdog aura
+4. Reclaim by beating the champion on those grounds (server announcement)
+5. Instinct senses Mutual/Nemesis rivals (arrive, ki, power, form, fusion)
+6. Nemesis recomputed after battles
+7. Hall of Legends remembers the server’s greatest rivalries
 
 RP does **not** grant raw STR/SKP bonuses.
 

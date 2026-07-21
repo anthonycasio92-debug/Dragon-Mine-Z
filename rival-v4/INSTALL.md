@@ -1,4 +1,4 @@
-# Rival System V4.5 — Install Guide
+# Rival System V4.6 — Install Guide
 
 ## Final layout (3 scripts)
 

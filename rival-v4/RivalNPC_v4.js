@@ -33,6 +33,7 @@ function showRivalGuide(player) {
     msg(player, C + "7Unknown to Declared to Mutual to Nemesis");
     msg(player, C + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
     msg(player, C + "7RP from official battles only. TP rewards still apply.");
+    msg(player, C + "7Defeat marks Proving Grounds. Return there for bonus TP/RP.");
     line(player);
     msg(player, C + "6Rivalry" + C_RESET);
     msg(player, C + "e/rival <player>");
@@ -45,6 +46,7 @@ function showRivalGuide(player) {
     msg(player, C + "e/challenge accept|decline|cancel");
     msg(player, C + "e/spectaterival <player>");
     msg(player, C + "7Battles are announced to the whole server.");
+    msg(player, C + "7Reclaim Proving Grounds on the champion's battlefield.");
     line(player);
     msg(player, C + "6Progress" + C_RESET);
     msg(player, C + "e/rival top [rp|wins|streak|damage]");

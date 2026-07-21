@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.5.0
+ Version: 4.6.0
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -492,6 +492,9 @@ function cmdHelp(player) {
     message(player, C + "e/rival list | stats [player] | top [cat]");
     message(player, C + "e/challenge <player>" + C_RESET + C + "8  (or /challenge rival <player>)");
     message(player, C + "e/challenge accept | decline | cancel");
+    message(player, C + "e/spectaterival <player>" + C_RESET + C + "8  (watch a live battle)");
+    message(player, C + "7Official battles are announced server-wide.");
+    message(player, C + "7Defeat marks Proving Grounds - return there for bonus rewards.");
     line(player);
 }
 
@@ -664,9 +667,26 @@ function cmdList(player) {
         msg(player, C + "6--- " + title + " (" + arr.length + ") ---");
         for (var i = 0; i < arr.length; i++) {
             var L = arr[i];
+            var rankName = "Acquaintance";
+            for (var t = 0; t < TIERS.length; t++) {
+                if (num(L.points, 0) >= TIERS[t].min) rankName = TIERS[t].name;
+            }
             msg(player, C + "7- " + C + "f" + L.name + " " + linkStatusLabel(linkStatus(L)) +
                 C + "7 | " + commas(L.points) + " RP" +
+                C + "7 | Rank: " + C + "e" + rankName +
                 C + "7 | W/L " + C + "a" + num(L.wins, 0) + C + "7/" + C + "c" + num(L.losses, 0));
+            if ((title == "Nemesis" || title == "Mutual") && L.provingGrounds && L.provingGrounds.active === true) {
+                var pg = L.provingGrounds;
+                var place = str(pg.name);
+                if (place == "") place = "Unknown Lands";
+                var tierLabel = "Claimed Proving Grounds";
+                if (num(pg.tier, 0) >= 3) tierLabel = "Legendary Proving Grounds";
+                else if (num(pg.tier, 0) >= 2) tierLabel = "Dominant Grounds";
+                msg(player, C + "8   Grounds: " + C + "e" + place + C + "8 | " + tierLabel);
+                msg(player, C + "8   Champion: " + C + "f" + str(pg.championName || "-") +
+                    C + "8 | Battles: " + C + "f" + commas(pg.battles) +
+                    C + "8 | Streak: " + C + "a" + num(L.currentStreak, 0) + " wins");
+            }
         }
     }
 
@@ -772,6 +792,9 @@ function startCountdown(ch, pending) {
     var b = onlineByName(pending.toName);
     if (a != null) msg(a, C + "6Challenge accepted! Countdown...");
     if (b != null) msg(b, C + "6Challenge accepted! Countdown...");
+    broadcast(C + "6[Rival Battle] " + C + "e" + pending.fromName +
+        C + "7 vs " + C + "e" + pending.toName + C + "7 - countdown!");
+    broadcast(C + "8Watch live: /spectaterival " + pending.fromName);
 }
 
 function cmdChallengeAccept(player, fromName) {

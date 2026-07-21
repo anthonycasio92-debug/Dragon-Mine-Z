@@ -65,6 +65,22 @@ Challenge → Accept → Countdown → 60s Official Battle → Winner → Histor
 | Close battles / long rivalries bonus RP | Done |
 | Combat log: hits, damage, ki, combo, duration, W/L | Done |
 
+## Proving Grounds
+
+*"This is where legends were broken... and reborn."*
+
+| Rule | Status |
+|---|---|
+| Losing an official rival battle marks the battlefield | Done |
+| Named by biome/landmark (not raw coords) | Done |
+| Fighting there: +TP, +RP, underdog aura, challenge bonus | Done |
+| Claim tiers: I Claimed / II Dominant / III Legendary | Done |
+| Reclaim by beating the champion **on** those grounds | Done |
+| Server announcement on reclaim | Done |
+| History: battles, wins, damage, longest fight, strongest hit, champion | Done |
+| Shown on `/rival list` for Mutual / Nemesis | Done |
+| Dynamic enter / challenge / reclaim / loss messages | Done |
+
 ## Training Points (TP)
 
 TP rewards stay active (separate from RP history):

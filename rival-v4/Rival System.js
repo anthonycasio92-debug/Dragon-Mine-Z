@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.5.0
+ Version: 4.6.0
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -342,6 +342,7 @@ function rcNormalizeCareer(career) {
     career.presenceMs = rcNumber(career.presenceMs, 0);
     career.killsNearRival = rcNumber(career.killsNearRival, 0);
     career.surpassAwards = rcNumber(career.surpassAwards, 0);
+    career.lastSurpassAt = rcNumber(career.lastSurpassAt, 0);
     return career;
 }
 
@@ -397,9 +398,380 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.mutualSince = rcNumber(link.mutualSince, 0);
     link.lastBattleAt = rcNumber(link.lastBattleAt, 0);
     link.lastSeenTogetherAt = rcNumber(link.lastSeenTogetherAt, 0);
+    link.lastSurpassAt = rcNumber(link.lastSurpassAt, 0);
+    link.surpassWasBelow = link.surpassWasBelow === true;
+    link.provingGrounds = pgNormalize(link.provingGrounds);
     if (!(link.history instanceof Array)) link.history = [];
     rcRefreshLinkStatus(link);
     return link;
+}
+
+/* ========================= PROVING GROUNDS ========================= */
+
+var PG_ENABLED = true;
+var PG_RADIUS = 48;
+var PG_TIER2_WINS = 5;
+var PG_TIER3_WINS = 15;
+var PG_ON_GROUNDS_TP_MULT = 1.35;
+var PG_UNDERDOG_TP_MULT = 1.25;
+var PG_ON_GROUNDS_RP_BONUS = 12;
+var PG_RECLAIM_TP = 12000;
+var PG_RECLAIM_RP = 45;
+var PG_CHALLENGE_TP_BONUS = 0.40;
+var PG_UNDERDOG_OFFENSE = 1.12;
+var PG_UNDERDOG_BONUS_NAME = "RivalProvingUnderdog";
+
+function pgFresh() {
+    return {
+        active: false,
+        name: "",
+        biome: "",
+        dim: "",
+        x: 0,
+        y: 0,
+        z: 0,
+        radius: PG_RADIUS,
+        championUuid: "",
+        championName: "",
+        claimedAt: 0,
+        battles: 0,
+        championWins: 0,
+        damageTotal: 0,
+        longestFightMs: 0,
+        strongestHit: 0,
+        tier: 0,
+        lastBattleAt: 0
+    };
+}
+
+function pgNormalize(pg) {
+    if (pg === null || typeof pg !== "object") return pgFresh();
+    var out = pgFresh();
+    out.active = pg.active === true;
+    out.name = rcString(pg.name);
+    out.biome = rcString(pg.biome);
+    out.dim = rcString(pg.dim);
+    out.x = rcNumber(pg.x, 0);
+    out.y = rcNumber(pg.y, 0);
+    out.z = rcNumber(pg.z, 0);
+    out.radius = Math.max(16, rcNumber(pg.radius, PG_RADIUS));
+    out.championUuid = rcString(pg.championUuid);
+    out.championName = rcString(pg.championName);
+    out.claimedAt = rcNumber(pg.claimedAt, 0);
+    out.battles = rcNumber(pg.battles, 0);
+    out.championWins = rcNumber(pg.championWins, 0);
+    out.damageTotal = rcNumber(pg.damageTotal, 0);
+    out.longestFightMs = rcNumber(pg.longestFightMs, 0);
+    out.strongestHit = rcNumber(pg.strongestHit, 0);
+    out.tier = rcNumber(pg.tier, 0);
+    out.lastBattleAt = rcNumber(pg.lastBattleAt, 0);
+    if (out.active && out.tier <= 0) out.tier = pgComputeTier(out.championWins);
+    return out;
+}
+
+function pgComputeTier(championWins) {
+    var w = rcNumber(championWins, 0);
+    if (w >= PG_TIER3_WINS) return 3;
+    if (w >= PG_TIER2_WINS) return 2;
+    if (w >= 1) return 1;
+    return 0;
+}
+
+function pgTierName(tier) {
+    if (tier >= 3) return "Legendary Proving Grounds";
+    if (tier >= 2) return "Dominant Grounds";
+    if (tier >= 1) return "Claimed Proving Grounds";
+    return "Unclaimed";
+}
+
+function pgBattlefieldName(biome, dim) {
+    var b = rcLower(biome);
+    var d = rcLower(dim);
+    if (d.indexOf("nether") >= 0 || b.indexOf("nether") >= 0 || b.indexOf("soul") >= 0 || b.indexOf("crimson") >= 0 || b.indexOf("warped") >= 0) {
+        return "Hell";
+    }
+    if (d.indexOf("end") >= 0 || b.indexOf("end") >= 0) return "Kami's Lookout";
+    if (b.indexOf("desert") >= 0 || b.indexOf("badlands") >= 0 || b.indexOf("eroded") >= 0) return "Rocky Wastelands";
+    if (b.indexOf("ocean") >= 0 || b.indexOf("beach") >= 0 || b.indexOf("river") >= 0) return "Planet Namek";
+    if (b.indexOf("mushroom") >= 0) return "Beerus' Planet";
+    if (b.indexOf("plains") >= 0 || b.indexOf("sunflower") >= 0) return "the Tournament Arena";
+    if (b.indexOf("jungle") >= 0) return "the Sacred Land";
+    if (b.indexOf("taiga") >= 0 || b.indexOf("snow") >= 0 || b.indexOf("ice") >= 0 || b.indexOf("frozen") >= 0) {
+        return "the Northern Mountains";
+    }
+    if (b.indexOf("swamp") >= 0 || b.indexOf("mangrove") >= 0) return "the Dark Wetlands";
+    if (b.indexOf("forest") >= 0 || b.indexOf("grove") >= 0) return "the Whispering Woods";
+    if (b.indexOf("mountain") >= 0 || b.indexOf("peak") >= 0 || b.indexOf("stony") >= 0) {
+        return "the High Cliffs";
+    }
+    if (b.indexOf("cherry") >= 0) return "the Sacred Blossoms";
+    var clean = rcString(biome).replace(/^minecraft:/i, "").replace(/_/g, " ");
+    if (clean === "") clean = "Unknown Lands";
+    return clean;
+}
+
+function pgDisplayName(pg) {
+    if (pg === null || pg.active !== true) return "-";
+    var place = rcString(pg.name);
+    if (place === "") place = "Unknown Lands";
+    if (place.indexOf("the ") === 0 || place.indexOf("The ") === 0) {
+        return "Proving Grounds of " + place;
+    }
+    if (place === "Hell" || place === "Kami's Lookout" || place === "Planet Namek" ||
+        place.indexOf("'") >= 0) {
+        return "Proving Grounds of " + place;
+    }
+    return "Proving Grounds of the " + place;
+}
+
+function pgShortPlace(pg) {
+    if (pg === null || pg.active !== true) return "-";
+    var place = rcString(pg.name);
+    return place === "" ? "Unknown Lands" : place;
+}
+
+function pgCaptureLocation(player) {
+    var out = { x: 0, y: 0, z: 0, biome: "", dim: "", name: "Unknown Lands" };
+    if (player === null) return out;
+    try {
+        out.x = Math.floor(Number(player.getX()));
+        out.y = Math.floor(Number(player.getY()));
+        out.z = Math.floor(Number(player.getZ()));
+        var world = player.getWorld();
+        if (world != null) {
+            try { out.biome = rcString(world.getBiomeName(out.x, out.z)); } catch (e1) {}
+            try { out.dim = rcString(world.getDimension().getId()); } catch (e2) {
+                try { out.dim = rcString(world.getName()); } catch (e3) {}
+            }
+        }
+        out.name = pgBattlefieldName(out.biome, out.dim);
+    } catch (e) {}
+    return out;
+}
+
+function pgSameDim(player, pg) {
+    if (player === null || pg === null) return false;
+    try {
+        var dim = rcString(player.getWorld().getDimension().getId());
+        return rcLower(dim) === rcLower(pg.dim) || pg.dim === "";
+    } catch (e) {
+        return true;
+    }
+}
+
+function pgOnGrounds(player, pg) {
+    if (PG_ENABLED !== true || player === null || pg === null || pg.active !== true) return false;
+    if (!pgSameDim(player, pg)) return false;
+    try {
+        var dx = Number(player.getX()) - pg.x;
+        var dz = Number(player.getZ()) - pg.z;
+        return Math.sqrt(dx * dx + dz * dz) <= rcNumber(pg.radius, PG_RADIUS);
+    } catch (e) {
+        return false;
+    }
+}
+
+function pgSyncPair(aLink, bLink, pg) {
+    var copy = pgNormalize(pg);
+    aLink.provingGrounds = pgNormalize(copy);
+    bLink.provingGrounds = pgNormalize(copy);
+}
+
+function pgClearUnderdogBonus(player) {
+    try {
+        var data = rpGetDMZ(player);
+        if (data == null) return;
+        data.getBonusStats().removeBonus("STR", PG_UNDERDOG_BONUS_NAME);
+        data.getBonusStats().removeBonus("SKP", PG_UNDERDOG_BONUS_NAME);
+    } catch (e) {}
+}
+
+function pgApplyUnderdogBonus(player) {
+    try {
+        var data = rpGetDMZ(player);
+        if (data == null) return;
+        var bonus = data.getBonusStats();
+        try { bonus.removeBonus("STR", PG_UNDERDOG_BONUS_NAME); } catch (e1) {}
+        try { bonus.removeBonus("SKP", PG_UNDERDOG_BONUS_NAME); } catch (e2) {}
+        var offense = rpHighestOffense(data);
+        bonus.addBonus(offense.key, PG_UNDERDOG_BONUS_NAME, "*", PG_UNDERDOG_OFFENSE);
+        try {
+            rpNetwork().sendToTrackingEntityAndSelf(
+                new (rpSyncPacket())(player.getMCEntity()),
+                player.getMCEntity()
+            );
+        } catch (e3) {}
+    } catch (e) {}
+}
+
+/*
+ Official rival battle outcome -> create / strengthen / reclaim Proving Grounds.
+ Returns reward flags used by chApplyRewards.
+*/
+function pgProcessBattle(winnerPlayer, loserPlayer, winnerRecord, loserRecord, wCombat, lCombat, battleDuration) {
+    var out = {
+        onGrounds: false,
+        created: false,
+        reclaimed: false,
+        strengthened: false,
+        tierUp: false,
+        winnerWasUnderdog: false,
+        oldChampionName: "",
+        pg: null
+    };
+    if (PG_ENABLED !== true || winnerRecord === null || loserRecord === null) return out;
+
+    var wLink = winnerRecord.rivals[loserRecord.uuid];
+    var lLink = loserRecord.rivals[winnerRecord.uuid];
+    if (wLink === null || wLink === undefined || lLink === null || lLink === undefined) return out;
+
+    var pg = pgNormalize(wLink.provingGrounds);
+    var now = rcNow();
+    var totalDmg = rcNumber(wCombat.damage, 0) + rcNumber(lCombat.damage, 0);
+    var bestHit = Math.max(rcNumber(wCombat.biggestHit, 0), rcNumber(lCombat.biggestHit, 0));
+    var duration = Math.max(0, rcNumber(battleDuration, 0));
+
+    if (pg.active !== true) {
+        var loc = pgCaptureLocation(winnerPlayer !== null ? winnerPlayer : loserPlayer);
+        pg.active = true;
+        pg.name = loc.name;
+        pg.biome = loc.biome;
+        pg.dim = loc.dim;
+        pg.x = loc.x;
+        pg.y = loc.y;
+        pg.z = loc.z;
+        pg.radius = PG_RADIUS;
+        pg.championUuid = winnerRecord.uuid;
+        pg.championName = winnerRecord.name;
+        pg.claimedAt = now;
+        pg.battles = 1;
+        pg.championWins = 1;
+        pg.damageTotal = totalDmg;
+        pg.longestFightMs = duration;
+        pg.strongestHit = bestHit;
+        pg.tier = 1;
+        pg.lastBattleAt = now;
+        pgSyncPair(wLink, lLink, pg);
+        out.created = true;
+        out.pg = pg;
+
+        if (loserPlayer !== null) {
+            rcMessage(loserPlayer, RC_COLOR + "c[Proving Grounds] " + RC_COLOR + "7Defeat marked " +
+                RC_COLOR + "e" + pgDisplayName(pg) + RC_COLOR + "7.");
+            rcMessage(loserPlayer, RC_COLOR + "8Return here to face " + winnerRecord.name + " for greater rewards.");
+        }
+        if (winnerPlayer !== null) {
+            rcMessage(winnerPlayer, RC_COLOR + "6[Proving Grounds] " + RC_COLOR + "7You claimed " +
+                RC_COLOR + "e" + pgDisplayName(pg) + RC_COLOR + "7.");
+            rcMessage(winnerPlayer, RC_COLOR + "8Tier I - " + pgTierName(1) + ". Defend your claim.");
+        }
+        return out;
+    }
+
+    var onGrounds = false;
+    if (winnerPlayer !== null && pgOnGrounds(winnerPlayer, pg)) onGrounds = true;
+    if (loserPlayer !== null && pgOnGrounds(loserPlayer, pg)) onGrounds = true;
+    out.onGrounds = onGrounds;
+    out.pg = pg;
+
+    if (!onGrounds) return out;
+
+    out.winnerWasUnderdog = rcString(pg.championUuid) !== "" &&
+        rcString(pg.championUuid) !== winnerRecord.uuid;
+
+    pg.battles = rcNumber(pg.battles, 0) + 1;
+    pg.damageTotal = rcNumber(pg.damageTotal, 0) + totalDmg;
+    pg.longestFightMs = Math.max(rcNumber(pg.longestFightMs, 0), duration);
+    pg.strongestHit = Math.max(rcNumber(pg.strongestHit, 0), bestHit);
+    pg.lastBattleAt = now;
+
+    if (out.winnerWasUnderdog) {
+        out.reclaimed = true;
+        out.oldChampionName = rcString(pg.championName) || "their rival";
+        pg.championUuid = winnerRecord.uuid;
+        pg.championName = winnerRecord.name;
+        pg.championWins = 1;
+        pg.claimedAt = now;
+        pg.tier = 1;
+        pgSyncPair(wLink, lLink, pg);
+
+        if (winnerPlayer !== null) {
+            rcMessage(winnerPlayer, RC_COLOR + "a[Proving Grounds] " + RC_COLOR + "eYou have reclaimed your honor.");
+            rcMessage(winnerPlayer, RC_COLOR + "7" + pgDisplayName(pg) + RC_COLOR + "8 is yours again.");
+        }
+        if (loserPlayer !== null) {
+            rcMessage(loserPlayer, RC_COLOR + "c[Proving Grounds] " + RC_COLOR + "7" +
+                winnerRecord.name + " reclaimed these grounds from you.");
+        }
+        chBroadcast(CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "e" + winnerRecord.name +
+            CH_COLOR + "7 has reclaimed the Proving Grounds from " +
+            CH_COLOR + "c" + out.oldChampionName + CH_COLOR + "7!");
+        return out;
+    }
+
+    var oldTier = rcNumber(pg.tier, 1);
+    pg.championWins = rcNumber(pg.championWins, 0) + 1;
+    pg.tier = pgComputeTier(pg.championWins);
+    out.strengthened = true;
+    out.tierUp = pg.tier > oldTier;
+    pgSyncPair(wLink, lLink, pg);
+
+    if (winnerPlayer !== null) {
+        rcMessage(winnerPlayer, RC_COLOR + "6[Proving Grounds] " + RC_COLOR + "7Your claim grows stronger. " +
+            RC_COLOR + "e" + pgTierName(pg.tier) +
+            RC_COLOR + "8 (" + pg.championWins + " wins here)");
+        if (out.tierUp) {
+            rcMessage(winnerPlayer, RC_COLOR + "aTier up! " + RC_COLOR + "e" + pgTierName(pg.tier));
+        }
+    }
+    if (loserPlayer !== null) {
+        rcMessage(loserPlayer, RC_COLOR + "c[Proving Grounds] " + RC_COLOR + "7Your rival's dominance over these grounds grows stronger.");
+    }
+    return out;
+}
+
+function pgTouchDraw(playerA, playerB, recordA, recordB, combatA, combatB, battleDuration) {
+    if (PG_ENABLED !== true || recordA === null || recordB === null) return;
+    var linkA = recordA.rivals[recordB.uuid];
+    var linkB = recordB.rivals[recordA.uuid];
+    if (linkA === null || linkA === undefined || linkB === null || linkB === undefined) return;
+    var pg = pgNormalize(linkA.provingGrounds);
+    if (pg.active !== true) return;
+    var on = (playerA !== null && pgOnGrounds(playerA, pg)) ||
+        (playerB !== null && pgOnGrounds(playerB, pg));
+    if (!on) return;
+    pg.battles = rcNumber(pg.battles, 0) + 1;
+    pg.damageTotal = rcNumber(pg.damageTotal, 0) +
+        rcNumber(combatA.damage, 0) + rcNumber(combatB.damage, 0);
+    pg.longestFightMs = Math.max(rcNumber(pg.longestFightMs, 0), rcNumber(battleDuration, 0));
+    pg.strongestHit = Math.max(
+        rcNumber(pg.strongestHit, 0),
+        Math.max(rcNumber(combatA.biggestHit, 0), rcNumber(combatB.biggestHit, 0))
+    );
+    pg.lastBattleAt = rcNow();
+    pgSyncPair(linkA, linkB, pg);
+}
+
+function pgChallengeFlavor(player, otherName, pg, myUuid) {
+    if (player === null || pg === null || pg.active !== true) return;
+    if (!pgOnGrounds(player, pg)) return;
+    if (rcString(pg.championUuid) === myUuid) {
+        chMessage(player, CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "7Your rival awaits where your last battle ended.");
+    } else {
+        chMessage(player, CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "7Your rival awaits on " +
+            CH_COLOR + "e" + pgShortPlace(pg) + CH_COLOR + "7.");
+        chMessage(player, CH_COLOR + "8Underdog bonus active. Reclaim your honor.");
+    }
+}
+
+function pgListLines(player, link) {
+    var pg = pgNormalize(link.provingGrounds);
+    if (pg.active !== true) return;
+    rcMessage(player, RC_COLOR + "8   Grounds: " + RC_COLOR + "e" + pgShortPlace(pg) +
+        RC_COLOR + "8 | " + pgTierName(pg.tier));
+    rcMessage(player, RC_COLOR + "8   Champion: " + RC_COLOR + "f" + (pg.championName || "-") +
+        RC_COLOR + "8 | Battles: " + RC_COLOR + "f" + rcCommas(pg.battles) +
+        RC_COLOR + "8 | Streak: " + RC_COLOR + "a" + rcNumber(link.currentStreak, 0) + " wins");
 }
 
 function rcEnsurePlayer(database, player) {
@@ -1032,8 +1404,10 @@ function rcList(player) {
                 player,
                 RC_COLOR + "7- " + RC_COLOR + "f" + L.name + " " + rcLinkStatusLabel(rcLinkStatus(L)) +
                 RC_COLOR + "7 | " + rcCommas(L.points) + " RP" +
+                RC_COLOR + "7 | Rank: " + RC_COLOR + "e" + rcGetTier(L.points).name +
                 RC_COLOR + "7 | W/L " + RC_COLOR + "a" + L.wins + RC_COLOR + "7/" + RC_COLOR + "c" + L.losses
             );
+            if (title === "Nemesis" || title === "Mutual") pgListLines(player, L);
         }
     }
 
@@ -1067,11 +1441,12 @@ function rcHelp(player) {
     rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
     rcMessage(player, RC_COLOR + "7RP from official battles only - unlocks instinct, titles, records.");
     rcMessage(player, RC_COLOR + "7TP still rewards: near rivals, kills, surpass, challenges, fusion.");
+    rcMessage(player, RC_COLOR + "7Defeat marks Proving Grounds. Return there for bonus TP/RP.");
     rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
     rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
     rcMessage(player, RC_COLOR + "e/rival decline <player> " + RC_COLOR + "7- Decline a request");
     rcMessage(player, RC_COLOR + "e/rival remove <player> " + RC_COLOR + "7- End a rivalry");
-    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + history");
+    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + Proving Grounds");
     rcMessage(player, RC_COLOR + "e/rival stats [player] " + RC_COLOR + "7- Career statistics");
     rcMessage(player, RC_COLOR + "e/challenge <player> " + RC_COLOR + "7- Official 60s rival battle");
     rcMessage(player, RC_COLOR + "e/rival hof " + RC_COLOR + "7- Hall of Legends");
@@ -1808,11 +2183,39 @@ function rpProcessPlayer(player) {
     var bestMultiplier = 1.0;
     var nearCount = 0;
     var dirty = false;
+    var wantsPgUnderdog = false;
 
     for (var rivalUuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
         var link = record.rivals[rivalUuid];
         var rivalPlayer = rpFindOnlineByUuid(rivalUuid);
+
+        /* Proving Grounds enter pulse + underdog aura (even if rival is offline) */
+        if (PG_ENABLED === true) {
+            var pg = pgNormalize(link.provingGrounds);
+            var enterKey = "rival.v4.pgEnter." + rivalUuid;
+            if (pg.active === true && pgOnGrounds(player, pg)) {
+                if (rpTempNumber(temp, enterKey, 0) <= 0) {
+                    rpTempPut(temp, enterKey, now);
+                    if (rcString(pg.championUuid) === rivalUuid) {
+                        rpMessage(player, RP_COLOR + "6[Proving Grounds] " + RP_COLOR + "7You enter the Proving Grounds where " +
+                            RP_COLOR + "c" + link.name + RP_COLOR + "7 last defeated you.");
+                    } else if (rcString(pg.championUuid) === uuid) {
+                        rpMessage(player, RP_COLOR + "6[Proving Grounds] " + RP_COLOR + "7You enter your claimed grounds: " +
+                            RP_COLOR + "e" + pgShortPlace(pg) + RP_COLOR + "7.");
+                    } else {
+                        rpMessage(player, RP_COLOR + "6[Proving Grounds] " + RP_COLOR + "7You enter " +
+                            RP_COLOR + "e" + pgDisplayName(pg) + RP_COLOR + "7.");
+                    }
+                }
+                if (rcString(pg.championUuid) !== "" && rcString(pg.championUuid) !== uuid) {
+                    wantsPgUnderdog = true;
+                }
+            } else if (rpTempNumber(temp, enterKey, 0) > 0) {
+                rpTempPut(temp, enterKey, 0);
+            }
+        }
+
         if (rivalPlayer === null) continue;
 
         var range = rpRangeForPoints(link.points);
@@ -1881,14 +2284,36 @@ function rpProcessPlayer(player) {
             }
         }
 
-        /* Surpass award */
-        if (RP_SURPASS_ENABLED && rivalReleased > 0 && myReleased > rivalReleased) {
-            var surpassKey = "rival.v4.surpass." + rivalUuid;
-            var lastSurpass = rpTempNumber(temp, surpassKey, 0);
-            if (now - lastSurpass >= RP_SURPASS_COOLDOWN_MS) {
-                if (rpAwardTP(player, data, RP_SURPASS_TP, "Surpassed " + link.name)) {
-                    record.career.surpassAwards = rpNumber(record.career.surpassAwards, 0) + 1;
-                    rpTempPut(temp, surpassKey, now);
+        /* Surpass award: cross from weaker -> stronger only, persisted cooldowns */
+        if (RP_SURPASS_ENABLED && rivalReleased > 0) {
+            if (myReleased <= rivalReleased) {
+                /* Must be weaker (or tied) before the next surpass can trigger */
+                if (link.surpassWasBelow !== true) {
+                    link.surpassWasBelow = true;
+                    dirty = true;
+                }
+            } else {
+                var canCross = link.surpassWasBelow === true;
+                var lastRivalSurpass = rpNumber(link.lastSurpassAt, 0);
+                var lastGlobalSurpass = rpNumber((record.career || {}).lastSurpassAt, 0);
+                var rivalReady = now - lastRivalSurpass >= RP_SURPASS_COOLDOWN_MS;
+                var globalReady = now - lastGlobalSurpass >= RP_SURPASS_GLOBAL_COOLDOWN_MS;
+
+                if (canCross && rivalReady && globalReady) {
+                    if (rpAwardTP(player, data, RP_SURPASS_TP, "Surpassed " + link.name)) {
+                        if (record.career === null || typeof record.career !== "object") record.career = {};
+                        record.career.surpassAwards = rpNumber(record.career.surpassAwards, 0) + 1;
+                        record.career.lastSurpassAt = now;
+                        link.lastSurpassAt = now;
+                        link.surpassWasBelow = false;
+                        dirty = true;
+                        rpMessage(player, RP_COLOR + "8[Rival] Surpass cooldown: " +
+                            Math.ceil(RP_SURPASS_COOLDOWN_MS / 3600000) + "h for " + link.name +
+                            ", " + Math.ceil(RP_SURPASS_GLOBAL_COOLDOWN_MS / 3600000) + "h global.");
+                    }
+                } else if (link.surpassWasBelow === true) {
+                    /* Already stronger; clear arm so standing nearby cannot re-fire without dipping below */
+                    link.surpassWasBelow = false;
                     dirty = true;
                 }
             }
@@ -1896,6 +2321,11 @@ function rpProcessPlayer(player) {
     }
 
     rpApplyOffenseBonus(player, data, bestMultiplier);
+
+    if (PG_ENABLED === true) {
+        if (wantsPgUnderdog === true) pgApplyUnderdogBonus(player);
+        else pgClearUnderdogBonus(player);
+    }
 
     if (nearCount > 0) {
         rpTempPut(temp, "rival.v4.nearCount", nearCount);
@@ -2715,6 +3145,9 @@ function chEnsureLink(owner, target) {
             mutualSince: 0,
             lastBattleAt: 0,
             lastSeenTogetherAt: 0,
+            lastSurpassAt: 0,
+            surpassWasBelow: false,
+            provingGrounds: pgFresh(),
             history: []
         };
     }
@@ -2722,6 +3155,7 @@ function chEnsureLink(owner, target) {
     link.name = target.name;
     link.updatedAt = chNow();
     if (link.isNemesis !== true) link.isNemesis = false;
+    link.provingGrounds = pgNormalize(link.provingGrounds);
     return link;
 }
 
@@ -2899,6 +3333,29 @@ function chStartCountdown(player, db, pending) {
         CH_COLOR + "7 vs " + CH_COLOR + "e" + pending.toName +
         CH_COLOR + "7 - countdown!");
     chBroadcast(CH_COLOR + "8Watch live: /spectaterival " + pending.fromName);
+
+    try {
+        if (pending.related === true) {
+            var coreDb = chLoadCoreDb(player);
+            if (coreDb !== null) {
+                var fromRec = coreDb.players[pending.fromUuid];
+                var toRec = coreDb.players[pending.toUuid];
+                if (fromRec !== null && fromRec !== undefined && toRec !== null && toRec !== undefined) {
+                    var pgLink = fromRec.rivals[pending.toUuid];
+                    if (pgLink !== null && pgLink !== undefined) {
+                        var pgCtx = pgNormalize(pgLink.provingGrounds);
+                        if (a !== null) pgChallengeFlavor(a, pending.toName, pgCtx, pending.fromUuid);
+                        if (b !== null) pgChallengeFlavor(b, pending.fromName, pgCtx, pending.toUuid);
+                        if (pgCtx.active === true &&
+                            ((a !== null && pgOnGrounds(a, pgCtx)) || (b !== null && pgOnGrounds(b, pgCtx)))) {
+                            chBroadcast(CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "7Battle on " +
+                                CH_COLOR + "e" + pgShortPlace(pgCtx) + CH_COLOR + "7!");
+                        }
+                    }
+                }
+            }
+        }
+    } catch (pgErr) {}
 }
 
 function chAccept(player, fromName) {
@@ -2989,6 +3446,22 @@ function chBeginBattle(player, db, session) {
     chBroadcast(CH_COLOR + "c" + CH_COLOR + "l[Rival Battle] FIGHT!" + CH_COLOR + "r");
     chBroadcast(CH_COLOR + "e" + session.challengerName + CH_COLOR + "7 vs " +
         CH_COLOR + "e" + session.opponentName + CH_COLOR + "7 - 60s most damage");
+    try {
+        if (session.related === true) {
+            var fightCore = chLoadCoreDb(player);
+            if (fightCore !== null) {
+                var fightRec = fightCore.players[session.challengerUuid];
+                if (fightRec !== null && fightRec !== undefined && fightRec.rivals[session.opponentUuid]) {
+                    var fightPg = pgNormalize(fightRec.rivals[session.opponentUuid].provingGrounds);
+                    if (fightPg.active === true &&
+                        ((a !== null && pgOnGrounds(a, fightPg)) || (b !== null && pgOnGrounds(b, fightPg)))) {
+                        chBroadcast(CH_COLOR + "6Proving Grounds: " + CH_COLOR + "e" + pgShortPlace(fightPg) +
+                            CH_COLOR + "8 | Champion: " + CH_COLOR + "f" + (fightPg.championName || "-"));
+                    }
+                }
+            }
+        }
+    } catch (fightPgErr) {}
     chBroadcast(CH_COLOR + "8/spectaterival " + session.challengerName);
     chBroadcast(CH_COLOR + "6--------------------------------");
 }
@@ -3131,8 +3604,17 @@ function chApplyRewards(player, session, result) {
     }
 
     if (result.reason === "draw") {
-        if (challenger !== null) chAwardTP(challenger, CH_DRAW_TP, "Draw");
-        if (opponent !== null) chAwardTP(opponent, CH_DRAW_TP, "Draw");
+        var drawTp = CH_DRAW_TP;
+        var drawOnGrounds = false;
+        if (related && challengerRecord !== null && opponentRecord !== null) {
+            var drawPg = pgNormalize((challengerRecord.rivals[opponentRecord.uuid] || {}).provingGrounds);
+            drawOnGrounds = drawPg.active === true &&
+                ((challenger !== null && pgOnGrounds(challenger, drawPg)) ||
+                    (opponent !== null && pgOnGrounds(opponent, drawPg)));
+            if (drawOnGrounds) drawTp = Math.floor(drawTp * PG_ON_GROUNDS_TP_MULT);
+        }
+        if (challenger !== null) chAwardTP(challenger, drawTp, drawOnGrounds ? "Draw (Proving Grounds)" : "Draw");
+        if (opponent !== null) chAwardTP(opponent, drawTp, drawOnGrounds ? "Draw (Proving Grounds)" : "Draw");
         if (related && challengerRecord !== null && opponentRecord !== null) {
             chTouchLinkHistory(challengerRecord, opponentRecord.uuid, cCombat, oCombat, "draw");
             chTouchLinkHistory(opponentRecord, challengerRecord.uuid, oCombat, cCombat, "draw");
@@ -3140,12 +3622,14 @@ function chApplyRewards(player, session, result) {
             opponentRecord.rivals[challengerRecord.uuid].draws++;
             challengerRecord.career.officialDraws = chNumber(challengerRecord.career.officialDraws, 0) + 1;
             opponentRecord.career.officialDraws = chNumber(opponentRecord.career.officialDraws, 0) + 1;
+            pgTouchDraw(challenger, opponent, challengerRecord, opponentRecord, cCombat, oCombat, battleDuration);
             var drawRp = CH_DRAW_RP;
             if (mutual) {
                 var closeDraw = Math.min(chNumber(cCombat.damage, 0), chNumber(oCombat.damage, 0)) /
                     Math.max(1, Math.max(chNumber(cCombat.damage, 0), chNumber(oCombat.damage, 0))) >= CH_CLOSE_BATTLE_RATIO;
                 if (closeDraw) drawRp += CH_CLOSE_BATTLE_RP;
                 drawRp += chLongRivalryBonus(challengerRecord, opponentRecord.uuid);
+                if (drawOnGrounds) drawRp += PG_ON_GROUNDS_RP_BONUS;
                 chAwardRp(challengerRecord, opponentRecord.uuid, drawRp, "challenge_draw");
                 chAwardRp(opponentRecord, challengerRecord.uuid, drawRp, "challenge_draw");
             }
@@ -3170,9 +3654,41 @@ function chApplyRewards(player, session, result) {
     var loseTp = CH_LOSE_TP;
     if (!related) winTp = CH_NON_RIVAL_WIN_TP;
 
-    if (winnerPlayer !== null) chAwardTP(winnerPlayer, winTp, result.knockout ? "KO Victory" : "Victory");
+    var pgResult = null;
+    if (related && winnerRecord !== null && loserRecord !== null) {
+        var wCombatPg = session.combat[winnerUuid] || chFreshCombat();
+        var lCombatPg = session.combat[loserUuid] || chFreshCombat();
+        /* Peek on-grounds before claim mutation for reward mults */
+        var peekPg = pgNormalize(winnerRecord.rivals[loserRecord.uuid].provingGrounds);
+        var fightingOnGrounds = peekPg.active === true &&
+            ((winnerPlayer !== null && pgOnGrounds(winnerPlayer, peekPg)) ||
+                (loserPlayer !== null && pgOnGrounds(loserPlayer, peekPg)));
+        var underdogBefore = fightingOnGrounds &&
+            rcString(peekPg.championUuid) !== "" &&
+            rcString(peekPg.championUuid) !== winnerRecord.uuid;
+
+        if (fightingOnGrounds) {
+            winTp = Math.floor(winTp * PG_ON_GROUNDS_TP_MULT);
+            winTp = Math.floor(winTp * (1.0 + PG_CHALLENGE_TP_BONUS));
+            loseTp = Math.floor(loseTp * PG_ON_GROUNDS_TP_MULT);
+            if (underdogBefore) winTp = Math.floor(winTp * PG_UNDERDOG_TP_MULT);
+        }
+
+        pgResult = pgProcessBattle(
+            winnerPlayer, loserPlayer, winnerRecord, loserRecord,
+            wCombatPg, lCombatPg, battleDuration
+        );
+    }
+
+    var winNote = result.knockout ? "KO Victory" : "Victory";
+    if (pgResult !== null && pgResult.onGrounds) winNote += " (Proving Grounds)";
+    if (pgResult !== null && pgResult.reclaimed) winNote = "Reclaimed Proving Grounds";
+    if (winnerPlayer !== null) chAwardTP(winnerPlayer, winTp, winNote);
     if (loserPlayer !== null && result.reason !== "forfeit" && result.reason !== "disconnect") {
-        chAwardTP(loserPlayer, loseTp, "Participation");
+        chAwardTP(loserPlayer, loseTp, pgResult !== null && pgResult.onGrounds ? "Participation (Proving Grounds)" : "Participation");
+    }
+    if (pgResult !== null && pgResult.reclaimed === true && winnerPlayer !== null) {
+        chAwardTP(winnerPlayer, PG_RECLAIM_TP, "Honor Reclaimed");
     }
 
     touchDuration(winnerRecord, true);
@@ -3212,6 +3728,13 @@ function chApplyRewards(player, session, result) {
                 var longBonus = chLongRivalryBonus(winnerRecord, loserRecord.uuid);
                 winRp += longBonus;
                 loseRp += longBonus;
+            }
+            if (pgResult !== null && (pgResult.onGrounds || pgResult.created)) {
+                winRp += PG_ON_GROUNDS_RP_BONUS;
+                loseRp += PG_ON_GROUNDS_RP_BONUS;
+            }
+            if (pgResult !== null && pgResult.reclaimed === true) {
+                winRp += PG_RECLAIM_RP;
             }
             chAwardRp(winnerRecord, loserRecord.uuid, winRp, "challenge_win");
             chAwardRp(loserRecord, winnerRecord.uuid, loseRp,
