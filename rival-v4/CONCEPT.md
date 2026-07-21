@@ -78,7 +78,7 @@ TP rewards stay active (separate from RP history):
 | Anti-gank witness / hit | Done |
 | Official challenge win/lose/draw | Done |
 | Fusion kill TP split (mutual) | Done |
-| Level-scaled via `StatsData.getLevel()` | Done |
+| Level-scaled via `StatsData.getLevel()` | Done (burst for big awards, softer drip for presence) |
 
 ## Rival Points
 

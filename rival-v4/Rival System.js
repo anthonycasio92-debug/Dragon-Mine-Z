@@ -1220,11 +1220,15 @@ var RP_KILL_TP_MUTUAL_MULT = 1.45;
 var RP_SHOW_KILL_TP = true;
 
 /*
- * Level-based TP scaling (DMZ getLevel).
- * Applied to ALL rival TP awards (proximity, challenges, fusion kills).
+ * Level-based TP scaling (DMZ StatsData.getLevel()).
+ * Applied to ALL rival TP awards.
  *
- * Buffed so rival loops stay competitive vs other TP sources.
+ * Two curves:
+ *  burst — challenges, kills, surpass, underdog wins, fusion
+ *  drip  — presence / engage / light anti-gank (gentler so AFK near
+ *          a rival cannot outpace official battles at high level)
  *
+ * Burst anchors:
  *  Level        Mult
  *  1            1.5x
  *  10           2.5x
@@ -1237,11 +1241,14 @@ var RP_SHOW_KILL_TP = true;
  *  75,000       520x
  *  100,000      850x
  *
- * Above 100k: +220x per extra decade of level (soft continue).
+ * Above 100k: +220x per extra decade of level (soft continue, capped).
+ * Drip uses burst^DRIP_POWER (capped) so it still scales with level.
  */
 var RIVAL_LEVEL_TP_ENABLED = true;
 var RIVAL_LEVEL_TP_SHOW_IN_REASON = true;
 var RIVAL_LEVEL_TP_MAX = 3500.0;
+var RIVAL_LEVEL_TP_DRIP_POWER = 0.55;
+var RIVAL_LEVEL_TP_DRIP_MAX = 75.0;
 
 var RIVAL_LEVEL_TP_LEVEL_ANCHORS = [
     1,
@@ -1620,16 +1627,32 @@ function rivalLevelTpMultiplier(data) {
     return rivalLevelTpMultiplierFromLevel(rivalGetDmzLevel(data));
 }
 
-function rivalScaleTpByLevel(data, amount) {
-    var base = Math.floor(Number(amount));
-    if (isNaN(base) || base <= 0) return 0;
-    return Math.max(1, Math.floor(base * rivalLevelTpMultiplier(data)));
+/* kind: "burst" (default) or "drip" */
+function rivalEffectiveTpMultiplier(data, kind) {
+    var burst = rivalLevelTpMultiplier(data);
+    if (kind !== "drip") return burst;
+    var drip = Math.pow(Math.max(1.0, burst), RIVAL_LEVEL_TP_DRIP_POWER);
+    var dripCap = Number(RIVAL_LEVEL_TP_DRIP_MAX);
+    if (isNaN(dripCap) || dripCap < 1) dripCap = 75.0;
+    if (drip > dripCap) drip = dripCap;
+    return drip;
 }
 
-function rpAwardTP(player, data, amount, reason) {
+function rivalScaleTpByLevel(data, amount, kind) {
+    var base = Math.floor(Number(amount));
+    if (isNaN(base) || base <= 0) return 0;
+    if (data === null || data === undefined) return base;
+    var mult = rivalEffectiveTpMultiplier(data, kind);
+    if (!(mult > 0) || isNaN(mult) || !isFinite(mult)) mult = 1.0;
+    return Math.max(1, Math.floor(base * mult));
+}
+
+function rpAwardTP(player, data, amount, reason, kind) {
     try {
-        amount = rivalScaleTpByLevel(data, amount);
-        if (amount <= 0 || data === null) return false;
+        if (data === null || data === undefined) return false;
+        var scaleKind = kind === "drip" ? "drip" : "burst";
+        amount = rivalScaleTpByLevel(data, amount, scaleKind);
+        if (amount <= 0) return false;
         var resources = data.getResources();
         if (resources === null) return false;
         resources.addTrainingPoints(amount);
@@ -1640,7 +1663,8 @@ function rpAwardTP(player, data, amount, reason) {
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 var lvl = rivalGetDmzLevel(data);
                 note = (note ? note + " | " : "") +
-                    "Lv" + rpCommas(lvl) + " " + rivalFormatMult(rivalLevelTpMultiplier(data));
+                    "Lv" + rpCommas(lvl) + " " +
+                    rivalFormatMult(rivalEffectiveTpMultiplier(data, scaleKind));
             }
             rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
                 (note ? RP_COLOR + "7 (" + note + ")" : ""));
@@ -1840,7 +1864,7 @@ function rpProcessPlayer(player) {
                 var presenceTp = RP_PRESENCE_TP_ONE_SIDED;
                 if (pStatus === "mutual") presenceTp = RP_PRESENCE_TP_MUTUAL;
                 if (pStatus === "nemesis") presenceTp = RP_PRESENCE_TP_NEMESIS;
-                rpAwardTP(player, data, presenceTp, "Near " + pStatus + " " + link.name);
+                rpAwardTP(player, data, presenceTp, "Near " + pStatus + " " + link.name, "drip");
             }
             if (RP_PRESENCE_RP_ENABLED === true) {
                 var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
@@ -1978,7 +2002,7 @@ function rpTryUnderdogEngage(underdog, stronger) {
     var last = rpTempNumber(temp, engageKey, 0);
     if (now - last < RP_UNDERDOG_ENGAGE_COOLDOWN_MS) return;
 
-    rpAwardTP(underdog, myData, RP_UNDERDOG_ENGAGE_TP, "Engaging rival");
+    rpAwardTP(underdog, myData, RP_UNDERDOG_ENGAGE_TP, "Engaging rival", "drip");
     rpTempPut(temp, engageKey, now);
 }
 
@@ -2028,7 +2052,7 @@ function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
         var rivalReleased = rpGetReleasedBP(rivalData);
         if (rivalReleased > victimReleased * RP_ANTIGANK_RATIO) continue;
 
-        rpAwardTP(rivalPlayer, rivalData, RP_ANTIGANK_HIT_TP, "Rival under fire");
+        rpAwardTP(rivalPlayer, rivalData, RP_ANTIGANK_HIT_TP, "Rival under fire", "drip");
         dirty = true;
     }
 
@@ -2505,7 +2529,7 @@ function chAwardTP(player, amount, reason) {
     try {
         var data = chGetDMZ(player);
         if (data === null) return false;
-        amount = rivalScaleTpByLevel(data, amount);
+        amount = rivalScaleTpByLevel(data, amount, "burst");
         if (amount <= 0) return false;
         data.getResources().addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
@@ -2514,7 +2538,7 @@ function chAwardTP(player, amount, reason) {
         if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
             note = (note ? note + " | " : "") +
                 "Lv" + chCommas(rivalGetDmzLevel(data)) + " " +
-                rivalFormatMult(rivalLevelTpMultiplier(data));
+                rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst"));
         }
         chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
             (note ? CH_COLOR + "7 (" + note + ")" : ""));
@@ -4516,10 +4540,15 @@ function rivalFusionKill(event) {
         var data = rfGetDmz(killer);
         if (data == null) return;
         try {
-            var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP);
+            var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst");
             data.getResources().addTrainingPoints(killerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
-            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP");
+            var kNote = "";
+            if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
+                kNote = RF_C + "7 (Lv" + rivalGetDmzLevel(data) + " " +
+                    rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst")) + ")";
+            }
+            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP" + kNote);
         } catch (e) {}
 
         var partner = rfFindByUuid(partnerId);
@@ -4527,10 +4556,15 @@ function rivalFusionKill(event) {
         var pdata = rfGetDmz(partner);
         if (pdata == null) return;
         try {
-            var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP);
+            var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst");
             pdata.getResources().addTrainingPoints(partnerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
-            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerTp + " TP (partner kill)");
+            var pNote = "";
+            if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
+                pNote = RF_C + "7 (Lv" + rivalGetDmzLevel(pdata) + " " +
+                    rivalFormatMult(rivalEffectiveTpMultiplier(pdata, "burst")) + ")";
+            }
+            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerTp + " TP (partner kill)" + pNote);
         } catch (e2) {}
     } catch (error) {
         try { print("[RivalDMZHooks] kill " + error); } catch (e3) {}

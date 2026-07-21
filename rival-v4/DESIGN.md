@@ -53,7 +53,14 @@ Note: the **Nemesis link status** is history-chosen (one Mutual). The career tit
 
 RP does **not** grant raw STR/SKP bonuses.
 
-**TP rewards stay on** (level-scaled): presence near rivals, kill near rivals, surpass, underdog, anti-gank, official challenges, fusion kill split.
+**TP rewards stay on** (level-scaled via `StatsData.getLevel()`):
+
+| Kind | Sources | Curve |
+|---|---|---|
+| **burst** | challenges, kill near rival, surpass, underdog win, fusion | full log anchors → 850x @ 100k |
+| **drip** | presence, engage, light anti-gank | `burst^0.55` capped at 75x |
+
+Messages show `LvX Y.YYx` so players can see the scale.
 
 ## Config
 
