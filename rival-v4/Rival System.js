@@ -1276,10 +1276,16 @@ var RIVAL_LEVEL_TP_MULT_ANCHORS = [
     850.0
 ];
 
-/* Surpass rival released BP award */
+/*
+ Surpass rival released BP award.
+ - Only awards on a true cross (you were weaker, then go stronger)
+ - Per-rival cooldown is persisted on the link (survives logout)
+ - Global cooldown prevents chaining many rivals for massive TP
+*/
 var RP_SURPASS_ENABLED = true;
 var RP_SURPASS_TP = 8000;
-var RP_SURPASS_COOLDOWN_MS = 30 * 60 * 1000;
+var RP_SURPASS_COOLDOWN_MS = 6 * 60 * 60 * 1000;      // 6h per rival
+var RP_SURPASS_GLOBAL_COOLDOWN_MS = 60 * 60 * 1000;    // 1h between any surpass
 
 /* One-sided underdog combat (you declared a stronger rival) */
 var RP_UNDERDOG_ENGAGE_TP = 250;
