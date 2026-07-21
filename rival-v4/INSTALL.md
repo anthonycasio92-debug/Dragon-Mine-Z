@@ -35,57 +35,32 @@ Install as **separate** Global Player scripts:
 Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable `interact` + `dialogOption`.
 Map dialog options to slots 0–9 (see file header).
 
-## 5) CMI aliases (FakeOp note)
+## 5) CMI aliases — use asFakeOp!
 
-**Do not use `asFakeOp!` for CNPC triggers.**  
-CustomNPCs ignores FakePlayer entities in `EventHooks.onScriptTriggerEvent` (verified in your CNPC jar).
+**Use `asFakeOp!`** (noppes needs a player source; console is not enough).
 
-Use the provided file:
+Important detail from your CNPC jar:
+- Global Player scripts **skip FakePlayer**
+- Forge / script-slot scripts **still receive** the trigger
 
-`cmi/Aliases-Rival.yml`
+So:
+1. Put `RivalRouter_v4.js` in the **same script location as SkillCheckCommand** (NOT Global Player)
+2. Paste `cmi/Aliases-Rival.yml` into CMI Aliases.yml
+3. `/cmi reload`
 
-Pattern:
+Alias pattern:
 
 ```yaml
 challenge:
   Cmds:
-  - asConsole! noppes script trigger 210 [playerName] $1
+  - asFakeOp! noppes script trigger 210 [playerName] $1
 ```
 
-`RivalRouter_v4.js` resolves `[playerName]`, then re-dispatches gameplay triggers with:
+Router reads:
+- arg0 = real player (`[playerName]`)
+- remaining args = command args
 
-```text
-execute as <player> run noppes script trigger <id> ...
-```
-
-so `event.entity` is the real player for RivalCore / RivalChallenge.
-
-After editing Aliases.yml: `/cmi reload`
-
-Suggested player-facing commands:
-
-```text
-/rival
-/rival declare <player>     (or create multi-word aliases in CMI editor)
-/rivalaccept <player>
-/rivaldecline <player>
-/rivalremove <player>
-/rivallist
-/rivalstats [player]
-/rivaltop [rp|wins|streak|damage|combo|hit|battles]
-/rivaltitle
-/rivaljournal [player]
-/rivalseason
-/rivalquests
-/rivalachievements
-/rivalhof
-/challenge <player>
-/challengeaccept
-/challengedecline
-/challengecancel
-/spectaterival <player>
-```
-
+Gameplay modules (proximity/instinct/challenge combat) stay as Global Player scripts.
 ## 6) CMI title placeholder
 
 On login / `/rivaltitle`, progression writes:
