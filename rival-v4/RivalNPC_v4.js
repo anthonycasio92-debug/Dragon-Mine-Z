@@ -28,8 +28,8 @@ function line(player) {
 function showRivalGuide(player) {
     line(player);
     msg(player, C + "6" + C + "lRival Master");
-    msg(player, C + "7A true rival sharpens you. Declare one,");
-    msg(player, C + "7train near them, then settle it in battle.");
+    msg(player, C + "7Unknown → Declared → Mutual → Nemesis");
+    msg(player, C + "7Max 2 Mutual/Nemesis. Declared & Unknown unlimited.");
     line(player);
     msg(player, C + "6Rivalry");
     msg(player, C + "e/rival <player>");

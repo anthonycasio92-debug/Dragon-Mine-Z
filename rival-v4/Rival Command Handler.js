@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.3.0
+ Version: 4.4.0
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -52,8 +52,12 @@ var CH_KEY = "dlr.rivalry.v4.challenges";
 var CH_BACKUP = "dlr.rivalry.v4.challenges.backup";
 var PROG_KEY = "dlr.rivalry.v4.progression";
 
-var MAX_MUTUAL = 3;
-var MAX_ONE_SIDED = 5;
+/*
+ Statuses: unknown | declared | mutual | nemesis
+ Mutual+Nemesis share MAX_MUTUAL slots. Declared/Unknown unlimited.
+*/
+var MAX_MUTUAL = 2;
+var NEMESIS_RP = 1500;
 var REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var DECLARE_COOLDOWN_MS = 30 * 1000;
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
@@ -235,11 +239,36 @@ function findRecord(db, name) {
     return null;
 }
 
+function linkStatus(link) {
+    if (link == null) return "none";
+    if (link.mutual === true) {
+        if (num(link.points, 0) >= NEMESIS_RP) return "nemesis";
+        return "mutual";
+    }
+    if (link.declaredByMe === true) return "declared";
+    if (link.declaredByThem === true) return "unknown";
+    return "none";
+}
+
+function linkStatusLabel(status) {
+    if (status == "nemesis") return C + "c" + C + "lNemesis";
+    if (status == "mutual") return C + "6Mutual";
+    if (status == "declared") return C + "eDeclared";
+    if (status == "unknown") return C + "7Unknown";
+    return C + "8None";
+}
+
+function refreshLinkStatus(link) {
+    if (link == null) return "none";
+    link.status = linkStatus(link);
+    return link.status;
+}
+
 function ensureLink(owner, target) {
     if (owner.rivals[target.uuid] == null) {
         owner.rivals[target.uuid] = {
             uuid: target.uuid, name: target.name, nameLower: lower(target.name),
-            mutual: false, declaredByMe: false, declaredByThem: false,
+            mutual: false, declaredByMe: false, declaredByThem: false, status: "none",
             points: 0, wins: 0, losses: 0, draws: 0, damageDealt: 0, damageTaken: 0,
             presenceMs: 0, createdAt: now(), updatedAt: now(), mutualSince: 0,
             lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
@@ -248,6 +277,7 @@ function ensureLink(owner, target) {
     var link = owner.rivals[target.uuid];
     link.name = target.name;
     link.updatedAt = now();
+    refreshLinkStatus(link);
     return link;
 }
 
@@ -262,16 +292,6 @@ function countMutual(rec) {
     for (var u in rec.rivals) {
         if (!rec.rivals.hasOwnProperty(u)) continue;
         if (rec.rivals[u].mutual === true) c++;
-    }
-    return c;
-}
-
-function countOneSided(rec) {
-    var c = 0;
-    for (var u in rec.rivals) {
-        if (!rec.rivals.hasOwnProperty(u)) continue;
-        var l = rec.rivals[u];
-        if (l.declaredByMe === true && l.mutual !== true) c++;
     }
     return c;
 }
@@ -300,6 +320,8 @@ function formMutual(db, a, b, note) {
     var t = now();
     la.mutual = true; la.declaredByMe = true; la.declaredByThem = true; la.mutualSince = t;
     lb.mutual = true; lb.declaredByMe = true; lb.declaredByThem = true; lb.mutualSince = t;
+    refreshLinkStatus(la);
+    refreshLinkStatus(lb);
     pushHistory(la, "mutual", note);
     pushHistory(lb, "mutual", note);
 }
@@ -338,13 +360,15 @@ function cmdHelp(player) {
     line(player);
     message(player, C + "6" + C + "lRival System");
     line(player);
+    message(player, C + "6Statuses: " + C + "7Unknown → Declared → Mutual → Nemesis");
+    message(player, C + "7Max " + MAX_MUTUAL + " Mutual/Nemesis | Declared & Unknown unlimited");
+    message(player, C + "7Nemesis at " + commas(NEMESIS_RP) + "+ RP with a mutual rival");
+    line(player);
     message(player, C + "e/rival <player>  " + C + "8(or /rival declare <player>)");
     message(player, C + "e/rival accept|decline|remove <player>");
     message(player, C + "e/rival list | stats [player] | top [cat]");
-    message(player, C + "e/rival title | journal | season | quests | hof");
     message(player, C + "e/challenge <player>  " + C + "8(or /challenge rival <player>)");
     message(player, C + "e/challenge accept | decline | cancel");
-    message(player, C + "e/spectaterival <player>");
     line(player);
 }
 
@@ -362,10 +386,12 @@ function cmdDeclare(player, targetName) {
     var tu = tref.uuid;
 
     if (pref.rivals[tu] != null && pref.rivals[tu].mutual === true) {
-        msg(player, C + "eAlready mutual rivals with " + tref.name); return;
+        var st = linkStatus(pref.rivals[tu]);
+        msg(player, C + "eAlready your " + (st == "nemesis" ? "Nemesis" : "mutual rival") +
+            " with " + tref.name); return;
     }
     if (pref.rivals[tu] != null && pref.rivals[tu].declaredByMe === true && pref.rivals[tu].mutual !== true) {
-        msg(player, C + "eAlready waiting on " + tref.name); return;
+        msg(player, C + "eAlready a Declared rival: " + tref.name); return;
     }
 
     var cdKey = reqKey(pu, tu);
@@ -375,7 +401,7 @@ function cmdDeclare(player, targetName) {
     var reverse = getRequest(db, tu, pu);
     if (reverse != null) {
         if (countMutual(pref) >= MAX_MUTUAL || countMutual(tref) >= MAX_MUTUAL) {
-            msg(player, C + "cMutual rival limit reached."); return;
+            msg(player, C + "cMutual/Nemesis limit reached (max " + MAX_MUTUAL + ")."); return;
         }
         formMutual(db, pref, tref, "Crossed declarations");
         removeRequests(db, pu, tu);
@@ -383,23 +409,21 @@ function cmdDeclare(player, targetName) {
         pref.totals.declarationsAccepted++;
         tref.totals.declarationsAccepted++;
         saveDb(db);
-        msg(player, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + tref.name);
-        msg(target, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + pref.name);
+        msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + tref.name);
+        msg(target, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name);
         return;
-    }
-
-    if (countOneSided(pref) >= MAX_ONE_SIDED) {
-        msg(player, C + "cToo many one-sided declarations."); return;
     }
 
     var pl = ensureLink(pref, tref);
     pl.declaredByMe = true;
     pl.mutual = false;
+    refreshLinkStatus(pl);
     pushHistory(pl, "declare", "Declared rivalry");
 
     var tl = ensureLink(tref, pref);
     tl.declaredByThem = true;
     tl.mutual = false;
+    refreshLinkStatus(tl);
     pushHistory(tl, "declared_by", "Was declared");
 
     db.requests[reqKey(pu, tu)] = {
@@ -409,14 +433,14 @@ function cmdDeclare(player, targetName) {
     pref.totals.declarationsSent++;
     saveDb(db);
 
-    msg(player, C + "aDeclared " + C + "e" + tref.name + C + "a as a rival.");
-    msg(target, C + "6" + pref.name + C + "e declared you as a rival!");
-    msg(target, C + "7Accept: " + C + "f/rivalaccept " + pref.name);
+    msg(player, C + "aDeclared Rival: " + C + "e" + tref.name);
+    msg(target, C + "6" + pref.name + C + "e declared you — status: " + C + "7Unknown");
+    msg(target, C + "7Accept: " + C + "f/rival accept " + pref.name);
 }
 
 function cmdAccept(player, fromName) {
     var clean = str(fromName).replace(/^\s+|\s+$/g, "");
-    if (clean == "") { msg(player, C + "cUsage: /rivalaccept <player>"); return; }
+    if (clean == "") { msg(player, C + "cUsage: /rival accept <player>"); return; }
     var db = loadDb();
     var pref = ensurePlayer(db, player);
     var from = findRecord(db, clean);
@@ -425,21 +449,25 @@ function cmdAccept(player, fromName) {
         msg(player, C + "cNo active request from " + from.name); return;
     }
     if (countMutual(pref) >= MAX_MUTUAL || countMutual(from) >= MAX_MUTUAL) {
-        msg(player, C + "cMutual rival limit reached."); return;
+        msg(player, C + "cMutual/Nemesis limit reached (max " + MAX_MUTUAL + ")."); return;
     }
     formMutual(db, pref, from, "Accepted");
     removeRequests(db, from.uuid, pref.uuid);
     pref.totals.declarationsAccepted++;
     from.totals.declarationsAccepted++;
     saveDb(db);
-    msg(player, C + "6" + C + "lRIVALRY FORMED! " + C + "e" + from.name);
+    msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + from.name);
+    msg(player, C + "7Reach " + C + "f" + commas(NEMESIS_RP) + C + "7 RP with them to ascend to Nemesis.");
     var online = onlineByName(from.name);
-    if (online != null) msg(online, C + "6" + pref.name + C + "e accepted your rivalry!");
+    if (online != null) {
+        msg(online, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name + C + "a accepted!");
+        msg(online, C + "7Reach " + C + "f" + commas(NEMESIS_RP) + C + "7 RP to become Nemeses.");
+    }
 }
 
 function cmdDecline(player, fromName) {
     var clean = str(fromName).replace(/^\s+|\s+$/g, "");
-    if (clean == "") { msg(player, C + "cUsage: /rivaldecline <player>"); return; }
+    if (clean == "") { msg(player, C + "cUsage: /rival decline <player>"); return; }
     var db = loadDb();
     var pref = ensurePlayer(db, player);
     var from = findRecord(db, clean);
@@ -456,7 +484,7 @@ function cmdDecline(player, fromName) {
 
 function cmdRemove(player, targetName) {
     var clean = str(targetName).replace(/^\s+|\s+$/g, "");
-    if (clean == "") { msg(player, C + "cUsage: /rivalremove <player>"); return; }
+    if (clean == "") { msg(player, C + "cUsage: /rival remove <player>"); return; }
     var db = loadDb();
     var pref = ensurePlayer(db, player);
     var target = findRecord(db, clean);
@@ -491,22 +519,40 @@ function cmdList(player) {
     msg(player, C + "6========== Your Rivals ==========");
     msg(player, C + "7Career RP: " + C + "f" + commas(pref.career.rivalPointsTotal) +
         C + "7 | " + C + "a" + pref.career.officialWins + C + "7-" + C + "c" + pref.career.officialLosses);
-    var count = 0;
+    msg(player, C + "7Mutual/Nemesis: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
+        C + "8  | Declared & Unknown unlimited");
+
+    var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var u in pref.rivals) {
         if (!pref.rivals.hasOwnProperty(u)) continue;
         var link = pref.rivals[u];
-        count++;
-        var status = link.mutual === true ? C + "6Mutual" :
-            (link.declaredByMe === true ? C + "eDeclared" : C + "7Incoming");
-        var tier = getTier(link.points);
-        msg(player, C + "7- " + C + "f" + link.name + " " + status +
-            C + "7 | " + C + tier.color + tier.name + C + "7 (" + commas(link.points) + " RP)");
+        var st = refreshLinkStatus(link);
+        if (groups[st] != null) groups[st].push(link);
     }
-    if (count == 0) msg(player, C + "8No rivals yet.");
+
+    function printGroup(title, arr) {
+        if (arr.length == 0) return;
+        msg(player, C + "6--- " + title + " (" + arr.length + ") ---");
+        for (var i = 0; i < arr.length; i++) {
+            var L = arr[i];
+            msg(player, C + "7- " + C + "f" + L.name + " " + linkStatusLabel(linkStatus(L)) +
+                C + "7 | " + commas(L.points) + " RP" +
+                C + "7 | W/L " + C + "a" + num(L.wins, 0) + C + "7/" + C + "c" + num(L.losses, 0));
+        }
+    }
+
+    printGroup("Nemesis", groups.nemesis);
+    printGroup("Mutual", groups.mutual);
+    printGroup("Declared", groups.declared);
+    printGroup("Unknown", groups.unknown);
+
+    if (groups.nemesis.length + groups.mutual.length + groups.declared.length + groups.unknown.length == 0) {
+        msg(player, C + "8No rivals yet. /rival <player>");
+    }
     for (var key in db.requests) {
         if (!db.requests.hasOwnProperty(key)) continue;
         if (str(db.requests[key].toUuid) == pref.uuid) {
-            msg(player, C + "dPending from " + C + "f" + db.requests[key].fromName);
+            msg(player, C + "dUnknown/Pending from " + C + "f" + db.requests[key].fromName);
         }
     }
 }

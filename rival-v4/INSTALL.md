@@ -1,4 +1,4 @@
-# Rival System V4.3 — Install Guide
+# Rival System V4.4 — Install Guide
 
 ## Final layout (3 scripts)
 
@@ -74,7 +74,16 @@ Nametag/tab (if enabled):
 %cmi_user_meta_rival_title%
 ```
 
-## 7) Coverage
+## 7) Rivalry statuses
+
+| Status | Meaning | Limit |
+|---|---|---|
+| Unknown | They declared you | Unlimited |
+| Declared | You declared them | Unlimited |
+| Mutual | Both accepted | Max **2** (shared with Nemesis) |
+| Nemesis | Mutual + **1500+ RP** on that link | Counts as a Mutual slot |
+
+## 8) Coverage
 
 All original concept loops are implemented — see `CONCEPT.md` checklist.
 

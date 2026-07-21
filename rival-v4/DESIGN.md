@@ -54,7 +54,16 @@ rivaldeclare:
 Place `Rival Command Handler.js` with SkillCheck / Sparring Command Handler.
 Gameplay stays in `Rival System.js` (Global Player).
 
-## Rival Point Tiers
+## Relationship statuses
+
+| Status | Meaning | Limit |
+|---|---|---|
+| Unknown | They declared you | Unlimited |
+| Declared | You declared them | Unlimited |
+| Mutual | Both accepted | **Max 2** (shared with Nemesis) |
+| Nemesis | Mutual + 1500 RP on that link | Counts as Mutual slot |
+
+## Career RP titles (total RP, separate from link status)
 
 | RP | Title |
 |---|---|

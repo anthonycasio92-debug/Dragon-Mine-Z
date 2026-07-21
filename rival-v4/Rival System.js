@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.3.4
+ Version: 4.4.0
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -59,8 +59,15 @@ var RC_DEBUG = false;
 var RC_VERSION = 4;
 var RC_COLOR = String.fromCharCode(167);
 
-var RC_MAX_MUTUAL_RIVALS = 3;
-var RC_MAX_ONE_SIDED_OUT = 5;
+/*
+ Rival relationship statuses (per-link):
+  unknown  — they declared you (incoming); unlimited
+  declared — you declared them (one-sided); unlimited
+  mutual   — both accepted; max RC_MAX_MUTUAL_RIVALS (shared with nemesis)
+  nemesis  — mutual upgraded at RC_NEMESIS_RP; counts as a mutual slot
+*/
+var RC_MAX_MUTUAL_RIVALS = 2;
+var RC_NEMESIS_RP = 1500;
 var RC_REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var RC_DECLARE_COOLDOWN_MS = 30 * 1000;
 var RC_HISTORY_LIMIT = 30;
@@ -334,6 +341,31 @@ function rcNormalizeCareer(career) {
     return career;
 }
 
+function rcLinkStatus(link) {
+    if (link === null || link === undefined) return "none";
+    if (link.mutual === true) {
+        if (rcNumber(link.points, 0) >= RC_NEMESIS_RP) return "nemesis";
+        return "mutual";
+    }
+    if (link.declaredByMe === true) return "declared";
+    if (link.declaredByThem === true) return "unknown";
+    return "none";
+}
+
+function rcLinkStatusLabel(status) {
+    if (status === "nemesis") return RC_COLOR + "c" + RC_COLOR + "lNemesis";
+    if (status === "mutual") return RC_COLOR + "6Mutual";
+    if (status === "declared") return RC_COLOR + "eDeclared";
+    if (status === "unknown") return RC_COLOR + "7Unknown";
+    return RC_COLOR + "8None";
+}
+
+function rcRefreshLinkStatus(link) {
+    if (link === null || link === undefined) return "none";
+    link.status = rcLinkStatus(link);
+    return link.status;
+}
+
 function rcNormalizeRivalLink(link, uuid, name) {
     if (link === null || typeof link !== "object") link = {};
     link.uuid = rcString(link.uuid || uuid);
@@ -355,6 +387,7 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.lastBattleAt = rcNumber(link.lastBattleAt, 0);
     link.lastSeenTogetherAt = rcNumber(link.lastSeenTogetherAt, 0);
     if (!(link.history instanceof Array)) link.history = [];
+    rcRefreshLinkStatus(link);
     return link;
 }
 
@@ -437,6 +470,7 @@ function rcFindOnlinePlayerAnyWorld(name) {
     return null;
 }
 
+/* Mutual + Nemesis share the same slot limit (max 2). */
 function rcCountMutual(record) {
     var count = 0;
     for (var uuid in record.rivals) {
@@ -446,12 +480,11 @@ function rcCountMutual(record) {
     return count;
 }
 
-function rcCountOneSidedOut(record) {
+function rcCountByStatus(record, status) {
     var count = 0;
     for (var uuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(uuid)) continue;
-        var link = record.rivals[uuid];
-        if (link.declaredByMe === true && link.mutual !== true) count++;
+        if (rcLinkStatus(record.rivals[uuid]) === status) count++;
     }
     return count;
 }
@@ -516,11 +549,23 @@ function rcAwardRivalPoints(database, ownerRecord, rivalUuid, amount, reason) {
     var link = ownerRecord.rivals[rivalUuid];
     if (link === null || link === undefined) return 0;
 
+    var before = rcLinkStatus(link);
     link.points = Math.max(0, rcNumber(link.points, 0) + amount);
     link.updatedAt = rcNow();
     rcPushHistory(link, amount >= 0 ? "rp_gain" : "rp_loss", reason + " (" + amount + ")");
+    var after = rcRefreshLinkStatus(link);
     rcRecalcCareerRp(ownerRecord);
     rcUpdateLeaderboard(database, ownerRecord);
+
+    if (before !== "nemesis" && after === "nemesis") {
+        rcPushHistory(link, "nemesis", "Rivalry ascended to Nemesis");
+        var online = rcFindOnlinePlayerAnyWorld(ownerRecord.name);
+        if (online !== null) {
+            rcMessage(online, RC_COLOR + "c" + RC_COLOR + "lNEMESIS! " +
+                RC_COLOR + "e" + link.name + RC_COLOR + "7 is now your Nemesis (" +
+                RC_COLOR + "f" + rcCommas(RC_NEMESIS_RP) + "+ RP" + RC_COLOR + "7).");
+        }
+    }
     return amount;
 }
 
@@ -570,12 +615,14 @@ function rcFormMutual(database, playerRecord, targetRecord, note) {
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = true;
     playerRival.mutualSince = now;
+    rcRefreshLinkStatus(playerRival);
     rcPushHistory(playerRival, "mutual", note);
 
     targetRival.mutual = true;
     targetRival.declaredByMe = true;
     targetRival.declaredByThem = true;
     targetRival.mutualSince = now;
+    rcRefreshLinkStatus(targetRival);
     rcPushHistory(targetRival, "mutual", note);
 
     rcRecalcCareerRp(playerRecord);
@@ -612,7 +659,9 @@ function rcDeclare(player, targetName) {
 
     var current = playerRecord.rivals[targetUuid];
     if (current !== null && current !== undefined && current.mutual === true) {
-        rcMessage(player, RC_COLOR + "e" + targetRecord.name + " is already your mutual rival.");
+        var curStatus = rcLinkStatus(current);
+        rcMessage(player, RC_COLOR + "e" + targetRecord.name + " is already your " +
+            (curStatus === "nemesis" ? "Nemesis" : "mutual rival") + ".");
         return;
     }
 
@@ -632,11 +681,13 @@ function rcDeclare(player, targetName) {
     var reverseRequest = rcGetRequest(database, targetUuid, playerUuid);
     if (reverseRequest !== null) {
         if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
-            rcMessage(player, RC_COLOR + "cYou already have the maximum of " + RC_MAX_MUTUAL_RIVALS + " mutual rivals.");
+            rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_MUTUAL_RIVALS +
+                " mutual/nemesis rivals (max " + RC_MAX_MUTUAL_RIVALS + ").");
             return;
         }
         if (rcCountMutual(targetRecord) >= RC_MAX_MUTUAL_RIVALS) {
-            rcMessage(player, RC_COLOR + "c" + targetRecord.name + " already has the maximum mutual rivals.");
+            rcMessage(player, RC_COLOR + "c" + targetRecord.name +
+                " already has " + RC_MAX_MUTUAL_RIVALS + " mutual/nemesis rivals.");
             return;
         }
 
@@ -647,26 +698,25 @@ function rcDeclare(player, targetName) {
         targetRecord.totals.declarationsAccepted++;
         rcSaveDatabase(player, database);
 
-        rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + targetRecord.name + " is now your mutual rival.");
-        rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + playerRecord.name + " is now your mutual rival.");
+        rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + targetRecord.name);
+        rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
         return;
     }
 
-    if (rcCountOneSidedOut(playerRecord) >= RC_MAX_ONE_SIDED_OUT && (current === null || current === undefined || current.declaredByMe !== true)) {
-        rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_ONE_SIDED_OUT + " one-sided rival declarations.");
-        return;
-    }
+    /* Declared + Unknown rivals are unlimited. */
 
     var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = playerRival.declaredByThem === true;
     playerRival.mutual = false;
+    rcRefreshLinkStatus(playerRival);
     rcPushHistory(playerRival, "declare", "Declared rivalry.");
 
     var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
     targetRival.declaredByThem = true;
     targetRival.declaredByMe = targetRival.declaredByMe === true;
     targetRival.mutual = false;
+    rcRefreshLinkStatus(targetRival);
     rcPushHistory(targetRival, "declared_by", "Was declared as a rival.");
 
     database.requests[rcRequestKey(playerUuid, targetUuid)] = {
@@ -681,11 +731,12 @@ function rcDeclare(player, targetName) {
 
     rcSaveDatabase(player, database);
 
-    rcMessage(player, RC_COLOR + "aYou declared " + RC_COLOR + "e" + targetRecord.name + RC_COLOR + "a as a rival.");
-    rcMessage(player, RC_COLOR + "7They can accept with " + RC_COLOR + "f/rival accept " + playerRecord.name);
-    rcMessage(player, RC_COLOR + "7One-sided bonuses already apply while you hunt them.");
+    rcMessage(player, RC_COLOR + "aDeclared Rival: " + RC_COLOR + "e" + targetRecord.name);
+    rcMessage(player, RC_COLOR + "7They see you as an Unknown rival until they accept.");
+    rcMessage(player, RC_COLOR + "7Accept path: " + RC_COLOR + "f/rival accept " + playerRecord.name);
 
-    rcMessage(target, RC_COLOR + "6" + playerRecord.name + RC_COLOR + "e declared you as a rival!");
+    rcMessage(target, RC_COLOR + "6" + playerRecord.name + RC_COLOR + "e declared you!");
+    rcMessage(target, RC_COLOR + "7Status: " + RC_COLOR + "7Unknown Rival");
     rcMessage(target, RC_COLOR + "7Accept: " + RC_COLOR + "f/rival accept " + playerRecord.name);
     rcMessage(target, RC_COLOR + "7Decline: " + RC_COLOR + "f/rival decline " + playerRecord.name);
 }
@@ -714,11 +765,13 @@ function rcAccept(player, targetName) {
     }
 
     if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
-        rcMessage(player, RC_COLOR + "cYou already have the maximum of " + RC_MAX_MUTUAL_RIVALS + " mutual rivals.");
+        rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_MUTUAL_RIVALS +
+            " mutual/nemesis rivals (max " + RC_MAX_MUTUAL_RIVALS + ").");
         return;
     }
     if (rcCountMutual(fromRecord) >= RC_MAX_MUTUAL_RIVALS) {
-        rcMessage(player, RC_COLOR + "c" + fromRecord.name + " already has the maximum mutual rivals.");
+        rcMessage(player, RC_COLOR + "c" + fromRecord.name +
+            " already has " + RC_MAX_MUTUAL_RIVALS + " mutual/nemesis rivals.");
         return;
     }
 
@@ -728,11 +781,14 @@ function rcAccept(player, targetName) {
     fromRecord.totals.declarationsAccepted++;
     rcSaveDatabase(player, database);
 
-    rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + fromRecord.name + " is now your mutual rival.");
+    rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + fromRecord.name);
+    rcMessage(player, RC_COLOR + "7Reach " + RC_COLOR + "f" + rcCommas(RC_NEMESIS_RP) +
+        RC_COLOR + "7 RP with them to ascend to Nemesis.");
 
     var online = rcFindOnlinePlayerAnyWorld(fromRecord.name);
     if (online !== null) {
-        rcMessage(online, RC_COLOR + "6" + RC_COLOR + "lRIVALRY FORMED! " + RC_COLOR + "e" + playerRecord.name + " accepted your rivalry!");
+        rcMessage(online, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " +
+            RC_COLOR + "e" + playerRecord.name + RC_COLOR + "a accepted!");
     }
 }
 
@@ -831,24 +887,38 @@ function rcList(player) {
     rcMessage(player, RC_COLOR + "7Career RP: " + RC_COLOR + "f" + rcCommas(record.career.rivalPointsTotal) +
         RC_COLOR + "7  |  Record: " + RC_COLOR + "a" + record.career.officialWins +
         RC_COLOR + "7-" + RC_COLOR + "c" + record.career.officialLosses);
+    rcMessage(player, RC_COLOR + "7Slots: " + RC_COLOR + "6Mutual/Nemesis " +
+        RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
+        RC_COLOR + "8  | Declared/Unknown unlimited");
 
-    var count = 0;
+    var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var uuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(uuid)) continue;
         var link = record.rivals[uuid];
-        count++;
-        var status = link.mutual === true
-            ? RC_COLOR + "6Mutual"
-            : (link.declaredByMe === true ? RC_COLOR + "eDeclared" : RC_COLOR + "7Incoming");
-        rcMessage(
-            player,
-            RC_COLOR + "7- " + RC_COLOR + "f" + link.name + " " + status +
-            RC_COLOR + "7 | " + rcTierLabel(link.points) +
-            RC_COLOR + "7 | W/L " + RC_COLOR + "a" + link.wins + RC_COLOR + "7/" + RC_COLOR + "c" + link.losses
-        );
+        var st = rcRefreshLinkStatus(link);
+        if (groups[st] != null) groups[st].push(link);
     }
 
-    if (count === 0) {
+    function printGroup(title, arr) {
+        if (arr.length === 0) return;
+        rcMessage(player, RC_COLOR + "6--- " + title + " (" + arr.length + ") ---");
+        for (var i = 0; i < arr.length; i++) {
+            var L = arr[i];
+            rcMessage(
+                player,
+                RC_COLOR + "7- " + RC_COLOR + "f" + L.name + " " + rcLinkStatusLabel(rcLinkStatus(L)) +
+                RC_COLOR + "7 | " + rcCommas(L.points) + " RP" +
+                RC_COLOR + "7 | W/L " + RC_COLOR + "a" + L.wins + RC_COLOR + "7/" + RC_COLOR + "c" + L.losses
+            );
+        }
+    }
+
+    printGroup("Nemesis", groups.nemesis);
+    printGroup("Mutual", groups.mutual);
+    printGroup("Declared", groups.declared);
+    printGroup("Unknown", groups.unknown);
+
+    if (groups.nemesis.length + groups.mutual.length + groups.declared.length + groups.unknown.length === 0) {
         rcMessage(player, RC_COLOR + "8No rivals yet. Use /rival <player> to declare one.");
     }
 
@@ -859,7 +929,7 @@ function rcList(player) {
         var req = database.requests[key];
         if (rcString(req.toUuid) === record.uuid) {
             pending++;
-            rcMessage(player, RC_COLOR + "dPending request from " + RC_COLOR + "f" + req.fromName);
+            rcMessage(player, RC_COLOR + "dUnknown/Pending from " + RC_COLOR + "f" + req.fromName);
         }
     }
     if (pending === 0) {
@@ -1236,12 +1306,21 @@ function rpAwardPoints(record, rivalUuid, amount, reason) {
     if (link === null) return 0;
     amount = Math.floor(rpNumber(amount, 0));
     if (amount === 0) return 0;
+    var before = rcLinkStatus(link);
     link.points = Math.max(0, rpNumber(link.points, 0) + amount);
     link.updatedAt = rpNow();
     if (!(link.history instanceof Array)) link.history = [];
     link.history.push({ time: rpNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
     while (link.history.length > 30) link.history.shift();
+    var after = rcRefreshLinkStatus(link);
     rpRecalcCareerRp(record);
+    if (before !== "nemesis" && after === "nemesis") {
+        var online = rpFindOnlineByUuid(record.uuid);
+        if (online !== null) {
+            rpMessage(online, RP_COLOR + "c" + RP_COLOR + "lNEMESIS! " +
+                RP_COLOR + "e" + link.name + RP_COLOR + "7 (" + rpCommas(RC_NEMESIS_RP) + "+ RP)");
+        }
+    }
     return amount;
 }
 
@@ -1599,7 +1678,10 @@ function rpProcessPlayer(player) {
         var presenceKey = "rival.v4.presenceRp." + rivalUuid;
         var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
         if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
-            var presenceRp = link.mutual === true ? RP_PRESENCE_RP_MUTUAL : RP_PRESENCE_RP_ONE_SIDED;
+            var linkStatus = rcLinkStatus(link);
+            var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
+            if (linkStatus === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
+            if (linkStatus === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
             rpAwardPoints(record, rivalUuid, presenceRp, "presence");
             dirty = true;
             rpTempPut(temp, presenceKey, now);
@@ -1677,9 +1759,11 @@ function rpHandleKillNearRivals(killer, victim) {
 
         var tier = rpTierIndex(link.points);
         var tp = RP_KILL_TP_BASE + tier * RP_KILL_TP_PER_TIER;
-        if (link.mutual === true) tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT);
+        var killStatus = rcLinkStatus(link);
+        if (killStatus === "nemesis") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT * 1.25);
+        else if (killStatus === "mutual") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT);
 
-        rpAwardTP(killer, killerData, tp, "Near rival " + link.name);
+        rpAwardTP(killer, killerData, tp, "Near " + killStatus + " " + link.name);
         if (record.career === null || typeof record.career !== "object") record.career = {};
         record.career.killsNearRival = rpNumber(record.career.killsNearRival, 0) + 1;
         dirty = true;
@@ -2388,12 +2472,21 @@ function chAwardRp(record, rivalUuid, amount, reason) {
     var link = record.rivals[rivalUuid];
     if (link === null || link === undefined) return 0;
     amount = Math.floor(chNumber(amount, 0));
+    var before = rcLinkStatus(link);
     link.points = Math.max(0, chNumber(link.points, 0) + amount);
     link.updatedAt = chNow();
     if (!(link.history instanceof Array)) link.history = [];
     link.history.push({ time: chNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
     while (link.history.length > 30) link.history.shift();
+    var after = rcRefreshLinkStatus(link);
     chRecalcRp(record);
+    if (before !== "nemesis" && after === "nemesis") {
+        var online = chFindOnlineByUuid(record.uuid);
+        if (online !== null) {
+            chMessage(online, CH_COLOR + "c" + CH_COLOR + "lNEMESIS! " +
+                CH_COLOR + "e" + link.name + CH_COLOR + "7 (" + chCommas(RC_NEMESIS_RP) + "+ RP)");
+        }
+    }
     return amount;
 }
 
