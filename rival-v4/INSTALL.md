@@ -39,22 +39,24 @@ Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable **interact** only.
 
 No dialog GUI needed — right-click replies in chat with the rival command guide.
 
-## 5) CMI aliases (same style as sparring)
+## 5) CMI CustomAlias
 
-1. Paste `cmi/Aliases-Rival.yml` into CMI `Aliases.yml`
-2. (Optional) paste `cmi/Aliases-Sparring.yml` for sparring shortcuts
-3. `/cmi reload`
+Replace your server `CustomAlias.yml` with:
 
-Pattern:
+- `CustomAlias.yml` (repo root) **or** `rival-v4/cmi/CustomAlias.yml`
+
+That file keeps your existing aliases (spar, SkillCheck, etc.) and adds all rival/challenge commands in the same format.
+
+Then: `/cmi reload`
+
+Rival pattern (matches your spar aliases):
 
 ```yaml
-rivalstats:
-  Cmds:
-  - asFakeOp! noppes script trigger 206 [playerName] $1-
-
-rivaldeclare:
-  Cmds:
-  - asFakeOp! noppes script trigger 201 [playerName] $1
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 201 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
 ```
 
 - `[playerName]` = argument 0 (required)
