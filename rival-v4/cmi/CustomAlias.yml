@@ -15,6 +15,9 @@
 # Example: ca ?
 # In this case if player performs /ca wrongsub or /ca anotherwrong
 # Commands under this alias will get executed. Exelent way to show help page and correct usage if needed
+#
+# Rival commands use Rival Command Handler.js (script-slot with SkillCheck / Spar).
+# Format: asFakeOp! noppes script trigger <id> [playerName] [$1...]
 
 CustomAlias:
   ResetSaga:
@@ -130,5 +133,104 @@ CustomAlias:
   spartime:
     Cmds:
     - asFakeOp! noppes script trigger 79 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ============================================================
+  # Rival System V4 — Rival Command Handler.js
+  # ============================================================
+  rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 201 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
+  rivalaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 202 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
+  rivaldecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 203 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
+  rivalremove:
+    Cmds:
+    - asFakeOp! noppes script trigger 204 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
+  rivallist:
+    Cmds:
+    - asFakeOp! noppes script trigger 205 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivalstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 206 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  rivaltop:
+    Cmds:
+    - asFakeOp! noppes script trigger 220 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  rivaltitle:
+    Cmds:
+    - asFakeOp! noppes script trigger 221 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivaljournal:
+    Cmds:
+    - asFakeOp! noppes script trigger 222 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  rivalseason:
+    Cmds:
+    - asFakeOp! noppes script trigger 223 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivalquests:
+    Cmds:
+    - asFakeOp! noppes script trigger 224 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivalachievements:
+    Cmds:
+    - asFakeOp! noppes script trigger 225 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  rivalhof:
+    Cmds:
+    - asFakeOp! noppes script trigger 226 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1
+    AddTabs: true
+    ExactMatch: true
+  challengeaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 211 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  challengedecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 212 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  challengecancel:
+    Cmds:
+    - asFakeOp! noppes script trigger 213 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  spectaterival:
+    Cmds:
+    - asFakeOp! noppes script trigger 230 [playerName] $1
     AddTabs: true
     ExactMatch: true
