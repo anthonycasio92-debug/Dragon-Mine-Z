@@ -984,26 +984,26 @@ var RP_RANGE_PER_TIER = 8;
 var RP_MAX_RANGE = 160;
 
 /* Offensive proximity bonus on highest of STR / SKP */
-var RP_BASE_OFFENSE_BONUS = 0.03;      // +3% at Acquaintance
-var RP_OFFENSE_PER_TIER = 0.02;        // +2% per tier above
-var RP_PRESENCE_BONUS_CAP = 0.10;      // extra +10% from long presence
+var RP_BASE_OFFENSE_BONUS = 0.04;      // +4% at Acquaintance
+var RP_OFFENSE_PER_TIER = 0.025;       // +2.5% per tier above
+var RP_PRESENCE_BONUS_CAP = 0.12;      // extra +12% from long presence
 var RP_PRESENCE_FULL_MS = 10 * 60 * 1000;
-var RP_MAX_OFFENSE_BONUS = 0.35;       // hard cap 35%
+var RP_MAX_OFFENSE_BONUS = 0.55;       // hard cap — catch-up can push past stronger rivals
 
-/* Catch-up: if your RP > theirs and they have higher BP */
+/* Catch-up: if your RP > theirs and they have higher released BP */
 var RP_CATCHUP_ENABLED = true;
-var RP_CATCHUP_MAX = 0.25;             // up to +25% extra
-var RP_CATCHUP_BP_RATIO = 1.25;        // rival must be at least 25% stronger
+var RP_CATCHUP_MAX = 0.40;             // up to +40% extra from RP lead vs stronger rival
+var RP_CATCHUP_BP_RATIO = 1.15;        // rival must be at least 15% stronger released BP
 
-/* Passive RP from hanging out */
+/* Presence RP from hanging out (both sides of an active rivalry link) */
 var RP_PRESENCE_RP_INTERVAL_MS = 60 * 1000;
-var RP_PRESENCE_RP_MUTUAL = 3;
-var RP_PRESENCE_RP_ONE_SIDED = 2;
+var RP_PRESENCE_RP_MUTUAL = 4;
+var RP_PRESENCE_RP_ONE_SIDED = 3;
 
 /* Kill TP near rival */
-var RP_KILL_TP_BASE = 250;
-var RP_KILL_TP_PER_TIER = 75;
-var RP_KILL_TP_MUTUAL_MULT = 1.35;
+var RP_KILL_TP_BASE = 400;
+var RP_KILL_TP_PER_TIER = 120;
+var RP_KILL_TP_MUTUAL_MULT = 1.45;
 var RP_SHOW_KILL_TP = true;
 
 /*
@@ -1056,26 +1056,26 @@ var RIVAL_LEVEL_TP_MULT_ANCHORS = [
     850.0
 ];
 
-/* Surpass rival BP award */
+/* Surpass rival released BP award */
 var RP_SURPASS_ENABLED = true;
-var RP_SURPASS_TP = 5000;
+var RP_SURPASS_TP = 8000;
 var RP_SURPASS_COOLDOWN_MS = 30 * 60 * 1000;
 
-/* One-sided underdog combat */
-var RP_UNDERDOG_ENGAGE_TP = 150;
-var RP_UNDERDOG_ENGAGE_COOLDOWN_MS = 15 * 1000;
-var RP_UNDERDOG_DEATH_RP = 25;
-var RP_UNDERDOG_WIN_TP = 4000;
-var RP_UNDERDOG_WIN_RP = 40;
+/* One-sided underdog combat (you declared a stronger rival) */
+var RP_UNDERDOG_ENGAGE_TP = 250;
+var RP_UNDERDOG_ENGAGE_COOLDOWN_MS = 12 * 1000;
+var RP_UNDERDOG_DEATH_RP = 30;
+var RP_UNDERDOG_WIN_TP = 6500;
+var RP_UNDERDOG_WIN_RP = 45;
 
 /* Anti-gank: weaker declarers (<= 40% of your released BP) */
 var RP_ANTIGANK_RATIO = 0.40;
-var RP_ANTIGANK_WITNESS_KILL_TP = 200;   // strong player kill TP bonus
-var RP_ANTIGANK_WITNESS_RP = 4;         // weak rival RP for witnessing kills
-var RP_ANTIGANK_HIT_TP = 80;            // weak rival TP when strong takes damage
-var RP_ANTIGANK_HIT_RP = 2;
+var RP_ANTIGANK_WITNESS_KILL_TP = 350;   // strong player kill TP bonus while watched
+var RP_ANTIGANK_WITNESS_RP = 5;         // weak rival RP for witnessing kills
+var RP_ANTIGANK_HIT_TP = 140;           // weak rival TP when strong takes damage
+var RP_ANTIGANK_HIT_RP = 3;
 var RP_ANTIGANK_HIT_COOLDOWN_MS = 3000;
-var RP_ANTIGANK_OFFENSE_BONUS = 0.08;   // weak rival offense near strong target
+var RP_ANTIGANK_OFFENSE_BONUS = 0.12;   // weak rival offense near strong target
 
 var RP_TIERS = [
     { min: 0,     name: "Acquaintance" },
@@ -1592,15 +1592,16 @@ function rpProcessPlayer(player) {
 
         if (mult > bestMultiplier) bestMultiplier = mult;
 
-        /* Presence RP ticks */
+        /*
+         Presence RP ticks — both sides of an active rivalry gain rank while near.
+         Mutual gains a bit more than one-sided links.
+        */
         var presenceKey = "rival.v4.presenceRp." + rivalUuid;
         var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
         if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
             var presenceRp = link.mutual === true ? RP_PRESENCE_RP_MUTUAL : RP_PRESENCE_RP_ONE_SIDED;
-            if (link.declaredByMe === true || link.mutual === true) {
-                rpAwardPoints(record, rivalUuid, presenceRp, "presence");
-                dirty = true;
-            }
+            rpAwardPoints(record, rivalUuid, presenceRp, "presence");
+            dirty = true;
             rpTempPut(temp, presenceKey, now);
         }
 
@@ -1701,38 +1702,47 @@ function rpHandleKillNearRivals(killer, victim) {
     if (dirty) rpSaveDatabase(killer, database);
 }
 
-function rpHandleDamagedByRival(victim, attacker) {
-    if (!rpIsPlayer(attacker)) return;
+/*
+ Underdog engage TP: one-sided declarer fighting a stronger rival.
+ Fires for the underdog whether they deal or take the hit.
+*/
+function rpTryUnderdogEngage(underdog, stronger) {
+    if (!rpIsPlayer(underdog) || !rpIsPlayer(stronger)) return;
 
-    var database = rpLoadDatabase(victim);
+    var database = rpLoadDatabase(underdog);
     if (database === null) return;
 
-    var victimUuid = rpUuid(victim);
-    var attackerUuid = rpUuid(attacker);
-    var record = database.players[victimUuid];
+    var underUuid = rpUuid(underdog);
+    var strongUuid = rpUuid(stronger);
+    var record = database.players[underUuid];
     if (record === null || record === undefined) return;
 
-    var link = rpGetLink(record, attackerUuid);
+    var link = rpGetLink(record, strongUuid);
     if (link === null) return;
+    if (link.declaredByMe !== true || link.mutual === true) return;
 
-    var temp = rpTemp(victim);
+    var myData = rpGetDMZ(underdog);
+    var theirData = rpGetDMZ(stronger);
+    var myReleased = rpGetReleasedBP(myData);
+    var theirReleased = rpGetReleasedBP(theirData);
+    if (theirReleased <= myReleased) return;
+
+    var temp = rpTemp(underdog);
     var now = rpNow();
+    var engageKey = "rival.v4.engage." + strongUuid;
+    var last = rpTempNumber(temp, engageKey, 0);
+    if (now - last < RP_UNDERDOG_ENGAGE_COOLDOWN_MS) return;
 
-    /* Underdog engage TP when fighting a stronger one-sided rival */
-    if (link.declaredByMe === true && link.mutual !== true) {
-        var myData = rpGetDMZ(victim);
-        var theirData = rpGetDMZ(attacker);
-        var myReleased = rpGetReleasedBP(myData);
-        var theirReleased = rpGetReleasedBP(theirData);
-        if (theirReleased > myReleased) {
-            var engageKey = "rival.v4.engage." + attackerUuid;
-            var last = rpTempNumber(temp, engageKey, 0);
-            if (now - last >= RP_UNDERDOG_ENGAGE_COOLDOWN_MS) {
-                rpAwardTP(victim, myData, RP_UNDERDOG_ENGAGE_TP, "Engaging rival");
-                rpTempPut(temp, engageKey, now);
-            }
-        }
-    }
+    rpAwardTP(underdog, myData, RP_UNDERDOG_ENGAGE_TP, "Engaging rival");
+    rpTempPut(temp, engageKey, now);
+}
+
+function rpHandleDamagedByRival(victim, attacker) {
+    if (!rpIsPlayer(attacker)) return;
+    /* Victim may be underdog taking hits */
+    rpTryUnderdogEngage(victim, attacker);
+    /* Attacker may be underdog landing hits */
+    rpTryUnderdogEngage(attacker, victim);
 }
 
 function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
@@ -1975,18 +1985,18 @@ var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
-var CH_WIN_TP = 3500;
-var CH_LOSE_TP = 1200;
-var CH_DRAW_TP = 1800;
-var CH_KO_WIN_TP_BONUS = 2500;
+var CH_WIN_TP = 5500;
+var CH_LOSE_TP = 2000;
+var CH_DRAW_TP = 3000;
+var CH_KO_WIN_TP_BONUS = 4000;
 
 var CH_WIN_RP = 18;
-var CH_LOSE_RP = 35;
-var CH_DRAW_RP = 12;
-var CH_KO_LOSE_RP_BONUS = 15;
+var CH_LOSE_RP = 40;              // loser gets more rivalry than winner
+var CH_DRAW_RP = 14;
+var CH_KO_LOSE_RP_BONUS = 20;     // KO loss = even more rivalry
 var CH_FORFEIT_RP_PENALTY = 10;
 
-var CH_NON_RIVAL_WIN_TP = 2000;
+var CH_NON_RIVAL_WIN_TP = 3200;   // win vs non-rival still awards TP
 
 var CH_ALLOW_NON_RIVAL = true;
 
@@ -3958,7 +3968,7 @@ var RF_C = String.fromCharCode(167);
 var RF_DB_KEY = "dlr.rivalry.v4.database";
 var RF_BONUS_NAME = "Rival Fusion";
 var RF_TICK_MS = 1000;
-var RF_KILL_TP = 400;
+var RF_KILL_TP = 650;
 var RF_MAX_FUSION_BONUS = 0.25;
 
 function rfNow() {

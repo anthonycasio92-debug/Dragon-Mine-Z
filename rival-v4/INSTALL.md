@@ -76,6 +76,8 @@ Nametag/tab (if enabled):
 
 ## 7) Coverage
 
-Core, proximity, challenges, instinct, titles/seasons/quests/achievements/journal/HoF, spectator, fusion hooks, command aliases.
+All original concept loops are implemented — see `CONCEPT.md` checklist.
+
+Also: instinct, titles/seasons/quests/achievements/journal/HoF, spectator, level-scaled TP, command aliases.
 
 See `DESIGN.md` and `VERIFIED_API.md`.

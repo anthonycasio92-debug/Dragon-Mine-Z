@@ -338,20 +338,13 @@ function cmdHelp(player) {
     line(player);
     message(player, C + "6" + C + "lRival System");
     line(player);
-    message(player, C + "e/rival declare <player>");
-    message(player, C + "e/rival accept <player>");
-    message(player, C + "e/rival decline <player>");
-    message(player, C + "e/rival remove <player>");
-    message(player, C + "e/rival list");
-    message(player, C + "e/rival stats [player]");
-    message(player, C + "e/rival top [rp|wins|streak|damage]");
-    message(player, C + "e/rival title | journal | season | quests");
-    message(player, C + "e/rival achievements | hof");
-    message(player, C + "e/challenge <player>");
+    message(player, C + "e/rival <player>  " + C + "8(or /rival declare <player>)");
+    message(player, C + "e/rival accept|decline|remove <player>");
+    message(player, C + "e/rival list | stats [player] | top [cat]");
+    message(player, C + "e/rival title | journal | season | quests | hof");
+    message(player, C + "e/challenge <player>  " + C + "8(or /challenge rival <player>)");
     message(player, C + "e/challenge accept | decline | cancel");
     message(player, C + "e/spectaterival <player>");
-    line(player);
-    message(player, C + "8One-word aliases also work: /rivaldeclare, /rivallist, ...");
     line(player);
 }
 
@@ -925,8 +918,11 @@ function routeRivalSub(player, event) {
     } else if (sub == "hof" || sub == "hall") {
         showHof(player);
     } else {
-        msg(player, C + "cUnknown rival command: " + parts[0]);
-        cmdHelp(player);
+        /*
+         Original concept: /Rival <player>
+         Any unknown first word is treated as a declare target.
+        */
+        cmdDeclare(player, parts[0]);
     }
 }
 
@@ -945,6 +941,13 @@ function routeChallengeSub(player, event) {
         cmdChallengeDecline(player, target);
     } else if (sub == "cancel" || sub == "forfeit") {
         cmdChallengeCancel(player);
+    } else if (sub == "rival") {
+        /* Original concept: /Challenge Rival <player> */
+        if (target == "") {
+            msg(player, C + "cUsage: /challenge rival <player>");
+            return;
+        }
+        cmdChallenge(player, target);
     } else {
         /* /challenge Steve */
         cmdChallenge(player, parts[0]);
