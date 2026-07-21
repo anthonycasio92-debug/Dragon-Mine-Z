@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.3.3
+ Version: 4.3.4
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
