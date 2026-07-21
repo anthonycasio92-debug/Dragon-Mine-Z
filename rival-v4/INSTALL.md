@@ -1,4 +1,4 @@
-# Rival System V4.1 — Install Guide
+# Rival System V4.3 — Install Guide
 
 ## 1) Disable old V3
 
@@ -9,58 +9,61 @@ Disable Global Player scripts:
 - `RivalBattle Manager V3.js`
 - `RivalBattle Combat Core V3.js`
 
-## 2) Global Player scripts
+## 2) Global Player scripts (gameplay only)
 
-Install as **separate** Global Player scripts:
+Same split as Sparring: Global Player = systems, **not** commands.
 
 | Script | Events |
 |---|---|
-| `RivalCore_v4.js` | init, login, trigger |
+| `RivalCore_v4.js` | init, login |
 | `RivalProximity_v4.js` | tick, damagedEntity, damaged, kill, logout, died |
-| `RivalChallenge_v4.js` | init, tick, damagedEntity, damaged, kill, died, logout, trigger |
+| `RivalChallenge_v4.js` | init, tick, damagedEntity, damaged, kill, died, logout |
 | `RivalInstinct_v4.js` | tick, login |
 | `RivalProgression_v4.js` | login, tick, trigger |
 | `RivalSpectator_v4.js` | tick |
 | `RivalDMZHooks_v4.js` | tick, kill, logout, died |
 
-## 3) Script-slot scripts (same place as SkillCheck / Sparring Command Handler)
+## 3) Script-slot command handler
+
+Same place as **SkillCheckCommand** / **Sparring Command Handler**:
 
 | Script | Events |
 |---|---|
-| `RivalRouter_v4.js` | trigger |
-| `RivalCommands_v4.js` | trigger (optional; Router covers displays) |
+| `Rival Command Handler.js` | trigger |
+
+Do **not** place this in the Global Player Script slot.
 
 ## 4) Rival Master NPC
 
 Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable `interact` + `dialogOption`.
 Map dialog options to slots 0–9 (see file header).
 
-## 5) CMI aliases — use asFakeOp!
+## 5) CMI aliases (same style as sparring)
 
-**Use `asFakeOp!`** (noppes needs a player source; console is not enough).
-
-Important detail from your CNPC jar:
-- Global Player scripts **skip FakePlayer**
-- Forge / script-slot scripts **still receive** the trigger
-
-So:
-1. Put `RivalRouter_v4.js` in the **same script location as SkillCheckCommand** (NOT Global Player)
-2. Paste `cmi/Aliases-Rival.yml` into CMI Aliases.yml
+1. Paste `cmi/Aliases-Rival.yml` into CMI `Aliases.yml`
+2. (Optional) paste `cmi/Aliases-Sparring.yml` if you want matching sparring shortcuts
 3. `/cmi reload`
 
-Alias pattern:
+Pattern (identical to sparring stats):
 
 ```yaml
-challenge:
+sparstats:
   Cmds:
-  - asFakeOp! noppes script trigger 210 [playerName] $1
+  - asFakeOp! noppes script trigger 73 [playerName]
+
+rivalstats:
+  Cmds:
+  - asFakeOp! noppes script trigger 206 [playerName] $1-
+
+rivaldeclare:
+  Cmds:
+  - asFakeOp! noppes script trigger 201 [playerName] $1
 ```
 
-Router reads:
-- arg0 = real player (`[playerName]`)
-- remaining args = command args
+- `[playerName]` = argument 0 (required — what the handler resolves)
+- `$1` / `$1-` = extra args after the player name
+- `asFakeOp!` = player-like OP source for `noppes script trigger`
 
-Gameplay modules (proximity/instinct/challenge combat) stay as Global Player scripts.
 ## 6) CMI title placeholder
 
 On login / `/rivaltitle`, progression writes:

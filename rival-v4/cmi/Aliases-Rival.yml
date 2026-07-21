@@ -1,17 +1,20 @@
 # ============================================================
-# DBZ Legacy Reborn - Rival CMI Aliases (asFakeOp!)
+# DBZ Legacy Reborn - Rival CMI Aliases
 # ============================================================
+# Same style as Sparring (see Aliases-Sparring.yml).
+#
+# Script-slot: Rival Command Handler.js
+# (same place as SkillCheckCommand / Sparring Command Handler)
+#
+# COMMAND FORMAT:
+#   noppes script trigger <id> <playerName>
+#   noppes script trigger <id> <playerName> <args...>
+#
+# asFakeOp! gives noppes a player-like OP source.
+# [playerName] is ALWAYS argument 0 (what the handler reads).
+# $1 / $1- are extra args after the player name.
+#
 # Paste into CMI Aliases.yml then: /cmi reload
-#
-# WHY asFakeOp!
-# noppes script trigger must be run as a player source (not console).
-#
-# WHY script-slot RivalRouter (NOT Global Player scripts for commands)
-# CustomNPCs EventHooks skips FakePlayer for Global Player scripts,
-# but Forge/script-slot handlers still receive the trigger.
-# RivalRouter_v4.js reads the REAL player from [playerName] (arg0).
-#
-# Place RivalRouter_v4.js with SkillCheckCommand / Sparring Command Handler.
 # ============================================================
 
 rival:
@@ -47,7 +50,7 @@ rivallist:
 rivalstats:
   Cmds:
   - asFakeOp! noppes script trigger 206 [playerName] $1-
-  Help: '&6/rivalstats [player] &7- Stats'
+  Help: '&6/rivalstats [player] &7- Rival statistics'
 
 rivaltop:
   Cmds:

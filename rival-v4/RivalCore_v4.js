@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Core V4
- Version: 4.0.1
+ Version: 4.3.0
 
  Persistent rivalry management for the reworked rival system.
 
@@ -11,22 +11,18 @@
  REQUIRED EVENTS:
  - init
  - login
- - trigger
 
- TRIGGERS (also handled by RivalCommands_v4 for displays):
- 200 = help
- 201 = declare <player>
- 202 = accept <player>
- 203 = decline <player>
- 204 = remove <player>
- 205 = list
+ COMMAND DISPLAY / ACTIONS:
+ Use the separate Rival Command Handler.js file
+ (same pattern as Sparring TP System + Sparring Command Handler).
+ Do NOT enable trigger on this Global Player script for commands.
 
  Disable RivalCore V3 while testing.
 
  Companion modules:
  - RivalProximity_v4.js
  - RivalChallenge_v4.js
- - RivalCommands_v4.js
+ - Rival Command Handler.js
 ============================================================
 */
 
@@ -920,53 +916,10 @@ function rcTriggerPlayer(event) {
     return null;
 }
 
+/*
+ Commands live in Rival Command Handler.js (script-slot),
+ matching Sparring Command Handler. Global Player trigger unused.
+*/
 function trigger(event) {
-    var player = null;
-    try {
-        player = rcTriggerPlayer(event);
-        if (!rcIsPlayer(player)) return;
-
-        var id = Number(event.id);
-        var args = rcArgs(event);
-
-        /*
-         Some command plugins pass: trigger <id> <executor> <target...>
-         If args[0] is the executor name, shift it off.
-        */
-        if (args.length > 0 && rcLower(args[0]) === rcLower(rcName(player))) {
-            args.shift();
-        }
-
-        if (id === 200) {
-            rcHelp(player);
-            return;
-        }
-        if (id === 201) {
-            rcDeclare(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 202) {
-            rcAccept(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 203) {
-            rcDecline(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 204) {
-            rcRemove(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 205) {
-            rcList(player);
-            return;
-        }
-    } catch (error) {
-        if (player !== null) {
-            rcMessage(player, RC_COLOR + "c[RivalCore] Error: " + error);
-        }
-        try {
-            print("[RivalCore v4] trigger error: " + error);
-        } catch (ignored) {}
-    }
+    return;
 }

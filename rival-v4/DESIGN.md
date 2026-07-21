@@ -15,10 +15,10 @@ Target: CustomNPCs 1.20.1 GBPort + DragonMineZ 2.1.3 + Fabled (optional).
 
 | File | Slot | Role |
 |---|---|---|
-| `RivalCore_v4.js` | Global Player | Declare / accept / remove / list / RP tiers / DB |
+| `RivalCore_v4.js` | Global Player | Rivalry DB, login sync (no commands) |
 | `RivalProximity_v4.js` | Global Player | Near-rival bonuses, kill TP, anti-gank, catch-up |
-| `RivalChallenge_v4.js` | Global Player | `/Challenge Rival` 60s damage contest |
-| `RivalCommands_v4.js` | Script Triggers | Stats / help / leaderboard displays |
+| `RivalChallenge_v4.js` | Global Player | 60s damage contest combat/tick (no commands) |
+| `Rival Command Handler.js` | Script-slot | All player commands (same style as Sparring Command Handler) |
 
 Disable old V3 rival scripts while testing V4.
 
@@ -39,7 +39,16 @@ Disable old V3 rival scripts while testing V4.
 | 213 | `/challenge cancel` | Cancel pending / forfeit |
 | 220 | `/rival top` | RP leaderboard |
 
-Wire these with `noppes script trigger <id> <player> [args...]`.
+Wire these with CMI aliases (same style as sparring):
+
+```yaml
+rivaldeclare:
+  Cmds:
+  - asFakeOp! noppes script trigger 201 [playerName] $1
+```
+
+Place `Rival Command Handler.js` with SkillCheck / Sparring Command Handler.
+Gameplay stays in Global Player modules (no command triggers).
 
 ## Rival Point Tiers
 

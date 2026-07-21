@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Challenge V4
- Version: 4.0.0
+ Version: 4.3.0
 
  Official 60-second most-damage contest.
 
@@ -16,13 +16,11 @@
  - kill
  - died
  - logout
- - trigger
 
- TRIGGERS:
- 210 = challenge <player>
- 211 = accept [player]
- 212 = decline [player]
- 213 = cancel / forfeit
+ COMMAND DISPLAY / ACTIONS:
+ Use the separate Rival Command Handler.js file
+ (same pattern as Sparring TP System + Sparring Command Handler).
+ Do NOT enable trigger on this Global Player script for commands.
 
  Requires RivalCore_v4 database:
    dlr.rivalry.v4.database
@@ -1309,41 +1307,10 @@ function chTriggerPlayer(event) {
     return null;
 }
 
+/*
+ Commands live in Rival Command Handler.js (script-slot),
+ matching Sparring Command Handler. Global Player trigger unused.
+*/
 function trigger(event) {
-    var player = null;
-    try {
-        player = chTriggerPlayer(event);
-        if (!chIsPlayer(player)) return;
-
-        var id = Number(event.id);
-        var args = chArgs(event);
-
-        if (args.length > 0 && chString(args[0]).toLowerCase() === chName(player).toLowerCase()) {
-            args.shift();
-        }
-
-        if (id === 210) {
-            chChallenge(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 211) {
-            chAccept(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 212) {
-            chDecline(player, args.length > 0 ? args[0] : "");
-            return;
-        }
-        if (id === 213) {
-            chCancel(player);
-            return;
-        }
-    } catch (error) {
-        if (player !== null) {
-            chMessage(player, CH_COLOR + "c[RivalChallenge] Error: " + error);
-        }
-        try {
-            print("[RivalChallenge v4] trigger error: " + error);
-        } catch (ignored) {}
-    }
+    return;
 }
