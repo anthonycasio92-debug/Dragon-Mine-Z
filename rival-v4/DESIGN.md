@@ -17,7 +17,7 @@ Target: CustomNPCs 1.20.1 GBPort + DragonMineZ 2.1.3 + Fabled (optional).
 |---|---|---|
 | `Rival System.js` | Global Player | All gameplay (core, proximity, challenges, instinct, progression, spectator, fusion) |
 | `Rival Command Handler.js` | Script-slot | All player commands (same style as Sparring Command Handler) |
-| `RivalNPC_v4.js` | NPC | Rival Master dialog hooks |
+| `RivalNPC_v4.js` | NPC | Chat guide on interact (no dialog options) |
 
 Obsolete split Global Player files (`RivalCore_v4.js`, etc.) are stubs — do not install them.
 

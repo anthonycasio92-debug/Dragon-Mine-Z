@@ -8,7 +8,7 @@ Same idea as sparring: **one Global Player system** + **one command handler** + 
 |---|---|---|
 | `Rival System.js` | Global Player | init, login, tick, damagedEntity, damaged, kill, died, logout, trigger |
 | `Rival Command Handler.js` | Script-slot (with SkillCheck / Sparring Command Handler) | trigger |
-| `RivalNPC_v4.js` | Rival Master NPC | interact, dialogOption |
+| `RivalNPC_v4.js` | Rival Master NPC | interact |
 
 ## 1) Disable old V3
 
@@ -35,8 +35,9 @@ Do **not** put it in Global Player.
 
 ## 4) Rival Master NPC (optional)
 
-Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable `interact` + `dialogOption`.
-Map dialog options to slots 0–9 (see file header).
+Put `RivalNPC_v4.js` on a CustomNPC at spawn. Enable **interact** only.
+
+No dialog GUI needed — right-click replies in chat with the rival command guide.
 
 ## 5) CMI aliases (same style as sparring)
 
