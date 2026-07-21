@@ -53,6 +53,8 @@ Note: the **Nemesis link status** is history-chosen (one Mutual). The career tit
 
 RP does **not** grant raw STR/SKP bonuses.
 
+**TP rewards stay on** (level-scaled): presence near rivals, kill near rivals, surpass, underdog, anti-gank, official challenges, fusion kill split.
+
 ## Config
 
 Top-of-section CONFIG blocks in `Rival System.js`.
