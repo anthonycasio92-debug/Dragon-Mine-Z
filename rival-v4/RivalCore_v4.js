@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Core V4
- Version: 4.0.0
+ Version: 4.0.1
 
  Persistent rivalry management for the reworked rival system.
 
@@ -32,8 +32,18 @@
 
 /* ========================= JAVA TYPES ========================= */
 
-var RC_Npc = Java.type("java.lang.System");
-var RC_API = Java.type("noppes.npcs.api.NpcAPI");
+/*
+ CustomNPCs Global Player scripts can clash on names like RC_SYSTEM /
+ RC_System / System. Keep API lazy and avoid a top-level System binding.
+*/
+var RIVAL_CORE_API = null;
+
+function rcApi() {
+    if (RIVAL_CORE_API === null) {
+        RIVAL_CORE_API = Java.type("noppes.npcs.api.NpcAPI");
+    }
+    return RIVAL_CORE_API;
+}
 
 /* ========================= CONFIGURATION ========================= */
 
@@ -66,7 +76,15 @@ var RC_TIERS = [
 /* ========================= BASIC HELPERS ========================= */
 
 function rcNow() {
-    return Number(RC_SYSTEM.currentTimeMillis());
+    try {
+        return Number(new Date().getTime());
+    } catch (ignored) {
+        try {
+            return Number(Java.type("java.lang.System").currentTimeMillis());
+        } catch (ignored2) {
+            return 0;
+        }
+    }
 }
 
 function rcString(value) {
@@ -169,7 +187,7 @@ function rcDataWorld(fallbackPlayer) {
     var names = ["minecraft:overworld", "overworld"];
     for (var i = 0; i < names.length; i++) {
         try {
-            var world = RC_API.Instance().getIWorld(names[i]);
+            var world = rcApi().Instance().getIWorld(names[i]);
             if (world !== null && world !== undefined) return world;
         } catch (error1) {
             rcLog("World lookup failed for " + names[i] + ": " + error1);
@@ -400,7 +418,7 @@ function rcFindOnlinePlayer(world, name) {
 
 function rcFindOnlinePlayerAnyWorld(name) {
     try {
-        var worlds = RC_API.Instance().getIWorlds();
+        var worlds = rcApi().Instance().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             var found = rcFindOnlinePlayer(worlds[i], name);
             if (found !== null) return found;

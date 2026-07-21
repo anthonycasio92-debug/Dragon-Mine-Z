@@ -36,13 +36,56 @@
 
 /* ========================= JAVA TYPES ========================= */
 
-var RC_StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
-var RC_StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
-var RC_StatsSyncS2C = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
-var RC_NetworkHandler = Java.type("com.dragonminez.common.network.NetworkHandler");
-var RC_AbstractKi = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile");
-var RC_System = Java.type("java.lang.System");
-var RC_API = Java.type("noppes.npcs.api.NpcAPI");
+/*
+ Avoid top-level System / RC_System bindings. Multiple Global Player
+ scripts can overwrite similarly named variables in CustomNPCs.
+*/
+var RIVAL_CH_API = null;
+var RIVAL_CH_STATS_PROVIDER = null;
+var RIVAL_CH_STATS_CAP = null;
+var RIVAL_CH_SYNC = null;
+var RIVAL_CH_NETWORK = null;
+var RIVAL_CH_KI = null;
+
+function chApi() {
+    if (RIVAL_CH_API === null) RIVAL_CH_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RIVAL_CH_API;
+}
+
+function chStatsProvider() {
+    if (RIVAL_CH_STATS_PROVIDER === null) {
+        RIVAL_CH_STATS_PROVIDER = Java.type("com.dragonminez.common.stats.StatsProvider");
+    }
+    return RIVAL_CH_STATS_PROVIDER;
+}
+
+function chStatsCap() {
+    if (RIVAL_CH_STATS_CAP === null) {
+        RIVAL_CH_STATS_CAP = Java.type("com.dragonminez.common.stats.StatsCapability");
+    }
+    return RIVAL_CH_STATS_CAP;
+}
+
+function chSyncPacket() {
+    if (RIVAL_CH_SYNC === null) {
+        RIVAL_CH_SYNC = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
+    }
+    return RIVAL_CH_SYNC;
+}
+
+function chNetwork() {
+    if (RIVAL_CH_NETWORK === null) {
+        RIVAL_CH_NETWORK = Java.type("com.dragonminez.common.network.NetworkHandler");
+    }
+    return RIVAL_CH_NETWORK;
+}
+
+function chKiClass() {
+    if (RIVAL_CH_KI === null) {
+        RIVAL_CH_KI = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile");
+    }
+    return RIVAL_CH_KI;
+}
 
 /* ========================= CONFIGURATION ========================= */
 
@@ -78,7 +121,17 @@ var CH_ALLOW_NON_RIVAL = true;
 
 /* ========================= HELPERS ========================= */
 
-function chNow() { return Number(RC_System.currentTimeMillis()); }
+function chNow() {
+    try {
+        return Number(new Date().getTime());
+    } catch (ignored) {
+        try {
+            return Number(Java.type("java.lang.System").currentTimeMillis());
+        } catch (ignored2) {
+            return 0;
+        }
+    }
+}
 
 function chString(value) {
     if (value === null || value === undefined) return "";
@@ -157,7 +210,7 @@ function chDataWorld(fallbackPlayer) {
     var names = ["minecraft:overworld", "overworld"];
     for (var i = 0; i < names.length; i++) {
         try {
-            var world = RC_API.Instance().getIWorld(names[i]);
+            var world = chApi().Instance().getIWorld(names[i]);
             if (world !== null && world !== undefined) return world;
         } catch (ignored1) {}
     }
@@ -254,7 +307,7 @@ function chSaveCoreDb(player, database) {
 
 function chFindOnlineAnyWorld(name) {
     try {
-        var worlds = RC_API.Instance().getIWorlds();
+        var worlds = chApi().Instance().getIWorlds();
         var wanted = chString(name).toLowerCase();
         for (var i = 0; i < worlds.length; i++) {
             try {
@@ -272,7 +325,7 @@ function chFindOnlineAnyWorld(name) {
 
 function chFindOnlineByUuid(uuid) {
     try {
-        var worlds = RC_API.Instance().getIWorlds();
+        var worlds = chApi().Instance().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             try {
                 var players = worlds[i].getAllPlayers();
@@ -311,7 +364,7 @@ function chGetDMZ(player) {
     try {
         var mcPlayer = player.getMCEntity();
         if (mcPlayer === null) return null;
-        return RC_StatsProvider.get(RC_StatsCapability.INSTANCE, mcPlayer).orElse(null);
+        return chStatsProvider().get(chStatsCap().INSTANCE, mcPlayer).orElse(null);
     } catch (ignored) {
         return null;
     }
@@ -325,7 +378,7 @@ function chAwardTP(player, amount, reason) {
         if (data === null) return false;
         data.getResources().addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
-        RC_NetworkHandler.sendToTrackingEntityAndSelf(new RC_StatsSyncS2C(mcPlayer), mcPlayer);
+        chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
         chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
             (reason ? CH_COLOR + "7 (" + reason + ")" : ""));
         return true;
@@ -343,7 +396,7 @@ function chIsKiDamage(event) {
 
         try {
             var immediate = source.getImmediateSource ? source.getImmediateSource() : null;
-            if (immediate !== null && immediate instanceof RC_AbstractKi) return true;
+            if (immediate !== null && immediate instanceof chKiClass()) return true;
         } catch (ignored1) {}
 
         try {

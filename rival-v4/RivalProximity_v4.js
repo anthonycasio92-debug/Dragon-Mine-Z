@@ -26,12 +26,32 @@
 
 /* ========================= JAVA TYPES ========================= */
 
-var RP_StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
-var RP_StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
-var RP_StatsSyncS2C = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
-var RP_NetworkHandler = Java.type("com.dragonminez.common.network.NetworkHandler");
-var RP_System = Java.type("java.lang.System");
-var RP_API = Java.type("noppes.npcs.api.NpcAPI");
+var RIVAL_PROX_API = null;
+var RIVAL_PROX_STATS_PROVIDER = null;
+var RIVAL_PROX_STATS_CAP = null;
+var RIVAL_PROX_SYNC = null;
+var RIVAL_PROX_NETWORK = null;
+
+function rpApi() {
+    if (RIVAL_PROX_API === null) RIVAL_PROX_API = Java.type("noppes.npcs.api.NpcAPI");
+    return RIVAL_PROX_API;
+}
+function rpStatsProvider() {
+    if (RIVAL_PROX_STATS_PROVIDER === null) RIVAL_PROX_STATS_PROVIDER = Java.type("com.dragonminez.common.stats.StatsProvider");
+    return RIVAL_PROX_STATS_PROVIDER;
+}
+function rpStatsCap() {
+    if (RIVAL_PROX_STATS_CAP === null) RIVAL_PROX_STATS_CAP = Java.type("com.dragonminez.common.stats.StatsCapability");
+    return RIVAL_PROX_STATS_CAP;
+}
+function rpSyncPacket() {
+    if (RIVAL_PROX_SYNC === null) RIVAL_PROX_SYNC = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
+    return RIVAL_PROX_SYNC;
+}
+function rpNetwork() {
+    if (RIVAL_PROX_NETWORK === null) RIVAL_PROX_NETWORK = Java.type("com.dragonminez.common.network.NetworkHandler");
+    return RIVAL_PROX_NETWORK;
+}
 
 /* ========================= CONFIGURATION ========================= */
 
@@ -108,7 +128,13 @@ var RP_TIERS = [
 
 /* ========================= HELPERS ========================= */
 
-function rpNow() { return Number(RP_System.currentTimeMillis()); }
+function rpNow() {
+    try { return Number(new Date().getTime()); }
+    catch (ignored) {
+        try { return Number(Java.type("java.lang.System").currentTimeMillis()); }
+        catch (ignored2) { return 0; }
+    }
+}
 
 function rpString(value) {
     if (value === null || value === undefined) return "";
@@ -185,7 +211,7 @@ function rpDataWorld(fallbackPlayer) {
     var names = ["minecraft:overworld", "overworld"];
     for (var i = 0; i < names.length; i++) {
         try {
-            var world = RP_API.Instance().getIWorld(names[i]);
+            var world = rpApi().Instance().getIWorld(names[i]);
             if (world !== null && world !== undefined) return world;
         } catch (ignored1) {}
     }
@@ -261,7 +287,7 @@ function rpGetDMZ(player) {
     try {
         var mcPlayer = player.getMCEntity();
         if (mcPlayer === null) return null;
-        return RP_StatsProvider.get(RP_StatsCapability.INSTANCE, mcPlayer).orElse(null);
+        return rpStatsProvider().get(rpStatsCap().INSTANCE, mcPlayer).orElse(null);
     } catch (ignored) {
         return null;
     }
@@ -352,7 +378,7 @@ function rpAwardTP(player, data, amount, reason) {
         if (resources === null) return false;
         resources.addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
-        RP_NetworkHandler.sendToTrackingEntityAndSelf(new RP_StatsSyncS2C(mcPlayer), mcPlayer);
+        rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
         if (RP_SHOW_KILL_TP) {
             rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
                 (reason ? RP_COLOR + "7 (" + reason + ")" : ""));
@@ -380,8 +406,8 @@ function rpApplyOffenseBonus(player, data, multiplier) {
         multiplier = rpNumber(multiplier, 1.0);
         if (multiplier <= 1.001) {
             try {
-                RP_NetworkHandler.sendToTrackingEntityAndSelf(
-                    new RP_StatsSyncS2C(player.getMCEntity()),
+                rpNetwork().sendToTrackingEntityAndSelf(
+                    new (rpSyncPacket())(player.getMCEntity()),
                     player.getMCEntity()
                 );
             } catch (ignoredSync) {}
@@ -392,8 +418,8 @@ function rpApplyOffenseBonus(player, data, multiplier) {
         bonusStats.addBonus(offense.key, RP_BONUS_NAME, "*", multiplier);
 
         try {
-            RP_NetworkHandler.sendToTrackingEntityAndSelf(
-                new RP_StatsSyncS2C(player.getMCEntity()),
+            rpNetwork().sendToTrackingEntityAndSelf(
+                new (rpSyncPacket())(player.getMCEntity()),
                 player.getMCEntity()
             );
         } catch (ignoredSync2) {}
@@ -408,7 +434,7 @@ function rpApplyOffenseBonus(player, data, multiplier) {
 
 function rpFindOnlineByUuid(uuid) {
     try {
-        var worlds = RP_API.Instance().getIWorlds();
+        var worlds = rpApi().Instance().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             try {
                 var players = worlds[i].getAllPlayers();
