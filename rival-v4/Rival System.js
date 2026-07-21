@@ -1294,7 +1294,7 @@ var RP_ANTIGANK_WITNESS_KILL_TP = 350;   // strong player kill TP bonus while wa
 var RP_ANTIGANK_WITNESS_RP = 5;         // weak rival RP for witnessing kills
 var RP_ANTIGANK_HIT_TP = 140;           // weak rival TP when strong takes damage
 var RP_ANTIGANK_HIT_RP = 3;
-var RP_ANTIGANK_HIT_COOLDOWN_MS = 3000;
+var RP_ANTIGANK_HIT_COOLDOWN_MS = 15000;
 var RP_ANTIGANK_OFFENSE_BONUS = 0.12;   // weak rival offense near strong target
 
 var RP_TIERS = [
@@ -2014,9 +2014,31 @@ function rpHandleDamagedByRival(victim, attacker) {
     rpTryUnderdogEngage(attacker, victim);
 }
 
+function rpInActiveChallenge(player) {
+    try {
+        var w = rpWorld(player);
+        if (w == null) return false;
+        var stored = w.getStoreddata();
+        var key = "dlr.rivalry.v4.challenges";
+        if (stored == null || !stored.has(key)) return false;
+        var ch = JSON.parse(String(stored.get(key)));
+        if (ch == null || ch.playerSessions == null) return false;
+        var sid = ch.playerSessions[rpUuid(player)];
+        if (sid == null) return false;
+        var session = ch.sessions != null ? ch.sessions[String(sid)] : null;
+        if (session == null) return false;
+        var st = rpString(session.state);
+        return st === "active" || st === "countdown";
+    } catch (e) {
+        return false;
+    }
+}
+
 function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
     var database = rpLoadDatabase(victim);
     if (database === null) return;
+    /* Don't spam under-fire TP during official challenges */
+    if (rpInActiveChallenge(victim)) return;
 
     var victimUuid = rpUuid(victim);
     var record = database.players[victimUuid];
@@ -2913,8 +2935,9 @@ function chBeginBattle(player, db, session) {
 
 function chBuildReport(session, winnerName, loserName) {
     var lines = [];
-    lines.push(CH_COLOR + "6━━━━━━━━━━━━━━━━━━━━━━");
-    lines.push(CH_COLOR + "eOfficial Rival Challenge");
+    /* ASCII-only borders - unicode box lines render as ? on many clients */
+    lines.push(CH_COLOR + "6--------------------------------");
+    lines.push(CH_COLOR + "e" + CH_COLOR + "lOfficial Rival Challenge" + CH_COLOR + "r");
     lines.push(CH_COLOR + "7Winner: " + CH_COLOR + "a" + (winnerName || "Draw"));
     if (loserName) lines.push(CH_COLOR + "7Runner-up: " + CH_COLOR + "c" + loserName);
     lines.push(CH_COLOR + "7Duration: " + CH_COLOR + "f" + chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))));
@@ -2931,7 +2954,7 @@ function chBuildReport(session, winnerName, loserName) {
             CH_COLOR + "7  Best Hit: " + CH_COLOR + "f" + chCommas(combat.biggestHit) +
             CH_COLOR + "7  Combo: " + CH_COLOR + "f" + combat.longestCombo);
     }
-    lines.push(CH_COLOR + "6━━━━━━━━━━━━━━━━━━━━━━");
+    lines.push(CH_COLOR + "6--------------------------------");
     return lines;
 }
 
@@ -3573,8 +3596,14 @@ function riStatsCap() {
 
 var RI_COLOR = "\u00A7";
 var RI_DB = "dlr.rivalry.v4.database";
-var RI_TICK_MS = 1500;
-var RI_ALERT_COOLDOWN_MS = 8000;
+var RI_CH_KEY = "dlr.rivalry.v4.challenges";
+var RI_TICK_MS = 4000;
+/* Quiet by default: arrive once, rare status pulses, event spikes only */
+var RI_ALERT_COOLDOWN_MS = 45000;
+var RI_ARRIVE_COOLDOWN_MS = 90000;
+var RI_STATUS_COOLDOWN_MS = 120000;
+var RI_EVENT_COOLDOWN_MS = 20000;
+var RI_MUTE_DURING_CHALLENGE = true;
 
 var RI_TIERS = [
     { min: 0,    range: 48,  relative: false, charging: false, battlePower: false, form: false, fusion: false, name: "Acquaintance" },
@@ -3711,12 +3740,34 @@ function riRelative(myBP, theirBP) {
     return "far weaker";
 }
 
-function riAlert(temp, key, message, player) {
+function riAlert(temp, key, message, player, cooldownMs) {
+    var cd = riNum(cooldownMs, RI_ALERT_COOLDOWN_MS);
     var last = 0;
     try { if (temp.has(key)) last = riNum(temp.get(key), 0); } catch (e) {}
-    if (riNow() - last < RI_ALERT_COOLDOWN_MS) return;
+    if (riNow() - last < cd) return false;
     try { temp.put(key, String(riNow())); } catch (e2) {}
     riMsg(player, message);
+    return true;
+}
+
+function riInChallenge(player) {
+    if (RI_MUTE_DURING_CHALLENGE !== true) return false;
+    try {
+        var w = riWorld(player);
+        if (w == null) return false;
+        var stored = w.getStoreddata();
+        if (stored == null || !stored.has(RI_CH_KEY)) return false;
+        var ch = JSON.parse(String(stored.get(RI_CH_KEY)));
+        if (ch == null || ch.playerSessions == null) return false;
+        var sid = ch.playerSessions[riUuid(player)];
+        if (sid == null) return false;
+        var session = ch.sessions != null ? ch.sessions[String(sid)] : null;
+        if (session == null) return false;
+        var st = riStr(session.state);
+        return st === "active" || st === "countdown";
+    } catch (e) {
+        return false;
+    }
 }
 
 function riScan(player) {
@@ -3724,6 +3775,7 @@ function riScan(player) {
     if (db == null) return;
     var record = db.players[riUuid(player)];
     if (record == null || record.rivals == null) return;
+    if (riInChallenge(player)) return;
 
     var myData = riDMZ(player);
     var myReleased = riReleased(myData);
@@ -3760,33 +3812,29 @@ function riScan(player) {
         var rivalData = riDMZ(rival);
         var status = riStatus(rivalData);
         var theirReleased = riReleased(rivalData);
+        var tag = link.isNemesis === true ? "Nemesis" : tier.name;
 
+        /* Arrive: one combined ping when they enter range (not every few seconds). */
         if (!wasNear) {
-            riAlert(
-                temp,
-                "rival.v4.instinct.arrive." + uuid,
-                RI_COLOR + "6[Rival Instinct] " + RI_COLOR + "e" + link.name +
-                RI_COLOR + "7 has arrived nearby!",
-                player
-            );
+            var arriveMsg = RI_COLOR + "6[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                RI_COLOR + "7 arrived (" + Math.floor(dist) + "m)";
+            if (tier.relative) {
+                arriveMsg += RI_COLOR + "7 - feels " + riRelative(myReleased, theirReleased);
+            }
+            arriveMsg += RI_COLOR + "8 [" + tag + "]";
+            riAlert(temp, "rival.v4.instinct.arrive." + uuid, arriveMsg, player, RI_ARRIVE_COOLDOWN_MS);
+            continue;
         }
 
-        riAlert(
-            temp,
-            "rival.v4.instinct.near." + uuid,
-            RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "f" + link.name +
-            RI_COLOR + "7 sensed nearby (" + Math.floor(dist) + "m) " +
-            RI_COLOR + "8[" + (link.isNemesis === true ? "Nemesis" : tier.name) + "]",
-            player
-        );
-
-        if (tier.relative) {
+        /* While already near: only rare status pulse + spike events. */
+        if (tier.battlePower) {
             riAlert(
                 temp,
-                "rival.v4.instinct.rel." + uuid,
+                "rival.v4.instinct.bp." + uuid,
                 RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "e" + link.name +
-                RI_COLOR + "7 feels " + riRelative(myReleased, theirReleased),
-                player
+                RI_COLOR + "7 still nearby - released BP ~ " + RI_COLOR + "f" + riFormat(theirReleased),
+                player,
+                RI_STATUS_COOLDOWN_MS
             );
         }
 
@@ -3798,20 +3846,11 @@ function riScan(player) {
                         "rival.v4.instinct.charge." + uuid,
                         RI_COLOR + "c[Rival Instinct] " + RI_COLOR + "e" + link.name +
                         RI_COLOR + "c is charging ki!",
-                        player
+                        player,
+                        RI_EVENT_COOLDOWN_MS
                     );
                 }
             } catch (e) {}
-        }
-
-        if (tier.battlePower) {
-            riAlert(
-                temp,
-                "rival.v4.instinct.bp." + uuid,
-                RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "e" + link.name +
-                RI_COLOR + "7 released BP ~ " + RI_COLOR + "f" + riFormat(theirReleased),
-                player
-            );
         }
 
         if (tier.form && rivalData != null) {
@@ -3825,8 +3864,9 @@ function riScan(player) {
                         temp,
                         "rival.v4.instinct.aura." + uuid,
                         RI_COLOR + "d[Rival Instinct] " + RI_COLOR + "e" + link.name +
-                        RI_COLOR + "d transformation / aura surge detected!",
-                        player
+                        RI_COLOR + "d transformation / aura surge!",
+                        player,
+                        RI_EVENT_COOLDOWN_MS
                     );
                 }
             } catch (e2) {}
@@ -3842,7 +3882,8 @@ function riScan(player) {
                         "rival.v4.instinct.fusion." + uuid,
                         RI_COLOR + "5[Rival Instinct] " + RI_COLOR + "e" + link.name +
                         RI_COLOR + "5 is fused" + (fname !== "" ? " (" + fname + ")" : "") + "!",
-                        player
+                        player,
+                        RI_EVENT_COOLDOWN_MS
                     );
                 }
             } catch (e4) {}
@@ -3866,10 +3907,8 @@ function rivalInstinctTick(event) {
 }
 
 function rivalInstinctLogin(event) {
-    try {
-        if (!riIsPlayer(event.player)) return;
-        riMsg(event.player, RI_COLOR + "8[Rival Instinct] Sensing online.");
-    } catch (e) {}
+    /* Silent login - no chat spam. Instinct starts on tick. */
+    try { if (!riIsPlayer(event.player)) return; } catch (e) {}
 }
 
 /* ========================= PROGRESSION ========================= */
