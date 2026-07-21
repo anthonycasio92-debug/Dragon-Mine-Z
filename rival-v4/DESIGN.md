@@ -69,10 +69,13 @@ Gameplay stays in `Rival System.js` (Global Player).
 | 10000 | Eternal Rival |
 | 15000 | Mythic Rival |
 
-## Core Loops (Adjusted Design)
+## Core Loops
 
-See prior design notes in repo history / chat for proximity offense, anti-gank,
-underdog, surpass, catch-up, mutual fusion bonus, and 60s damage challenges.
+Full original concept checklist: **`CONCEPT.md`**.
+
+Proximity offense, presence RP, kill TP, catch-up, surpass, underdog,
+anti-gank (≤40% released BP), 60s challenges (loser more RP / winner more TP),
+KO bonuses, non-rival challenge TP, mutual fusion power + kill TP.
 
 ## Config
 
