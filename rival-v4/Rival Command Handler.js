@@ -138,12 +138,22 @@ function saveJson(key, backup, obj) {
 }
 
 function onlineByName(name) {
+    var wanted = str(name);
+    if (wanted == "") return null;
     var worlds = api().getIWorlds();
     for (var i = 0; i < worlds.length; i++) {
         try {
             var players = worlds[i].getAllPlayers();
             for (var p = 0; p < players.length; p++) {
-                if (lower(players[p].getName()) == lower(name)) return players[p];
+                try {
+                    if (String(players[p].getName()).equalsIgnoreCase(wanted)) {
+                        return players[p];
+                    }
+                } catch (e1) {
+                    if (lower(players[p].getName()) == lower(wanted)) {
+                        return players[p];
+                    }
+                }
             }
         } catch (e) {}
     }
@@ -328,14 +338,20 @@ function cmdHelp(player) {
     line(player);
     message(player, C + "6" + C + "lRival System");
     line(player);
-    message(player, C + "e/rivaldeclare <player>");
-    message(player, C + "e/rivalaccept | /rivaldecline | /rivalremove <player>");
-    message(player, C + "e/rivallist  /rivalstats [player]  /rivaltop [cat]");
-    message(player, C + "e/rivaltitle /rivaljournal /rivalseason /rivalquests");
-    message(player, C + "e/rivalachievements /rivalhof");
+    message(player, C + "e/rival declare <player>");
+    message(player, C + "e/rival accept <player>");
+    message(player, C + "e/rival decline <player>");
+    message(player, C + "e/rival remove <player>");
+    message(player, C + "e/rival list");
+    message(player, C + "e/rival stats [player]");
+    message(player, C + "e/rival top [rp|wins|streak|damage]");
+    message(player, C + "e/rival title | journal | season | quests");
+    message(player, C + "e/rival achievements | hof");
     message(player, C + "e/challenge <player>");
-    message(player, C + "e/challengeaccept | /challengedecline | /challengecancel");
+    message(player, C + "e/challenge accept | decline | cancel");
     message(player, C + "e/spectaterival <player>");
+    line(player);
+    message(player, C + "8One-word aliases also work: /rivaldeclare, /rivallist, ...");
     line(player);
 }
 
@@ -849,28 +865,112 @@ function argAt(event, index) {
     return "";
 }
 
+function argsFrom(event, start) {
+    var out = [];
+    try {
+        if (event.arguments != null) {
+            for (var i = start; i < event.arguments.length; i++) {
+                var piece = str(event.arguments[i]).replace(/^\s+|\s+$/g, "");
+                if (piece != "") out.push(piece);
+            }
+        }
+    } catch (e) {}
+    return out;
+}
+
+/*
+ /rival declare Steve  => trigger 200 <player> declare Steve
+ /rivaldeclare Steve   => trigger 201 <player> Steve
+*/
+function routeRivalSub(player, event) {
+    var parts = argsFrom(event, 1);
+    if (parts.length == 0) {
+        cmdHelp(player);
+        return;
+    }
+
+    var sub = lower(parts[0]);
+    var target = parts.length > 1 ? parts[1] : "";
+
+    if (sub == "help" || sub == "?") {
+        cmdHelp(player);
+    } else if (sub == "declare") {
+        cmdDeclare(player, target);
+    } else if (sub == "accept") {
+        cmdAccept(player, target);
+    } else if (sub == "decline") {
+        cmdDecline(player, target);
+    } else if (sub == "remove") {
+        cmdRemove(player, target);
+    } else if (sub == "list") {
+        cmdList(player);
+    } else if (sub == "stats") {
+        showStats(player, target);
+    } else if (sub == "top") {
+        showTop(player, target == "" ? "rp" : target);
+    } else if (sub == "title") {
+        showTitle(player);
+    } else if (sub == "journal") {
+        showJournal(player, target);
+    } else if (sub == "season") {
+        showSeason(player);
+    } else if (sub == "quests") {
+        showQuests(player);
+    } else if (sub == "achievements") {
+        showAchievements(player);
+    } else if (sub == "hof" || sub == "hall") {
+        showHof(player);
+    } else {
+        msg(player, C + "cUnknown rival command: " + parts[0]);
+        cmdHelp(player);
+    }
+}
+
+function routeChallengeSub(player, event) {
+    var parts = argsFrom(event, 1);
+    if (parts.length == 0) {
+        msg(player, C + "cUsage: /challenge <player>");
+        return;
+    }
+    var sub = lower(parts[0]);
+    var target = parts.length > 1 ? parts[1] : "";
+
+    if (sub == "accept") {
+        cmdChallengeAccept(player, target);
+    } else if (sub == "decline") {
+        cmdChallengeDecline(player, target);
+    } else if (sub == "cancel" || sub == "forfeit") {
+        cmdChallengeCancel(player);
+    } else {
+        /* /challenge Steve */
+        cmdChallenge(player, parts[0]);
+    }
+}
+
 function trigger(event) {
     var player = null;
+    var arg0 = argAt(event, 0);
 
     try {
-        if (
-            event.arguments != null &&
-            event.arguments.length > 0
-        ) {
-            player = onlineByName(
-                String(event.arguments[0])
-            );
+        if (arg0 != "") {
+            player = onlineByName(arg0);
         }
     } catch (e) {}
 
-    if (player == null) return;
+    if (player == null) {
+        try {
+            print("[RivalCommand] No online player for trigger " +
+                event.id + " arg0=" + arg0);
+        } catch (e2) {}
+        return;
+    }
 
     try {
         var id = Number(event.id);
         var arg1 = argAt(event, 1);
 
         if (id == 200) {
-            cmdHelp(player);
+            routeRivalSub(player, event);
         } else if (id == 201) {
             cmdDeclare(player, arg1);
         } else if (id == 202) {
@@ -884,7 +984,7 @@ function trigger(event) {
         } else if (id == 206) {
             showStats(player, arg1);
         } else if (id == 210) {
-            cmdChallenge(player, arg1);
+            routeChallengeSub(player, event);
         } else if (id == 211) {
             cmdChallengeAccept(player, arg1);
         } else if (id == 212) {

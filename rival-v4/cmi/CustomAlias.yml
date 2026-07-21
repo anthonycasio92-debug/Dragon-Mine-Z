@@ -138,8 +138,15 @@ CustomAlias:
 
   # ============================================================
   # Rival System V4 — Rival Command Handler.js
+  # /rival declare <player>  (preferred)
+  # /rivaldeclare <player>   (one-word alias, same as spar style)
   # ============================================================
   rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  rival ?:
     Cmds:
     - asFakeOp! noppes script trigger 200 [playerName]
     AddTabs: true
@@ -211,7 +218,12 @@ CustomAlias:
     ExactMatch: true
   challenge:
     Cmds:
-    - asFakeOp! noppes script trigger 210 [playerName] $1
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
+    AddTabs: true
+    ExactMatch: true
+  challenge ?:
+    Cmds:
+    - asConsole! cmi msg [playerName] &cUsage: /challenge <player>
     AddTabs: true
     ExactMatch: true
   challengeaccept:
