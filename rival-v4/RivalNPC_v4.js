@@ -43,6 +43,8 @@ function showRivalGuide(player) {
     msg(player, C + "e/challenge <player>");
     msg(player, C + "e/challenge rival <player>");
     msg(player, C + "e/challenge accept|decline|cancel");
+    msg(player, C + "e/spectaterival <player>");
+    msg(player, C + "7Battles are announced to the whole server.");
     line(player);
     msg(player, C + "6Progress" + C_RESET);
     msg(player, C + "e/rival top [rp|wins|streak|damage]");

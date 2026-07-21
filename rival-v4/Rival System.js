@@ -1797,6 +1797,7 @@ function rpProcessPlayer(player) {
     var myReleased = rpGetReleasedBP(data);
     var temp = rpTemp(player);
     var now = rpNow();
+    var inChallenge = rpInActiveChallenge(player);
 
     var bestMultiplier = 1.0;
     var nearCount = 0;
@@ -1859,7 +1860,7 @@ function rpProcessPlayer(player) {
             dirty = true;
             rpTempPut(temp, presenceKey, now);
 
-            if (RP_PRESENCE_TP_ENABLED === true) {
+            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
                 var pStatus = rcLinkStatus(link);
                 var presenceTp = RP_PRESENCE_TP_ONE_SIDED;
                 if (pStatus === "mutual") presenceTp = RP_PRESENCE_TP_MUTUAL;
@@ -2016,7 +2017,7 @@ function rpHandleDamagedByRival(victim, attacker) {
 
 function rpInActiveChallenge(player) {
     try {
-        var w = rpWorld(player);
+        var w = rpDataWorld(player);
         if (w == null) return false;
         var stored = w.getStoreddata();
         var key = "dlr.rivalry.v4.challenges";
@@ -2277,6 +2278,11 @@ var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
+/* Server-wide rival battle display */
+var CH_BROADCAST_ENABLED = true;
+var CH_BROADCAST_SCORE_MS = 15 * 1000;
+var CH_BROADCAST_REPORT = true;
+
 var CH_WIN_TP = 5500;
 var CH_LOSE_TP = 2000;
 var CH_DRAW_TP = 3000;
@@ -2318,6 +2324,40 @@ function chString(value) {
 function chNumber(value, fallback) {
     var number = Number(value);
     return isNaN(number) || !isFinite(number) ? fallback : number;
+}
+
+function chBroadcast(text) {
+    if (CH_BROADCAST_ENABLED !== true) return;
+    try {
+        var worlds = chApi().Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) {
+                    chMessage(players[p], text);
+                }
+            } catch (ignored) {}
+        }
+    } catch (error) {
+        chLog("Broadcast failed: " + error);
+    }
+}
+
+function chBroadcastLines(lines) {
+    if (lines == null) return;
+    for (var i = 0; i < lines.length; i++) chBroadcast(lines[i]);
+}
+
+function chScoreLine(session) {
+    var c = session.combat[session.challengerUuid] || chFreshCombat();
+    var o = session.combat[session.opponentUuid] || chFreshCombat();
+    var left = Math.max(0, Math.ceil((chNumber(session.battleEndsAt, chNow()) - chNow()) / 1000));
+    return CH_COLOR + "6[Rival Battle] " + CH_COLOR + "f" + session.challengerName +
+        CH_COLOR + "7 " + chCommas(c.damage) +
+        CH_COLOR + "8 vs " +
+        CH_COLOR + "f" + session.opponentName +
+        CH_COLOR + "7 " + chCommas(o.damage) +
+        CH_COLOR + "8 | " + left + "s left";
 }
 
 function chMessage(player, message) {
@@ -2849,6 +2889,10 @@ function chStartCountdown(player, db, pending) {
     var b = chFindOnlineByUuid(pending.toUuid);
     if (a !== null) chMessage(a, CH_COLOR + "6Rival Challenge accepted! Countdown...");
     if (b !== null) chMessage(b, CH_COLOR + "6Rival Challenge accepted! Countdown...");
+    chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
+        CH_COLOR + "7 vs " + CH_COLOR + "e" + pending.toName +
+        CH_COLOR + "7 - countdown!");
+    chBroadcast(CH_COLOR + "8Watch live: /spectaterival " + pending.fromName);
 }
 
 function chAccept(player, fromName) {
@@ -2923,14 +2967,24 @@ function chCancel(player) {
 /* ========================= SESSION LIFECYCLE ========================= */
 
 function chBeginBattle(player, db, session) {
+    if (session.state !== "countdown") return;
     session.state = "active";
     session.battleEndsAt = chNow() + CH_DURATION_MS;
+    session.lastScoreBroadcastAt = 0;
+    session.announcedFight = true;
     chSaveChallengeDb(player, db);
 
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
     if (a !== null) chMessage(a, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
     if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
+
+    chBroadcast(CH_COLOR + "6--------------------------------");
+    chBroadcast(CH_COLOR + "c" + CH_COLOR + "l[Rival Battle] FIGHT!" + CH_COLOR + "r");
+    chBroadcast(CH_COLOR + "e" + session.challengerName + CH_COLOR + "7 vs " +
+        CH_COLOR + "e" + session.opponentName + CH_COLOR + "7 - 60s most damage");
+    chBroadcast(CH_COLOR + "8/spectaterival " + session.challengerName);
+    chBroadcast(CH_COLOR + "6--------------------------------");
 }
 
 function chBuildReport(session, winnerName, loserName) {
@@ -3250,9 +3304,21 @@ function chEndSession(player, db, session, result) {
     var report = chBuildReport(session, winnerName, loserName);
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
-    for (var i = 0; i < report.length; i++) {
-        if (a !== null) chMessage(a, report[i]);
-        if (b !== null) chMessage(b, report[i]);
+
+    /* Show full report to the whole server */
+    if (CH_BROADCAST_REPORT === true) {
+        chBroadcastLines(report);
+        if (result.reason === "draw") {
+            chBroadcast(CH_COLOR + "e[Rival Battle] Draw!");
+        } else {
+            chBroadcast(CH_COLOR + "a[Rival Battle] Winner: " + CH_COLOR + "f" + winnerName +
+                CH_COLOR + "a!");
+        }
+    } else {
+        for (var i = 0; i < report.length; i++) {
+            if (a !== null) chMessage(a, report[i]);
+            if (b !== null) chMessage(b, report[i]);
+        }
     }
 
     if (result.reason !== "draw") {
@@ -3417,6 +3483,16 @@ function rivalChTick(event) {
                 if (!temp.has(tKey)) {
                     try { temp.put(tKey, "1"); } catch (ignored5) {}
                     chMessage(player, CH_COLOR + "e" + left + "s remaining!");
+                }
+            }
+
+            /* Live scoreboard for the whole server (challenger tick only). */
+            if (CH_BROADCAST_ENABLED === true && chUuid(player) === session.challengerUuid) {
+                var lastScore = chNumber(session.lastScoreBroadcastAt, 0);
+                if (lastScore <= 0 || now - lastScore >= CH_BROADCAST_SCORE_MS) {
+                    session.lastScoreBroadcastAt = now;
+                    chSaveChallengeDb(player, db);
+                    chBroadcast(chScoreLine(session));
                 }
             }
         }

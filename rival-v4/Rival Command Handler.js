@@ -172,6 +172,18 @@ function onlineByName(name) {
     return null;
 }
 
+function broadcast(text) {
+    try {
+        var worlds = api().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) msg(players[p], text);
+            } catch (e) {}
+        }
+    } catch (e2) {}
+}
+
 function freshDb() {
     return { version: 4, players: {}, requests: {}, cooldowns: {}, leaderboard: {}, updatedAt: now() };
 }
