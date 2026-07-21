@@ -49,19 +49,27 @@ That file keeps your existing aliases (spar, SkillCheck, etc.) and adds all riva
 
 Then: `/cmi reload`
 
-Rival pattern (matches your spar aliases):
+Primary syntax (matches in-game help):
 
 ```yaml
-  rivaldeclare:
+  rival:
     Cmds:
-    - asFakeOp! noppes script trigger 201 [playerName] $1-
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
     AddTabs: true
     ExactMatch: false
 ```
 
+Examples: `/rival Steve`, `/rival accept Steve`, `/challenge accept`
+
 - `[playerName]` = argument 0 (required)
-- `$1-` = remaining typed args (player names, subcommands)
+- `$1-` = remaining typed args (subcommands / player names)
 - Use `ExactMatch: false` whenever the command takes player-typed arguments
+- One-word shortcuts (`rivalaccept`, etc.) inject the same subcommand words
 
 ## 6) CMI title placeholder
 

@@ -115,14 +115,16 @@ NPC Rival Master prints the command guide; HoL is `/rival hof`.
 ```text
 /rival <player>
 /rival declare|accept|decline|remove <player>
-/rival list | stats | top | title | journal | season | quests | achievements | hof
+/rival list | stats [player] | top [cat]
+/rival title | journal | season | quests | achievements | hof
 /challenge <player>
 /challenge rival <player>
-/challenge accept|decline|cancel
+/challenge accept | decline | cancel
 /spectaterival <player>
 ```
 
-All aliases verified: `[playerName]` as arg0, `ExactMatch: false` when taking player args.
+Primary aliases: `rival` -> trigger 200, `challenge` -> trigger 210.
+One-word shortcuts inject the same subcommand words. `ExactMatch: false` when args are typed.
 
 ## Install
 

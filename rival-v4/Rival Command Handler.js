@@ -713,7 +713,7 @@ function cmdChallenge(player, targetName) {
 
     msg(player, C + "aChallenge sent to " + C + "e" + nameOf(target));
     msg(target, C + "6" + nameOf(player) + C + "e challenged you! 60s most damage.");
-    msg(target, C + "7/challengeaccept   or   /challengedecline");
+    msg(target, C + "7/challenge accept   or   /challenge decline");
 }
 
 function findPendingFor(ch, toUuid, optionalFrom) {
@@ -1042,7 +1042,7 @@ function argsFrom(event, start) {
 
 /*
  /rival declare Steve  => trigger 200 <player> declare Steve
- /rivaldeclare Steve   => trigger 201 <player> Steve
+ /rivaldeclare Steve   => trigger 200 <player> declare Steve  (CMI shortcut)
 */
 function routeRivalSub(player, event) {
     var parts = argsFrom(event, 1);

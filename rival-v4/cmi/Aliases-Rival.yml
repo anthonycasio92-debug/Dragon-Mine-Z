@@ -1,113 +1,119 @@
-# ============================================================
-# DBZ Legacy Reborn - Rival CMI Aliases
-# ============================================================
-# Same style as Sparring (see Aliases-Sparring.yml).
 #
-# Script-slot: Rival Command Handler.js
-# (same place as SkillCheckCommand / Sparring Command Handler)
+# Rival aliases - same syntax as in-game /rival help.
+# Prefer using the full CustomAlias.yml (repo root / rival-v4/cmi/).
 #
-# COMMAND FORMAT:
-#   noppes script trigger <id> <playerName>
-#   noppes script trigger <id> <playerName> <args...>
+# Primary:
+#   /rival <player>
+#   /rival declare|accept|decline|remove <player>
+#   /rival list | stats [player] | top [cat]
+#   /rival title | journal | season | quests | achievements | hof
+#   /challenge <player>
+#   /challenge rival <player>
+#   /challenge accept | decline | cancel
+#   /spectaterival <player>
 #
-# asFakeOp! gives noppes a player-like OP source.
-# [playerName] is ALWAYS argument 0 (what the handler reads).
-# $1 / $1- are extra args after the player name.
+# All route through Rival Command Handler.js:
+#   rival     -> trigger 200 [playerName] $1-
+#   challenge -> trigger 210 [playerName] $1-
+#   spectaterival -> trigger 230 [playerName] $1-
 #
-# Paste into CMI Aliases.yml then: /cmi reload
-# ============================================================
+# One-word shortcuts (rivalaccept, challengecancel, etc.) inject the
+# same subcommand words into those routers.
+#
 
-rival:
-  Cmds:
-  - asFakeOp! noppes script trigger 200 [playerName]
-  Help: '&6/rival &7- Rival help'
-
-rivaldeclare:
-  Cmds:
-  - asFakeOp! noppes script trigger 201 [playerName] $1
-  Help: '&6/rivaldeclare <player> &7- Declare a rival'
-
-rivalaccept:
-  Cmds:
-  - asFakeOp! noppes script trigger 202 [playerName] $1
-  Help: '&6/rivalaccept <player> &7- Accept rivalry'
-
-rivaldecline:
-  Cmds:
-  - asFakeOp! noppes script trigger 203 [playerName] $1
-  Help: '&6/rivaldecline <player> &7- Decline rivalry'
-
-rivalremove:
-  Cmds:
-  - asFakeOp! noppes script trigger 204 [playerName] $1
-  Help: '&6/rivalremove <player> &7- Remove rivalry'
-
-rivallist:
-  Cmds:
-  - asFakeOp! noppes script trigger 205 [playerName]
-  Help: '&6/rivallist &7- List rivals'
-
-rivalstats:
-  Cmds:
-  - asFakeOp! noppes script trigger 206 [playerName] $1-
-  Help: '&6/rivalstats [player] &7- Rival statistics'
-
-rivaltop:
-  Cmds:
-  - asFakeOp! noppes script trigger 220 [playerName] $1-
-  Help: '&6/rivaltop [rp|wins|streak|damage|combo|hit|battles]'
-
-rivaltitle:
-  Cmds:
-  - asFakeOp! noppes script trigger 221 [playerName]
-  Help: '&6/rivaltitle &7- Title + perks'
-
-rivaljournal:
-  Cmds:
-  - asFakeOp! noppes script trigger 222 [playerName] $1-
-  Help: '&6/rivaljournal [player]'
-
-rivalseason:
-  Cmds:
-  - asFakeOp! noppes script trigger 223 [playerName]
-  Help: '&6/rivalseason'
-
-rivalquests:
-  Cmds:
-  - asFakeOp! noppes script trigger 224 [playerName]
-  Help: '&6/rivalquests'
-
-rivalachievements:
-  Cmds:
-  - asFakeOp! noppes script trigger 225 [playerName]
-  Help: '&6/rivalachievements'
-
-rivalhof:
-  Cmds:
-  - asFakeOp! noppes script trigger 226 [playerName]
-  Help: '&6/rivalhof'
-
-challenge:
-  Cmds:
-  - asFakeOp! noppes script trigger 210 [playerName] $1
-  Help: '&6/challenge <player> &7- Official rival battle'
-
-challengeaccept:
-  Cmds:
-  - asFakeOp! noppes script trigger 211 [playerName] $1-
-  Help: '&6/challengeaccept [player]'
-
-challengedecline:
-  Cmds:
-  - asFakeOp! noppes script trigger 212 [playerName] $1-
-  Help: '&6/challengedecline [player]'
-
-challengecancel:
-  Cmds:
-  - asFakeOp! noppes script trigger 213 [playerName]
-  Help: '&6/challengecancel'
-
-spectaterival:
-  Cmds:
-  - asFakeOp! noppes script trigger 230 [playerName] $1
-  Help: '&6/spectaterival <player>'
+CustomAlias:
+  rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  spectaterival:
+    Cmds:
+    - asFakeOp! noppes script trigger 230 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] declare $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] accept $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaldecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] decline $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalremove:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] remove $1-
+    AddTabs: true
+    ExactMatch: false
+  rivallist:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] list
+    AddTabs: true
+    ExactMatch: true
+  rivalstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] stats $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaltop:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] top $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaltitle:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] title
+    AddTabs: true
+    ExactMatch: true
+  rivaljournal:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] journal $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalseason:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] season
+    AddTabs: true
+    ExactMatch: true
+  rivalquests:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] quests
+    AddTabs: true
+    ExactMatch: true
+  rivalachievements:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] achievements
+    AddTabs: true
+    ExactMatch: true
+  rivalhof:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] hof
+    AddTabs: true
+    ExactMatch: true
+  challengeaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] accept $1-
+    AddTabs: true
+    ExactMatch: false
+  challengedecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] decline $1-
+    AddTabs: true
+    ExactMatch: false
+  challengecancel:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] cancel
+    AddTabs: true
+    ExactMatch: true
