@@ -1,0 +1,4 @@
+# Downloaded Nashorn engine + ASM jars (fetched by the update script / run.sh)
+tools/nashorn/lib/
+# Compiled validator output
+tools/validate/out/
