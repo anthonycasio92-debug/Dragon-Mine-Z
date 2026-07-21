@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.3.0
+ Version: 4.3.1
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1006,6 +1006,22 @@ var RP_KILL_TP_PER_TIER = 75;
 var RP_KILL_TP_MUTUAL_MULT = 1.35;
 var RP_SHOW_KILL_TP = true;
 
+/*
+ * Level-based TP scaling (DMZ getLevel).
+ * Applied to ALL rival TP awards (proximity, challenges, fusion kills).
+ *
+ * Examples with +2.5%/level, cap 4.0x:
+ *  Level 0   = 1.00x
+ *  Level 20  = 1.50x
+ *  Level 40  = 2.00x
+ *  Level 80  = 3.00x
+ *  Level 120+= 4.00x
+ */
+var RIVAL_LEVEL_TP_ENABLED = true;
+var RIVAL_LEVEL_TP_PER_LEVEL = 0.025;
+var RIVAL_LEVEL_TP_CAP = 4.0;
+var RIVAL_LEVEL_TP_SHOW_IN_REASON = true;
+
 /* Surpass rival BP award */
 var RP_SURPASS_ENABLED = true;
 var RP_SURPASS_TP = 5000;
@@ -1284,9 +1300,36 @@ function rpHighestOffense(data) {
     return { key: "STR", value: str };
 }
 
+function rivalGetDmzLevel(data) {
+    try {
+        if (data == null) return 0;
+        var level = Number(data.getLevel());
+        if (isNaN(level) || !isFinite(level)) return 0;
+        return Math.max(0, Math.floor(level));
+    } catch (e) {
+        return 0;
+    }
+}
+
+function rivalLevelTpMultiplier(data) {
+    if (RIVAL_LEVEL_TP_ENABLED !== true) return 1.0;
+    var level = rivalGetDmzLevel(data);
+    var mult = 1.0 + level * Number(RIVAL_LEVEL_TP_PER_LEVEL);
+    if (isNaN(mult) || !isFinite(mult)) return 1.0;
+    if (mult < 1.0) mult = 1.0;
+    if (mult > Number(RIVAL_LEVEL_TP_CAP)) mult = Number(RIVAL_LEVEL_TP_CAP);
+    return mult;
+}
+
+function rivalScaleTpByLevel(data, amount) {
+    var base = Math.floor(Number(amount));
+    if (isNaN(base) || base <= 0) return 0;
+    return Math.max(1, Math.floor(base * rivalLevelTpMultiplier(data)));
+}
+
 function rpAwardTP(player, data, amount, reason) {
     try {
-        amount = Math.floor(rpNumber(amount, 0));
+        amount = rivalScaleTpByLevel(data, amount);
         if (amount <= 0 || data === null) return false;
         var resources = data.getResources();
         if (resources === null) return false;
@@ -1294,8 +1337,14 @@ function rpAwardTP(player, data, amount, reason) {
         var mcPlayer = player.getMCEntity();
         rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
         if (RP_SHOW_KILL_TP) {
+            var note = reason ? String(reason) : "";
+            if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
+                var lvl = rivalGetDmzLevel(data);
+                var m = rivalLevelTpMultiplier(data);
+                note = (note ? note + " | " : "") + "Lv" + lvl + " x" + m.toFixed(2);
+            }
             rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
-                (reason ? RP_COLOR + "7 (" + reason + ")" : ""));
+                (note ? RP_COLOR + "7 (" + note + ")" : ""));
         }
         return true;
     } catch (error) {
@@ -2115,15 +2164,21 @@ function chGetDMZ(player) {
 
 function chAwardTP(player, amount, reason) {
     try {
-        amount = Math.floor(chNumber(amount, 0));
-        if (amount <= 0) return false;
         var data = chGetDMZ(player);
         if (data === null) return false;
+        amount = rivalScaleTpByLevel(data, amount);
+        if (amount <= 0) return false;
         data.getResources().addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
         chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
+        var note = reason ? String(reason) : "";
+        if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
+            note = (note ? note + " | " : "") +
+                "Lv" + rivalGetDmzLevel(data) +
+                " x" + rivalLevelTpMultiplier(data).toFixed(2);
+        }
         chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
-            (reason ? CH_COLOR + "7 (" + reason + ")" : ""));
+            (note ? CH_COLOR + "7 (" + note + ")" : ""));
         return true;
     } catch (error) {
         chMessage(player, CH_COLOR + "c[Challenge] TP award failed: " + error);
@@ -3972,9 +4027,10 @@ function rivalFusionKill(event) {
         var data = rfGetDmz(killer);
         if (data == null) return;
         try {
-            data.getResources().addTrainingPoints(RF_KILL_TP);
+            var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP);
+            data.getResources().addTrainingPoints(killerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
-            rfMsg(killer, RF_C + "a[Rival Fusion] +" + RF_KILL_TP + " TP");
+            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP");
         } catch (e) {}
 
         var partner = rfFindByUuid(partnerId);
@@ -3982,9 +4038,10 @@ function rivalFusionKill(event) {
         var pdata = rfGetDmz(partner);
         if (pdata == null) return;
         try {
-            pdata.getResources().addTrainingPoints(RF_KILL_TP);
+            var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP);
+            pdata.getResources().addTrainingPoints(partnerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
-            rfMsg(partner, RF_C + "a[Rival Fusion] +" + RF_KILL_TP + " TP (partner kill)");
+            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerTp + " TP (partner kill)");
         } catch (e2) {}
     } catch (error) {
         try { print("[RivalDMZHooks] kill " + error); } catch (e3) {}

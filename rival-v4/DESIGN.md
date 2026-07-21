@@ -79,6 +79,14 @@ underdog, surpass, catch-up, mutual fusion bonus, and 60s damage challenges.
 All multipliers live in top-of-section CONFIG blocks inside `Rival System.js`
 (same style as Sparring).
 
+Level TP scaling (DMZ `getLevel()`), applied to every rival TP award:
+
+```js
+RIVAL_LEVEL_TP_ENABLED = true
+RIVAL_LEVEL_TP_PER_LEVEL = 0.025   // +2.5% per level
+RIVAL_LEVEL_TP_CAP = 4.0           // max 4x
+```
+
 ## Storage keys
 
 - `dlr.rivalry.v4.database`
