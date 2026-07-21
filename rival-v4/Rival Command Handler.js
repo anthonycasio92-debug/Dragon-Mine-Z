@@ -859,7 +859,10 @@ function line(player) {
 function argAt(event, index) {
     try {
         if (event.arguments != null && event.arguments.length > index) {
-            return str(event.arguments[index]);
+            var value = str(event.arguments[index]).replace(/^\s+|\s+$/g, "");
+            /* CMI inserts the literal word "null" for missing $1 vars */
+            if (value == "" || lower(value) == "null") return "";
+            return value;
         }
     } catch (e) {}
     return "";
@@ -871,7 +874,8 @@ function argsFrom(event, start) {
         if (event.arguments != null) {
             for (var i = start; i < event.arguments.length; i++) {
                 var piece = str(event.arguments[i]).replace(/^\s+|\s+$/g, "");
-                if (piece != "") out.push(piece);
+                if (piece == "" || lower(piece) == "null") continue;
+                out.push(piece);
             }
         }
     } catch (e) {}

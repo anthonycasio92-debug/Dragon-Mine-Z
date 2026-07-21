@@ -138,39 +138,36 @@ CustomAlias:
 
   # ============================================================
   # Rival System V4 — Rival Command Handler.js
-  # /rival declare <player>  (preferred)
-  # /rivaldeclare <player>   (one-word alias, same as spar style)
+  #
+  # ExactMatch MUST be false when the player types extra args
+  # (player names / categories). ExactMatch:true blocks /cmd <arg>.
+  # Same script-slot as SkillCheck / Sparring Command Handler.
   # ============================================================
   rival:
     Cmds:
     - asFakeOp! noppes script trigger 200 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
-  'rival ?':
-    Cmds:
-    - asFakeOp! noppes script trigger 200 [playerName]
-    AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivaldeclare:
     Cmds:
-    - asFakeOp! noppes script trigger 201 [playerName] $1
+    - asFakeOp! noppes script trigger 201 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivalaccept:
     Cmds:
-    - asFakeOp! noppes script trigger 202 [playerName] $1
+    - asFakeOp! noppes script trigger 202 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivaldecline:
     Cmds:
-    - asFakeOp! noppes script trigger 203 [playerName] $1
+    - asFakeOp! noppes script trigger 203 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivalremove:
     Cmds:
-    - asFakeOp! noppes script trigger 204 [playerName] $1
+    - asFakeOp! noppes script trigger 204 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivallist:
     Cmds:
     - asFakeOp! noppes script trigger 205 [playerName]
@@ -180,12 +177,12 @@ CustomAlias:
     Cmds:
     - asFakeOp! noppes script trigger 206 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivaltop:
     Cmds:
     - asFakeOp! noppes script trigger 220 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivaltitle:
     Cmds:
     - asFakeOp! noppes script trigger 221 [playerName]
@@ -195,7 +192,7 @@ CustomAlias:
     Cmds:
     - asFakeOp! noppes script trigger 222 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   rivalseason:
     Cmds:
     - asFakeOp! noppes script trigger 223 [playerName]
@@ -220,22 +217,17 @@ CustomAlias:
     Cmds:
     - asFakeOp! noppes script trigger 210 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
-  'challenge ?':
-    Cmds:
-    - asConsole! cmi msg [playerName] &cUsage: /challenge <player>
-    AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   challengeaccept:
     Cmds:
     - asFakeOp! noppes script trigger 211 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   challengedecline:
     Cmds:
     - asFakeOp! noppes script trigger 212 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
   challengecancel:
     Cmds:
     - asFakeOp! noppes script trigger 213 [playerName]
@@ -243,6 +235,6 @@ CustomAlias:
     ExactMatch: true
   spectaterival:
     Cmds:
-    - asFakeOp! noppes script trigger 230 [playerName] $1
+    - asFakeOp! noppes script trigger 230 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
