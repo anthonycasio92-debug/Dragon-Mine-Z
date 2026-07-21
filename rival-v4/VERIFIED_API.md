@@ -121,10 +121,12 @@ StatsProvider.get(StatsCapability.INSTANCE, entity) -> LazyOptional<StatsData>
 
 `StatsData` verified methods used by rival scripts:
 
+- `getLevel(): int`  // used for rival TP level scaling
 - `getBattlePower(): float`
 - `getBattlePowerExact(): double`
 - `getCurrentStatValue(String)`  // uppercases; keys STR/SKP/RES/VIT/PWR/ENE
 - `getMeleeDamage()`, `getStrikeDamage()`, `getKiDamage()`
+- `getFormMultiplier(String)`, `getStackFormMultiplier(String)`
 - `getStatScaling(String)`
 - `getResources()`, `getBonusStats()`, `getStats()`, `getStatus()`, `getSkills()`
 
@@ -168,7 +170,7 @@ Methods:
 
 ## DragonMineZ — fusion status (for later modules)
 
-`Status`:
+`Status` (re-verified via `javap` on dragonminez-2.1.3):
 
 - `isFused()`
 - `isFusionLeader()`
@@ -176,7 +178,10 @@ Methods:
 - `getFusionType()`
 - `getFusionName()`
 - `isChargingKi()`
+- `isActionCharging()`
 - `isAuraActive()`
+
+`NpcAPI.getIWorlds()` is present (used for cross-world online lookups).
 
 ## DragonMineZ — ki projectile class
 

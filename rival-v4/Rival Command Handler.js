@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.4.0
+ Version: 4.5.0
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -54,10 +54,11 @@ var PROG_KEY = "dlr.rivalry.v4.progression";
 
 /*
  Statuses: unknown | declared | mutual | nemesis
- Mutual+Nemesis share MAX_MUTUAL slots. Declared/Unknown unlimited.
+ Max 2 Mutual (3rd demotes oldest). One Nemesis from history.
+ Declared/Unknown unlimited. RP from official battles only.
 */
 var MAX_MUTUAL = 2;
-var NEMESIS_RP = 1500;
+var MS_PER_DAY = 24 * 60 * 60 * 1000;
 var REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var DECLARE_COOLDOWN_MS = 30 * 1000;
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
@@ -242,7 +243,7 @@ function findRecord(db, name) {
 function linkStatus(link) {
     if (link == null) return "none";
     if (link.mutual === true) {
-        if (num(link.points, 0) >= NEMESIS_RP) return "nemesis";
+        if (link.isNemesis === true) return "nemesis";
         return "mutual";
     }
     if (link.declaredByMe === true) return "declared";
@@ -266,17 +267,21 @@ function refreshLinkStatus(link) {
 
 function ensureLink(owner, target) {
     if (owner.rivals[target.uuid] == null) {
+        var t = now();
         owner.rivals[target.uuid] = {
             uuid: target.uuid, name: target.name, nameLower: lower(target.name),
-            mutual: false, declaredByMe: false, declaredByThem: false, status: "none",
-            points: 0, wins: 0, losses: 0, draws: 0, damageDealt: 0, damageTaken: 0,
-            presenceMs: 0, createdAt: now(), updatedAt: now(), mutualSince: 0,
-            lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
+            mutual: false, declaredByMe: false, declaredByThem: false, isNemesis: false, status: "none",
+            points: 0, wins: 0, losses: 0, draws: 0, battles: 0,
+            currentStreak: 0, bestStreak: 0,
+            damageDealt: 0, damageTaken: 0, timeFoughtMs: 0,
+            presenceMs: 0, createdAt: t, firstMetAt: t, firstBattleAt: 0,
+            updatedAt: t, mutualSince: 0, lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
         };
     }
     var link = owner.rivals[target.uuid];
     link.name = target.name;
     link.updatedAt = now();
+    if (link.isNemesis !== true) link.isNemesis = false;
     refreshLinkStatus(link);
     return link;
 }
@@ -294,6 +299,96 @@ function countMutual(rec) {
         if (rec.rivals[u].mutual === true) c++;
     }
     return c;
+}
+
+function nemesisScore(link) {
+    if (link == null || link.mutual !== true) return -1;
+    var battles = num(link.battles, 0);
+    if (battles <= 0) battles = num(link.wins, 0) + num(link.losses, 0) + num(link.draws, 0);
+    var ageDays = Math.max(0, now() - num(link.mutualSince, link.firstMetAt || link.createdAt || 0)) / MS_PER_DAY;
+    return battles * 10 + num(link.wins, 0) * 5 + num(link.losses, 0) * 3 +
+        num(link.points, 0) * 0.05 + ageDays * 2 + num(link.timeFoughtMs, 0) / 60000.0;
+}
+
+function recomputeNemesis(rec) {
+    if (rec == null || rec.rivals == null) return null;
+    var bestUuid = null;
+    var bestScore = -1;
+    var prev = str(rec.nemesisUuid);
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        rec.rivals[u].isNemesis = false;
+        if (rec.rivals[u].mutual !== true) continue;
+        var sc = nemesisScore(rec.rivals[u]);
+        if (sc > bestScore) { bestScore = sc; bestUuid = u; }
+    }
+    if (bestUuid != null) {
+        var fights = num(rec.rivals[bestUuid].battles, 0);
+        if (fights <= 0) fights = num(rec.rivals[bestUuid].wins, 0) +
+            num(rec.rivals[bestUuid].losses, 0) + num(rec.rivals[bestUuid].draws, 0);
+        if (fights <= 0) bestUuid = null;
+    }
+    if (bestUuid != null) {
+        rec.rivals[bestUuid].isNemesis = true;
+        rec.nemesisUuid = bestUuid;
+    } else {
+        rec.nemesisUuid = "";
+    }
+    for (var u2 in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u2)) continue;
+        refreshLinkStatus(rec.rivals[u2]);
+    }
+    if (bestUuid != null && bestUuid !== prev) {
+        var online = onlineByName(rec.name);
+        if (online != null) {
+            msg(online, C + "c" + C + "lNEMESIS! " + C + "e" + rec.rivals[bestUuid].name +
+                C + "7 is now your greatest rival.");
+        }
+    }
+    return bestUuid;
+}
+
+function findOldestMutual(rec, excludeUuid) {
+    var oldest = null;
+    var oldestSince = Number.POSITIVE_INFINITY;
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        if (excludeUuid && u === excludeUuid) continue;
+        if (rec.rivals[u].mutual !== true) continue;
+        var since = num(rec.rivals[u].mutualSince, rec.rivals[u].firstMetAt || rec.rivals[u].createdAt || 0);
+        if (since < oldestSince) { oldestSince = since; oldest = u; }
+    }
+    return oldest;
+}
+
+function demoteMutualPair(db, owner, rivalUuid) {
+    var link = owner.rivals[rivalUuid];
+    if (link == null || link.mutual !== true) return;
+    var rivalName = str(link.name);
+    link.mutual = false; link.isNemesis = false; link.mutualSince = 0;
+    refreshLinkStatus(link);
+    pushHistory(link, "demoted", "Oldest mutual demoted");
+    var other = db.players[rivalUuid];
+    if (other != null && other.rivals[owner.uuid] != null) {
+        var ol = other.rivals[owner.uuid];
+        ol.mutual = false; ol.isNemesis = false; ol.mutualSince = 0;
+        refreshLinkStatus(ol);
+        pushHistory(ol, "demoted", "Mutual demoted");
+        recomputeNemesis(other);
+        var oo = onlineByName(other.name);
+        if (oo != null) msg(oo, C + "eMutual with " + owner.name + " demoted to Declared.");
+    }
+    recomputeNemesis(owner);
+    var ow = onlineByName(owner.name);
+    if (ow != null) msg(ow, C + "eOldest mutual with " + rivalName + " demoted to make room.");
+}
+
+function ensureMutualRoom(db, rec, excludeUuid) {
+    while (countMutual(rec) >= MAX_MUTUAL) {
+        var oldest = findOldestMutual(rec, excludeUuid);
+        if (oldest == null) break;
+        demoteMutualPair(db, rec, oldest);
+    }
 }
 
 function reqKey(a, b) { return a + ">" + b; }
@@ -315,15 +410,21 @@ function removeRequests(db, a, b) {
 }
 
 function formMutual(db, a, b, note) {
+    ensureMutualRoom(db, a, b.uuid);
+    ensureMutualRoom(db, b, a.uuid);
     var la = ensureLink(a, b);
     var lb = ensureLink(b, a);
     var t = now();
     la.mutual = true; la.declaredByMe = true; la.declaredByThem = true; la.mutualSince = t;
+    if (num(la.firstMetAt, 0) <= 0) la.firstMetAt = t;
     lb.mutual = true; lb.declaredByMe = true; lb.declaredByThem = true; lb.mutualSince = t;
+    if (num(lb.firstMetAt, 0) <= 0) lb.firstMetAt = t;
     refreshLinkStatus(la);
     refreshLinkStatus(lb);
     pushHistory(la, "mutual", note);
     pushHistory(lb, "mutual", note);
+    recomputeNemesis(a);
+    recomputeNemesis(b);
 }
 
 function areRelated(db, a, b) {
@@ -361,8 +462,9 @@ function cmdHelp(player) {
     message(player, C + "6" + C + "lRival System");
     line(player);
     message(player, C + "6Statuses: " + C + "7Unknown → Declared → Mutual → Nemesis");
-    message(player, C + "7Max " + MAX_MUTUAL + " Mutual/Nemesis | Declared & Unknown unlimited");
-    message(player, C + "7Nemesis at " + commas(NEMESIS_RP) + "+ RP with a mutual rival");
+    message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest) | Declared & Unknown unlimited");
+    message(player, C + "7One Nemesis — auto from official battle history");
+    message(player, C + "7RP from official battles only (instinct, titles, records — not raw power)");
     line(player);
     message(player, C + "e/rival <player>  " + C + "8(or /rival declare <player>)");
     message(player, C + "e/rival accept|decline|remove <player>");
@@ -400,9 +502,6 @@ function cmdDeclare(player, targetName) {
 
     var reverse = getRequest(db, tu, pu);
     if (reverse != null) {
-        if (countMutual(pref) >= MAX_MUTUAL || countMutual(tref) >= MAX_MUTUAL) {
-            msg(player, C + "cMutual/Nemesis limit reached (max " + MAX_MUTUAL + ")."); return;
-        }
         formMutual(db, pref, tref, "Crossed declarations");
         removeRequests(db, pu, tu);
         db.cooldowns[cdKey] = now();
@@ -410,7 +509,9 @@ function cmdDeclare(player, targetName) {
         tref.totals.declarationsAccepted++;
         saveDb(db);
         msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + tref.name);
+        msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
         msg(target, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name);
+        msg(target, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
         return;
     }
 
@@ -448,20 +549,17 @@ function cmdAccept(player, fromName) {
     if (getRequest(db, from.uuid, pref.uuid) == null) {
         msg(player, C + "cNo active request from " + from.name); return;
     }
-    if (countMutual(pref) >= MAX_MUTUAL || countMutual(from) >= MAX_MUTUAL) {
-        msg(player, C + "cMutual/Nemesis limit reached (max " + MAX_MUTUAL + ")."); return;
-    }
     formMutual(db, pref, from, "Accepted");
     removeRequests(db, from.uuid, pref.uuid);
     pref.totals.declarationsAccepted++;
     from.totals.declarationsAccepted++;
     saveDb(db);
     msg(player, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + from.name);
-    msg(player, C + "7Reach " + C + "f" + commas(NEMESIS_RP) + C + "7 RP with them to ascend to Nemesis.");
+    msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
     var online = onlineByName(from.name);
     if (online != null) {
         msg(online, C + "6" + C + "lMUTUAL RIVAL! " + C + "e" + pref.name + C + "a accepted!");
-        msg(online, C + "7Reach " + C + "f" + commas(NEMESIS_RP) + C + "7 RP to become Nemeses.");
+        msg(online, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
     }
 }
 
@@ -506,6 +604,13 @@ function cmdRemove(player, targetName) {
     }
     removeRequests(db, pref.uuid, target.uuid);
     pref.totals.rivalsRemoved++;
+    if (wasMutual) {
+        if (target.rivals[pref.uuid] != null) {
+            target.rivals[pref.uuid].isNemesis = false;
+            recomputeNemesis(target);
+        }
+        recomputeNemesis(pref);
+    }
     saveDb(db);
     msg(player, C + "eRemoved rivalry with " + target.name);
     var online = onlineByName(target.name);
@@ -519,8 +624,11 @@ function cmdList(player) {
     msg(player, C + "6========== Your Rivals ==========");
     msg(player, C + "7Career RP: " + C + "f" + commas(pref.career.rivalPointsTotal) +
         C + "7 | " + C + "a" + pref.career.officialWins + C + "7-" + C + "c" + pref.career.officialLosses);
-    msg(player, C + "7Mutual/Nemesis: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
+    var nemName = "-";
+    if (pref.nemesisUuid && pref.rivals[pref.nemesisUuid]) nemName = pref.rivals[pref.nemesisUuid].name;
+    msg(player, C + "7Mutual: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
         C + "8  | Declared & Unknown unlimited");
+    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto — only one)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var u in pref.rivals) {
@@ -855,12 +963,14 @@ function showAchievements(player) {
 function showHof(player) {
     var prog = loadJson(PROG_KEY);
     var hof = prog != null && prog.hallOfFame != null ? prog.hallOfFame : {};
-    msg(player, C + "6===== Hall of Fame =====");
+    msg(player, C + "6===== Hall of Legends =====");
+    msg(player, C + "7Greatest Rivals: " + C + "f" + (hof.greatestRivals || "-"));
+    msg(player, C + "7Longest Rivalry: " + C + "f" + (hof.longestRivalry || "-"));
+    msg(player, C + "7Most Battles: " + C + "f" + (hof.mostBattles || hof.mostLegendary || "-"));
+    msg(player, C + "7Best Win Streak: " + C + "f" + (hof.longestStreak || "-"));
+    msg(player, C + "7Most Legendary Match: " + C + "f" + (hof.mostLegendaryMatch || "-"));
     msg(player, C + "7Season Champion: " + C + "f" + (hof.seasonChampion || "-"));
     msg(player, C + "7Highest RP: " + C + "f" + (hof.highestRp || "-"));
-    msg(player, C + "7Longest Streak: " + C + "f" + (hof.longestStreak || "-"));
-    msg(player, C + "7Greatest Comeback: " + C + "f" + (hof.greatestComeback || "-"));
-    msg(player, C + "7Most Battles: " + C + "f" + (hof.mostLegendary || "-"));
 }
 
 function showSpectate(player, targetName) {

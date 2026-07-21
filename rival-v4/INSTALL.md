@@ -1,4 +1,4 @@
-# Rival System V4.4 — Install Guide
+# Rival System V4.5 — Install Guide
 
 ## Final layout (3 scripts)
 
@@ -54,13 +54,14 @@ Rival pattern (matches your spar aliases):
 ```yaml
   rivaldeclare:
     Cmds:
-    - asFakeOp! noppes script trigger 201 [playerName] $1
+    - asFakeOp! noppes script trigger 201 [playerName] $1-
     AddTabs: true
-    ExactMatch: true
+    ExactMatch: false
 ```
 
 - `[playerName]` = argument 0 (required)
-- `$1` / `$1-` = extra args after the player name
+- `$1-` = remaining typed args (player names, subcommands)
+- Use `ExactMatch: false` whenever the command takes player-typed arguments
 
 ## 6) CMI title placeholder
 
@@ -80,8 +81,10 @@ Nametag/tab (if enabled):
 |---|---|---|
 | Unknown | They declared you | Unlimited |
 | Declared | You declared them | Unlimited |
-| Mutual | Both accepted | Max **2** (shared with Nemesis) |
-| Nemesis | Mutual + **1500+ RP** on that link | Counts as a Mutual slot |
+| Mutual | Both accepted — real rivalry | Max **2** (3rd demotes oldest) |
+| Nemesis | Greatest mutual by battle history | **Only 1** (automatic) |
+
+RP comes from **official Mutual battles only**. Instinct / titles / Hall of Legends unlock from that history.
 
 ## 8) Coverage
 

@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.4.0
+ Version: 4.5.0
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -60,17 +60,20 @@ var RC_VERSION = 4;
 var RC_COLOR = String.fromCharCode(167);
 
 /*
- Rival relationship statuses (per-link):
+ Rival relationship statuses (per-link) — original concept:
   unknown  — they declared you (incoming); unlimited
   declared — you declared them (one-sided); unlimited
-  mutual   — both accepted; max RC_MAX_MUTUAL_RIVALS (shared with nemesis)
-  nemesis  — mutual upgraded at RC_NEMESIS_RP; counts as a mutual slot
+  mutual   — both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
+  nemesis  — your single greatest mutual rival (history-chosen, only ONE)
+
+ If a 3rd mutual would form, the oldest mutual is demoted automatically.
+ Nemesis is recomputed from battles / wins / losses / rivalry age — not an RP gate.
 */
 var RC_MAX_MUTUAL_RIVALS = 2;
-var RC_NEMESIS_RP = 1500;
 var RC_REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var RC_DECLARE_COOLDOWN_MS = 30 * 1000;
 var RC_HISTORY_LIMIT = 30;
+var RC_MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 var RC_DATABASE_KEY = "dlr.rivalry.v4.database";
 var RC_BACKUP_KEY = "dlr.rivalry.v4.database.backup";
@@ -344,7 +347,7 @@ function rcNormalizeCareer(career) {
 function rcLinkStatus(link) {
     if (link === null || link === undefined) return "none";
     if (link.mutual === true) {
-        if (rcNumber(link.points, 0) >= RC_NEMESIS_RP) return "nemesis";
+        if (link.isNemesis === true) return "nemesis";
         return "mutual";
     }
     if (link.declaredByMe === true) return "declared";
@@ -374,14 +377,21 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.mutual = link.mutual === true;
     link.declaredByMe = link.declaredByMe === true;
     link.declaredByThem = link.declaredByThem === true;
+    link.isNemesis = link.isNemesis === true && link.mutual === true;
     link.points = Math.max(0, rcNumber(link.points, 0));
     link.wins = rcNumber(link.wins, 0);
     link.losses = rcNumber(link.losses, 0);
     link.draws = rcNumber(link.draws, 0);
+    link.currentStreak = rcNumber(link.currentStreak, 0);
+    link.bestStreak = rcNumber(link.bestStreak, 0);
     link.damageDealt = rcNumber(link.damageDealt, 0);
     link.damageTaken = rcNumber(link.damageTaken, 0);
+    link.timeFoughtMs = rcNumber(link.timeFoughtMs, 0);
+    link.battles = rcNumber(link.battles, link.wins + link.losses + link.draws);
     link.presenceMs = rcNumber(link.presenceMs, 0);
     link.createdAt = rcNumber(link.createdAt, rcNow());
+    link.firstMetAt = rcNumber(link.firstMetAt, link.createdAt);
+    link.firstBattleAt = rcNumber(link.firstBattleAt, 0);
     link.updatedAt = rcNumber(link.updatedAt, rcNow());
     link.mutualSince = rcNumber(link.mutualSince, 0);
     link.lastBattleAt = rcNumber(link.lastBattleAt, 0);
@@ -470,7 +480,7 @@ function rcFindOnlinePlayerAnyWorld(name) {
     return null;
 }
 
-/* Mutual + Nemesis share the same slot limit (max 2). */
+/* Mutual rivals only — Nemesis is one of those mutuals (max 1 Nemesis). */
 function rcCountMutual(record) {
     var count = 0;
     for (var uuid in record.rivals) {
@@ -487,6 +497,135 @@ function rcCountByStatus(record, status) {
         if (rcLinkStatus(record.rivals[uuid]) === status) count++;
     }
     return count;
+}
+
+/* History score: fight most, beat most, lose most, longest rivalry. */
+function rcNemesisScore(link) {
+    if (link === null || link.mutual !== true) return -1;
+    var battles = rcNumber(link.battles, 0);
+    if (battles <= 0) battles = rcNumber(link.wins, 0) + rcNumber(link.losses, 0) + rcNumber(link.draws, 0);
+    var ageMs = Math.max(0, rcNow() - rcNumber(link.mutualSince, link.firstMetAt || link.createdAt || 0));
+    var ageDays = ageMs / RC_MS_PER_DAY;
+    var foughtMin = rcNumber(link.timeFoughtMs, 0) / 60000.0;
+    return battles * 10 +
+        rcNumber(link.wins, 0) * 5 +
+        rcNumber(link.losses, 0) * 3 +
+        rcNumber(link.points, 0) * 0.05 +
+        ageDays * 2 +
+        foughtMin;
+}
+
+function rcRecomputeNemesis(record) {
+    if (record === null || record.rivals === null) return null;
+    var bestUuid = null;
+    var bestScore = -1;
+    var prevUuid = rcString(record.nemesisUuid);
+
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        var link = record.rivals[uuid];
+        link.isNemesis = false;
+        if (link.mutual !== true) continue;
+        var score = rcNemesisScore(link);
+        if (score > bestScore) {
+            bestScore = score;
+            bestUuid = uuid;
+        }
+    }
+
+    /* Need real history before crowning a Nemesis (at least one official battle). */
+    if (bestUuid !== null) {
+        var best = record.rivals[bestUuid];
+        var fights = rcNumber(best.battles, 0);
+        if (fights <= 0) fights = rcNumber(best.wins, 0) + rcNumber(best.losses, 0) + rcNumber(best.draws, 0);
+        if (fights <= 0) bestUuid = null;
+    }
+
+    if (bestUuid !== null) {
+        record.rivals[bestUuid].isNemesis = true;
+        record.nemesisUuid = bestUuid;
+        rcRefreshLinkStatus(record.rivals[bestUuid]);
+    } else {
+        record.nemesisUuid = "";
+    }
+
+    for (var u2 in record.rivals) {
+        if (!record.rivals.hasOwnProperty(u2)) continue;
+        rcRefreshLinkStatus(record.rivals[u2]);
+    }
+
+    if (bestUuid !== null && bestUuid !== prevUuid) {
+        var online = rcFindOnlinePlayerAnyWorld(record.name);
+        if (online !== null) {
+            rcMessage(online, RC_COLOR + "c" + RC_COLOR + "lNEMESIS! " +
+                RC_COLOR + "e" + record.rivals[bestUuid].name +
+                RC_COLOR + "7 is now your greatest rival.");
+        }
+    }
+    return bestUuid;
+}
+
+function rcFindOldestMutualUuid(record, excludeUuid) {
+    var oldestUuid = null;
+    var oldestSince = Number.POSITIVE_INFINITY;
+    for (var uuid in record.rivals) {
+        if (!record.rivals.hasOwnProperty(uuid)) continue;
+        if (excludeUuid && uuid === excludeUuid) continue;
+        var link = record.rivals[uuid];
+        if (link.mutual !== true) continue;
+        var since = rcNumber(link.mutualSince, link.firstMetAt || link.createdAt || 0);
+        if (since < oldestSince) {
+            oldestSince = since;
+            oldestUuid = uuid;
+        }
+    }
+    return oldestUuid;
+}
+
+/* Demote a mutual bond on both sides back to Declared (still declared both ways). */
+function rcDemoteMutualPair(database, ownerRecord, rivalUuid, reason) {
+    var link = ownerRecord.rivals[rivalUuid];
+    if (link === null || link === undefined || link.mutual !== true) return null;
+
+    var rivalName = rcString(link.name);
+    link.mutual = false;
+    link.isNemesis = false;
+    link.mutualSince = 0;
+    rcRefreshLinkStatus(link);
+    rcPushHistory(link, "demoted", reason || "Oldest mutual demoted for a new rivalry");
+
+    var other = database.players[rivalUuid];
+    if (other !== null && other !== undefined && other.rivals[ownerRecord.uuid] !== undefined) {
+        var ol = other.rivals[ownerRecord.uuid];
+        ol.mutual = false;
+        ol.isNemesis = false;
+        ol.mutualSince = 0;
+        rcRefreshLinkStatus(ol);
+        rcPushHistory(ol, "demoted", reason || "Mutual demoted");
+        rcRecomputeNemesis(other);
+        var otherOnline = rcFindOnlinePlayerAnyWorld(other.name);
+        if (otherOnline !== null) {
+            rcMessage(otherOnline, RC_COLOR + "eYour mutual rivalry with " + ownerRecord.name +
+                " was demoted to Declared (they formed a new mutual rivalry).");
+        }
+    }
+
+    rcRecomputeNemesis(ownerRecord);
+    var ownerOnline = rcFindOnlinePlayerAnyWorld(ownerRecord.name);
+    if (ownerOnline !== null) {
+        rcMessage(ownerOnline, RC_COLOR + "eOldest mutual with " + rivalName +
+            " demoted to Declared to make room.");
+    }
+    return rivalName;
+}
+
+/* Ensure room for one more mutual by demoting oldest if needed. */
+function rcEnsureMutualRoom(database, record, excludeUuid) {
+    while (rcCountMutual(record) >= RC_MAX_MUTUAL_RIVALS) {
+        var oldest = rcFindOldestMutualUuid(record, excludeUuid);
+        if (oldest === null) break;
+        rcDemoteMutualPair(database, record, oldest, "Demoted oldest mutual for new rivalry");
+    }
 }
 
 function rcGetOrCreateRival(ownerRecord, targetRecord) {
@@ -549,23 +688,13 @@ function rcAwardRivalPoints(database, ownerRecord, rivalUuid, amount, reason) {
     var link = ownerRecord.rivals[rivalUuid];
     if (link === null || link === undefined) return 0;
 
-    var before = rcLinkStatus(link);
     link.points = Math.max(0, rcNumber(link.points, 0) + amount);
     link.updatedAt = rcNow();
     rcPushHistory(link, amount >= 0 ? "rp_gain" : "rp_loss", reason + " (" + amount + ")");
-    var after = rcRefreshLinkStatus(link);
+    rcRefreshLinkStatus(link);
     rcRecalcCareerRp(ownerRecord);
     rcUpdateLeaderboard(database, ownerRecord);
-
-    if (before !== "nemesis" && after === "nemesis") {
-        rcPushHistory(link, "nemesis", "Rivalry ascended to Nemesis");
-        var online = rcFindOnlinePlayerAnyWorld(ownerRecord.name);
-        if (online !== null) {
-            rcMessage(online, RC_COLOR + "c" + RC_COLOR + "lNEMESIS! " +
-                RC_COLOR + "e" + link.name + RC_COLOR + "7 is now your Nemesis (" +
-                RC_COLOR + "f" + rcCommas(RC_NEMESIS_RP) + "+ RP" + RC_COLOR + "7).");
-        }
-    }
+    if (link.mutual === true) rcRecomputeNemesis(ownerRecord);
     return amount;
 }
 
@@ -607,6 +736,10 @@ function rcCleanupExpiredRequests(database) {
 /* ========================= CORE OPERATIONS ========================= */
 
 function rcFormMutual(database, playerRecord, targetRecord, note) {
+    /* Max 2 mutuals — demote oldest automatically if needed. */
+    rcEnsureMutualRoom(database, playerRecord, targetRecord.uuid);
+    rcEnsureMutualRoom(database, targetRecord, playerRecord.uuid);
+
     var now = rcNow();
     var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
     var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
@@ -615,6 +748,7 @@ function rcFormMutual(database, playerRecord, targetRecord, note) {
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = true;
     playerRival.mutualSince = now;
+    if (rcNumber(playerRival.firstMetAt, 0) <= 0) playerRival.firstMetAt = now;
     rcRefreshLinkStatus(playerRival);
     rcPushHistory(playerRival, "mutual", note);
 
@@ -622,9 +756,12 @@ function rcFormMutual(database, playerRecord, targetRecord, note) {
     targetRival.declaredByMe = true;
     targetRival.declaredByThem = true;
     targetRival.mutualSince = now;
+    if (rcNumber(targetRival.firstMetAt, 0) <= 0) targetRival.firstMetAt = now;
     rcRefreshLinkStatus(targetRival);
     rcPushHistory(targetRival, "mutual", note);
 
+    rcRecomputeNemesis(playerRecord);
+    rcRecomputeNemesis(targetRecord);
     rcRecalcCareerRp(playerRecord);
     rcRecalcCareerRp(targetRecord);
     rcUpdateLeaderboard(database, playerRecord);
@@ -680,17 +817,6 @@ function rcDeclare(player, targetName) {
 
     var reverseRequest = rcGetRequest(database, targetUuid, playerUuid);
     if (reverseRequest !== null) {
-        if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
-            rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_MUTUAL_RIVALS +
-                " mutual/nemesis rivals (max " + RC_MAX_MUTUAL_RIVALS + ").");
-            return;
-        }
-        if (rcCountMutual(targetRecord) >= RC_MAX_MUTUAL_RIVALS) {
-            rcMessage(player, RC_COLOR + "c" + targetRecord.name +
-                " already has " + RC_MAX_MUTUAL_RIVALS + " mutual/nemesis rivals.");
-            return;
-        }
-
         rcFormMutual(database, playerRecord, targetRecord, "Crossed declarations became mutual.");
         rcRemoveRequestsBetween(database, playerUuid, targetUuid);
         database.cooldowns[cooldownKey] = rcNow();
@@ -699,7 +825,9 @@ function rcDeclare(player, targetName) {
         rcSaveDatabase(player, database);
 
         rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + targetRecord.name);
+        rcMessage(player, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
         rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
+        rcMessage(target, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
         return;
     }
 
@@ -764,17 +892,6 @@ function rcAccept(player, targetName) {
         return;
     }
 
-    if (rcCountMutual(playerRecord) >= RC_MAX_MUTUAL_RIVALS) {
-        rcMessage(player, RC_COLOR + "cYou already have " + RC_MAX_MUTUAL_RIVALS +
-            " mutual/nemesis rivals (max " + RC_MAX_MUTUAL_RIVALS + ").");
-        return;
-    }
-    if (rcCountMutual(fromRecord) >= RC_MAX_MUTUAL_RIVALS) {
-        rcMessage(player, RC_COLOR + "c" + fromRecord.name +
-            " already has " + RC_MAX_MUTUAL_RIVALS + " mutual/nemesis rivals.");
-        return;
-    }
-
     rcFormMutual(database, playerRecord, fromRecord, "Request accepted.");
     rcRemoveRequestsBetween(database, fromRecord.uuid, playerRecord.uuid);
     playerRecord.totals.declarationsAccepted++;
@@ -782,13 +899,13 @@ function rcAccept(player, targetName) {
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + fromRecord.name);
-    rcMessage(player, RC_COLOR + "7Reach " + RC_COLOR + "f" + rcCommas(RC_NEMESIS_RP) +
-        RC_COLOR + "7 RP with them to ascend to Nemesis.");
+    rcMessage(player, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
 
     var online = rcFindOnlinePlayerAnyWorld(fromRecord.name);
     if (online !== null) {
         rcMessage(online, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " +
             RC_COLOR + "e" + playerRecord.name + RC_COLOR + "a accepted!");
+        rcMessage(online, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
     }
 }
 
@@ -887,9 +1004,15 @@ function rcList(player) {
     rcMessage(player, RC_COLOR + "7Career RP: " + RC_COLOR + "f" + rcCommas(record.career.rivalPointsTotal) +
         RC_COLOR + "7  |  Record: " + RC_COLOR + "a" + record.career.officialWins +
         RC_COLOR + "7-" + RC_COLOR + "c" + record.career.officialLosses);
-    rcMessage(player, RC_COLOR + "7Slots: " + RC_COLOR + "6Mutual/Nemesis " +
+    var nemName = "-";
+    if (record.nemesisUuid && record.rivals[record.nemesisUuid]) {
+        nemName = record.rivals[record.nemesisUuid].name;
+    }
+    rcMessage(player, RC_COLOR + "7Slots: " + RC_COLOR + "6Mutual " +
         RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
         RC_COLOR + "8  | Declared/Unknown unlimited");
+    rcMessage(player, RC_COLOR + "7Nemesis: " + RC_COLOR + "c" + nemName +
+        RC_COLOR + "8  (auto — only one, from history)");
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var uuid in record.rivals) {
@@ -939,14 +1062,17 @@ function rcList(player) {
 
 function rcHelp(player) {
     rcMessage(player, RC_COLOR + "6===== Rival System V4 =====");
+    rcMessage(player, RC_COLOR + "7Statuses: Unknown → Declared → Mutual → Nemesis");
+    rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
+    rcMessage(player, RC_COLOR + "7RP from official battles only — unlocks instinct, titles, records.");
     rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
     rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
     rcMessage(player, RC_COLOR + "e/rival decline <player> " + RC_COLOR + "7- Decline a request");
     rcMessage(player, RC_COLOR + "e/rival remove <player> " + RC_COLOR + "7- End a rivalry");
-    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + RP tiers");
+    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + history");
     rcMessage(player, RC_COLOR + "e/rival stats [player] " + RC_COLOR + "7- Career statistics");
-    rcMessage(player, RC_COLOR + "e/challenge rival <player> " + RC_COLOR + "7- 60s damage contest");
-    rcMessage(player, RC_COLOR + "7Near rivals for offensive bonuses, kill TP, and RP growth.");
+    rcMessage(player, RC_COLOR + "e/challenge <player> " + RC_COLOR + "7- Official 60s rival battle");
+    rcMessage(player, RC_COLOR + "e/rival hof " + RC_COLOR + "7- Hall of Legends");
 }
 
 /* ========================= EVENTS ========================= */
@@ -1054,7 +1180,13 @@ var RP_RANGE_PER_TIER = 8;
 var RP_MAX_RANGE = 160;
 
 /* Offensive proximity bonus on highest of STR / SKP */
-var RP_BASE_OFFENSE_BONUS = 0.04;      // +4% at Acquaintance
+/*
+ Original concept: RP unlocks sensing / records / titles — NOT raw combat stats.
+ Offense bonus stays off; proximity is for instinct presence only.
+*/
+var RP_OFFENSE_ENABLED = false;
+var RP_PRESENCE_RP_ENABLED = false;
+var RP_BASE_OFFENSE_BONUS = 0.04;      // unused while RP_OFFENSE_ENABLED is false
 var RP_OFFENSE_PER_TIER = 0.025;       // +2.5% per tier above
 var RP_PRESENCE_BONUS_CAP = 0.12;      // extra +12% from long presence
 var RP_PRESENCE_FULL_MS = 10 * 60 * 1000;
@@ -1302,25 +1434,23 @@ function rpRecalcCareerRp(record) {
 }
 
 function rpAwardPoints(record, rivalUuid, amount, reason) {
+    /* Official-battle-only RP: proximity / underdog / anti-gank must not award RP. */
+    var reasonKey = rpString(reason).toLowerCase();
+    if (reasonKey.indexOf("challenge") < 0 && reasonKey.indexOf("official") < 0) {
+        return 0;
+    }
     var link = rpGetLink(record, rivalUuid);
     if (link === null) return 0;
     amount = Math.floor(rpNumber(amount, 0));
     if (amount === 0) return 0;
-    var before = rcLinkStatus(link);
     link.points = Math.max(0, rpNumber(link.points, 0) + amount);
     link.updatedAt = rpNow();
     if (!(link.history instanceof Array)) link.history = [];
     link.history.push({ time: rpNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
     while (link.history.length > 30) link.history.shift();
-    var after = rcRefreshLinkStatus(link);
+    rcRefreshLinkStatus(link);
     rpRecalcCareerRp(record);
-    if (before !== "nemesis" && after === "nemesis") {
-        var online = rpFindOnlineByUuid(record.uuid);
-        if (online !== null) {
-            rpMessage(online, RP_COLOR + "c" + RP_COLOR + "lNEMESIS! " +
-                RP_COLOR + "e" + link.name + RP_COLOR + "7 (" + rpCommas(RC_NEMESIS_RP) + "+ RP)");
-        }
-    }
+    if (link.mutual === true) rcRecomputeNemesis(record);
     return amount;
 }
 
@@ -1524,6 +1654,16 @@ function rpApplyOffenseBonus(player, data, multiplier) {
 
         rpClearOffenseBonus(bonusStats);
 
+        if (RP_OFFENSE_ENABLED !== true) {
+            try {
+                rpNetwork().sendToTrackingEntityAndSelf(
+                    new (rpSyncPacket())(player.getMCEntity()),
+                    player.getMCEntity()
+                );
+            } catch (ignoredOff) {}
+            return false;
+        }
+
         multiplier = rpNumber(multiplier, 1.0);
         if (multiplier <= 1.001) {
             try {
@@ -1677,12 +1817,12 @@ function rpProcessPlayer(player) {
         */
         var presenceKey = "rival.v4.presenceRp." + rivalUuid;
         var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
-        if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
-            var linkStatus = rcLinkStatus(link);
-            var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
-            if (linkStatus === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
-            if (linkStatus === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
-            rpAwardPoints(record, rivalUuid, presenceRp, "presence");
+        /* Presence tracks history time near rivals; RP only from official battles. */
+        if (RP_PRESENCE_RP_ENABLED === true && now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
+            rpTempPut(temp, presenceKey, now);
+        } else if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
+            link.presenceMs = rpNumber(link.presenceMs, 0) + RP_PRESENCE_RP_INTERVAL_MS;
+            link.lastSeenTogetherAt = now;
             dirty = true;
             rpTempPut(temp, presenceKey, now);
         }
@@ -1742,7 +1882,6 @@ function rpHandleKillNearRivals(killer, victim) {
             var victimReleased = rpGetReleasedBP(victimData);
             if (victimReleased > killerReleased) {
                 rpAwardTP(killer, killerData, RP_UNDERDOG_WIN_TP, "Underdog victory vs " + directLink.name);
-                rpAwardPoints(record, victimUuid, RP_UNDERDOG_WIN_RP, "underdog_win");
                 dirty = true;
             }
         }
@@ -1778,7 +1917,6 @@ function rpHandleKillNearRivals(killer, victim) {
         var rivalReleased = rpGetReleasedBP(rivalData);
         if (killerReleased > 0 && rivalReleased <= killerReleased * RP_ANTIGANK_RATIO) {
             rpAwardTP(killer, killerData, RP_ANTIGANK_WITNESS_KILL_TP, "Rivals watching");
-            rpAwardPoints(rivalRecord, killerUuid, RP_ANTIGANK_WITNESS_RP, "witness_kill");
             dirty = true;
         }
     }
@@ -1868,7 +2006,6 @@ function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
         if (rivalReleased > victimReleased * RP_ANTIGANK_RATIO) continue;
 
         rpAwardTP(rivalPlayer, rivalData, RP_ANTIGANK_HIT_TP, "Rival under fire");
-        rpAwardPoints(rivalRecord, victimUuid, RP_ANTIGANK_HIT_RP, "target_hit");
         dirty = true;
     }
 
@@ -1904,10 +2041,12 @@ function rpHandleDeathToRival(victim, damageSource) {
 
     var myData = rpGetDMZ(victim);
     var theirData = rpGetDMZ(attacker);
+    /* RP is official-battle-only; death to a stronger declared rival is flavor history only. */
     if (rpGetReleasedBP(theirData) > rpGetReleasedBP(myData)) {
-        rpAwardPoints(record, attackerUuid, RP_UNDERDOG_DEATH_RP, "died_to_stronger_rival");
+        if (!(link.history instanceof Array)) link.history = [];
+        link.history.push({ time: rpNow(), type: "death", note: "Fell to stronger rival " + link.name });
+        while (link.history.length > 30) link.history.shift();
         rpSaveDatabase(victim, database);
-        rpMessage(victim, RP_COLOR + "e[Rival] +" + RP_UNDERDOG_DEATH_RP + " RP for falling to " + link.name);
     }
 }
 
@@ -2078,6 +2217,10 @@ var CH_WIN_RP = 18;
 var CH_LOSE_RP = 40;              // loser gets more rivalry than winner
 var CH_DRAW_RP = 14;
 var CH_KO_LOSE_RP_BONUS = 20;     // KO loss = even more rivalry
+var CH_CLOSE_BATTLE_RP = 12;      // both sides when damage within 15%
+var CH_CLOSE_BATTLE_RATIO = 0.85;
+var CH_LONG_RIVALRY_DAY_RP = 2;   // +RP per mutual day (capped)
+var CH_LONG_RIVALRY_DAY_CAP = 30;
 var CH_FORFEIT_RP_PENALTY = 10;
 
 var CH_NON_RIVAL_WIN_TP = 3200;   // win vs non-rival still awards TP
@@ -2471,22 +2614,18 @@ function chRecalcRp(record) {
 function chAwardRp(record, rivalUuid, amount, reason) {
     var link = record.rivals[rivalUuid];
     if (link === null || link === undefined) return 0;
+    /* Official battles between Mutual rivals only write RP history. */
+    if (link.mutual !== true) return 0;
     amount = Math.floor(chNumber(amount, 0));
-    var before = rcLinkStatus(link);
+    if (amount === 0) return 0;
     link.points = Math.max(0, chNumber(link.points, 0) + amount);
     link.updatedAt = chNow();
     if (!(link.history instanceof Array)) link.history = [];
     link.history.push({ time: chNow(), type: amount >= 0 ? "rp_gain" : "rp_loss", note: reason + " (" + amount + ")" });
     while (link.history.length > 30) link.history.shift();
-    var after = rcRefreshLinkStatus(link);
+    rcRefreshLinkStatus(link);
     chRecalcRp(record);
-    if (before !== "nemesis" && after === "nemesis") {
-        var online = chFindOnlineByUuid(record.uuid);
-        if (online !== null) {
-            chMessage(online, CH_COLOR + "c" + CH_COLOR + "lNEMESIS! " +
-                CH_COLOR + "e" + link.name + CH_COLOR + "7 (" + chCommas(RC_NEMESIS_RP) + "+ RP)");
-        }
-    }
+    rcRecomputeNemesis(record);
     return amount;
 }
 
@@ -2495,6 +2634,12 @@ function chAreRelated(core, aUuid, bUuid) {
     var b = core.players[bUuid];
     if (a === null || a === undefined || b === null || b === undefined) return false;
     return a.rivals[bUuid] !== undefined || b.rivals[aUuid] !== undefined;
+}
+
+function chAreMutual(core, aUuid, bUuid) {
+    var a = core.players[aUuid];
+    if (a === null || a === undefined || a.rivals[bUuid] === undefined) return false;
+    return a.rivals[bUuid].mutual === true;
 }
 
 /* ========================= CHALLENGE FLOW ========================= */
@@ -2810,24 +2955,64 @@ function chApplyRewards(player, session, result) {
     }
 
     var related = session.related === true;
+    var mutual = challengerRecord !== null && opponentRecord !== null &&
+        chAreMutual(core, session.challengerUuid, session.opponentUuid);
     if (challengerRecord !== null && opponentRecord !== null && related) {
         chEnsureLink(challengerRecord, opponentRecord);
         chEnsureLink(opponentRecord, challengerRecord);
+    }
+
+    function chTouchLinkHistory(ownerRec, otherUuid, myCombat, theirCombat, outcome) {
+        if (ownerRec === null || ownerRec.rivals[otherUuid] === undefined) return;
+        var L = ownerRec.rivals[otherUuid];
+        var nowT = chNow();
+        if (chNumber(L.firstBattleAt, 0) <= 0) L.firstBattleAt = nowT;
+        if (chNumber(L.firstMetAt, 0) <= 0) L.firstMetAt = chNumber(L.createdAt, nowT);
+        L.lastBattleAt = nowT;
+        L.battles = chNumber(L.battles, 0) + 1;
+        L.timeFoughtMs = chNumber(L.timeFoughtMs, 0) + battleDuration;
+        L.damageDealt = chNumber(L.damageDealt, 0) + chNumber(myCombat.damage, 0);
+        L.damageTaken = chNumber(L.damageTaken, 0) + chNumber(theirCombat.damage, 0);
+        if (outcome === "win") {
+            L.currentStreak = chNumber(L.currentStreak, 0) + 1;
+            L.bestStreak = Math.max(chNumber(L.bestStreak, 0), L.currentStreak);
+        } else if (outcome === "loss") {
+            L.currentStreak = 0;
+        }
+        L.updatedAt = nowT;
+    }
+
+    function chLongRivalryBonus(ownerRec, otherUuid) {
+        if (ownerRec === null || ownerRec.rivals[otherUuid] === undefined) return 0;
+        var L = ownerRec.rivals[otherUuid];
+        if (L.mutual !== true) return 0;
+        var ageMs = Math.max(0, chNow() - chNumber(L.mutualSince, L.firstMetAt || 0));
+        var days = Math.min(CH_LONG_RIVALRY_DAY_CAP, Math.floor(ageMs / (24 * 60 * 60 * 1000)));
+        return days * CH_LONG_RIVALRY_DAY_RP;
     }
 
     if (result.reason === "draw") {
         if (challenger !== null) chAwardTP(challenger, CH_DRAW_TP, "Draw");
         if (opponent !== null) chAwardTP(opponent, CH_DRAW_TP, "Draw");
         if (related && challengerRecord !== null && opponentRecord !== null) {
-            chAwardRp(challengerRecord, opponentRecord.uuid, CH_DRAW_RP, "challenge_draw");
-            chAwardRp(opponentRecord, challengerRecord.uuid, CH_DRAW_RP, "challenge_draw");
+            chTouchLinkHistory(challengerRecord, opponentRecord.uuid, cCombat, oCombat, "draw");
+            chTouchLinkHistory(opponentRecord, challengerRecord.uuid, oCombat, cCombat, "draw");
             challengerRecord.rivals[opponentRecord.uuid].draws++;
             opponentRecord.rivals[challengerRecord.uuid].draws++;
             challengerRecord.career.officialDraws = chNumber(challengerRecord.career.officialDraws, 0) + 1;
             opponentRecord.career.officialDraws = chNumber(opponentRecord.career.officialDraws, 0) + 1;
-            chWriteBattleResult(challenger, session, result, false, CH_DRAW_RP,
+            var drawRp = CH_DRAW_RP;
+            if (mutual) {
+                var closeDraw = Math.min(chNumber(cCombat.damage, 0), chNumber(oCombat.damage, 0)) /
+                    Math.max(1, Math.max(chNumber(cCombat.damage, 0), chNumber(oCombat.damage, 0))) >= CH_CLOSE_BATTLE_RATIO;
+                if (closeDraw) drawRp += CH_CLOSE_BATTLE_RP;
+                drawRp += chLongRivalryBonus(challengerRecord, opponentRecord.uuid);
+                chAwardRp(challengerRecord, opponentRecord.uuid, drawRp, "challenge_draw");
+                chAwardRp(opponentRecord, challengerRecord.uuid, drawRp, "challenge_draw");
+            }
+            chWriteBattleResult(challenger, session, result, false, mutual ? drawRp : 0,
                 challengerRecord.uuid + ">" + opponentRecord.uuid, {});
-            chWriteBattleResult(opponent, session, result, false, CH_DRAW_RP,
+            chWriteBattleResult(opponent, session, result, false, mutual ? drawRp : 0,
                 opponentRecord.uuid + ">" + challengerRecord.uuid, {});
         }
         chSaveCoreDb(player, core);
@@ -2862,26 +3047,37 @@ function chApplyRewards(player, session, result) {
     }
 
     if (related && winnerRecord !== null && loserRecord !== null) {
-        var winRp = CH_WIN_RP;
-        var loseRp = CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0);
-        if (result.reason === "forfeit" || result.reason === "disconnect") {
-            loseRp = -CH_FORFEIT_RP_PENALTY;
-            winRp = CH_WIN_RP;
-        }
-
-        chAwardRp(winnerRecord, loserRecord.uuid, winRp, "challenge_win");
-        chAwardRp(loserRecord, winnerRecord.uuid, loseRp, result.reason === "forfeit" ? "forfeit" : "challenge_loss");
+        var wCombat = session.combat[winnerUuid] || chFreshCombat();
+        var lCombat = session.combat[loserUuid] || chFreshCombat();
+        chTouchLinkHistory(winnerRecord, loserRecord.uuid, wCombat, lCombat, "win");
+        chTouchLinkHistory(loserRecord, winnerRecord.uuid, lCombat, wCombat, "loss");
 
         winnerRecord.rivals[loserRecord.uuid].wins++;
         loserRecord.rivals[winnerRecord.uuid].losses++;
-        winnerRecord.rivals[loserRecord.uuid].lastBattleAt = chNow();
-        loserRecord.rivals[winnerRecord.uuid].lastBattleAt = chNow();
-        winnerRecord.rivals[loserRecord.uuid].damageDealt =
-            chNumber(winnerRecord.rivals[loserRecord.uuid].damageDealt, 0) +
-            chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0);
-        loserRecord.rivals[winnerRecord.uuid].damageDealt =
-            chNumber(loserRecord.rivals[winnerRecord.uuid].damageDealt, 0) +
-            chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0);
+
+        var winRp = 0;
+        var loseRp = 0;
+        if (mutual) {
+            winRp = CH_WIN_RP;
+            loseRp = CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0);
+            if (result.reason === "forfeit" || result.reason === "disconnect") {
+                loseRp = -CH_FORFEIT_RP_PENALTY;
+                winRp = CH_WIN_RP;
+            } else {
+                var closeFight = Math.min(chNumber(wCombat.damage, 0), chNumber(lCombat.damage, 0)) /
+                    Math.max(1, Math.max(chNumber(wCombat.damage, 0), chNumber(lCombat.damage, 0))) >= CH_CLOSE_BATTLE_RATIO;
+                if (closeFight) {
+                    winRp += CH_CLOSE_BATTLE_RP;
+                    loseRp += CH_CLOSE_BATTLE_RP;
+                }
+                var longBonus = chLongRivalryBonus(winnerRecord, loserRecord.uuid);
+                winRp += longBonus;
+                loseRp += longBonus;
+            }
+            chAwardRp(winnerRecord, loserRecord.uuid, winRp, "challenge_win");
+            chAwardRp(loserRecord, winnerRecord.uuid, loseRp,
+                result.reason === "forfeit" ? "forfeit" : "challenge_loss");
+        }
 
         winnerRecord.career.officialWins = chNumber(winnerRecord.career.officialWins, 0) + 1;
         loserRecord.career.officialLosses = chNumber(loserRecord.career.officialLosses, 0) + 1;
@@ -2917,27 +3113,30 @@ function chApplyRewards(player, session, result) {
         touchDuration(winnerRecord, true);
         touchDuration(loserRecord, false);
 
-        var winRpFinal = CH_WIN_RP;
-        var loseRpFinal = (result.reason === "forfeit" || result.reason === "disconnect")
-            ? 0
-            : (CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0));
         var winLinkPts = chNumber(winnerRecord.rivals[loserRecord.uuid].points, 0);
         var loseLinkPts = chNumber(loserRecord.rivals[winnerRecord.uuid].points, 0);
         var firstWin = chNumber(winnerRecord.career.officialWins, 0) === 1;
-        var comeback = chNumber(cCombat.damage, 0) < chNumber(oCombat.damage, 0) && winnerIsChallenger
-            ? false
-            : (chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) > 0 &&
-               chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
-               chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) * 0.75);
-        /* simpler comeback: winner took more damage than dealt */
-        comeback = chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
-                   chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0);
+        var comeback = chNumber(lCombat.damage, 0) > chNumber(wCombat.damage, 0);
         var beatHigher = loseLinkPts > winLinkPts;
+        var legendScore = chNumber(wCombat.damage, 0) + chNumber(lCombat.damage, 0) +
+            (result.knockout ? 5000 : 0) + (comeback ? 2500 : 0) + Math.floor(battleDuration / 1000) * 10;
+        try {
+            var progDb = rprogEnsureProg();
+            var prevScore = rprogNum((progDb.hallOfFame || {}).legendaryMatchScore, 0);
+            if (legendScore > prevScore) {
+                if (progDb.hallOfFame == null) progDb.hallOfFame = {};
+                progDb.hallOfFame.legendaryMatchScore = legendScore;
+                progDb.hallOfFame.mostLegendaryMatch =
+                    winnerRecord.name + " vs " + loserRecord.name +
+                    " (" + Math.floor(legendScore) + ")";
+                rprogSave(RPROG_PROG_KEY, RPROG_PROG_BACKUP, progDb);
+            }
+        } catch (hofErr) {}
 
-        chWriteBattleResult(winnerPlayer, session, result, true, winRpFinal,
+        chWriteBattleResult(winnerPlayer, session, result, true, winRp,
             winnerRecord.uuid + ">" + loserRecord.uuid,
             { firstWin: firstWin, comeback: comeback, beatHigherRp: beatHigher });
-        chWriteBattleResult(loserPlayer, session, result, false, loseRpFinal,
+        chWriteBattleResult(loserPlayer, session, result, false, Math.max(0, loseRp),
             loserRecord.uuid + ">" + winnerRecord.uuid,
             { firstWin: false, comeback: false, beatHigherRp: false });
     }
@@ -3477,25 +3676,51 @@ function riScan(player) {
     for (var uuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(uuid)) continue;
         var link = record.rivals[uuid];
-        if (link.declaredByMe !== true && link.mutual !== true && link.declaredByThem !== true) continue;
+        /* Real Rival Instinct unlocks with Mutual (Nemesis included). */
+        if (link.mutual !== true) continue;
 
         var rival = riFind(uuid);
-        if (rival == null) continue;
+        if (rival == null) {
+            try { temp.put("rival.v4.instinct.wasNear." + uuid, "0"); } catch (eAway) {}
+            continue;
+        }
 
         var tier = riTier(link.points);
         var dist = riDist(player, rival);
-        if (dist > tier.range) continue;
+        var wasNear = false;
+        try {
+            if (temp.has("rival.v4.instinct.wasNear." + uuid)) {
+                wasNear = riStr(temp.get("rival.v4.instinct.wasNear." + uuid)) === "1";
+            }
+        } catch (eWas) {}
+
+        if (dist > tier.range) {
+            try { temp.put("rival.v4.instinct.wasNear." + uuid, "0"); } catch (eClear) {}
+            continue;
+        }
+
+        try { temp.put("rival.v4.instinct.wasNear." + uuid, "1"); } catch (eSet) {}
 
         var rivalData = riDMZ(rival);
         var status = riStatus(rivalData);
         var theirReleased = riReleased(rivalData);
+
+        if (!wasNear) {
+            riAlert(
+                temp,
+                "rival.v4.instinct.arrive." + uuid,
+                RI_COLOR + "6[Rival Instinct] " + RI_COLOR + "e" + link.name +
+                RI_COLOR + "7 has arrived nearby!",
+                player
+            );
+        }
 
         riAlert(
             temp,
             "rival.v4.instinct.near." + uuid,
             RI_COLOR + "b[Rival Instinct] " + RI_COLOR + "f" + link.name +
             RI_COLOR + "7 sensed nearby (" + Math.floor(dist) + "m) " +
-            RI_COLOR + "8[" + tier.name + "]",
+            RI_COLOR + "8[" + (link.isNemesis === true ? "Nemesis" : tier.name) + "]",
             player
         );
 
@@ -3511,7 +3736,7 @@ function riScan(player) {
 
         if (tier.charging && status != null) {
             try {
-                if (status.isChargingKi() === true) {
+                if (status.isChargingKi() === true || status.isActionCharging() === true) {
                     riAlert(
                         temp,
                         "rival.v4.instinct.charge." + uuid,
@@ -3533,14 +3758,18 @@ function riScan(player) {
             );
         }
 
-        if (tier.form && status != null) {
+        if (tier.form && rivalData != null) {
             try {
-                if (status.isAuraActive() === true) {
+                var formMult = 1.0;
+                try { formMult = Number(rivalData.getFormMultiplier("STR")); } catch (eFm) { formMult = 1.0; }
+                var auraOn = false;
+                try { if (status != null) auraOn = status.isAuraActive() === true; } catch (eAu) {}
+                if (auraOn || formMult > 1.05) {
                     riAlert(
                         temp,
                         "rival.v4.instinct.aura." + uuid,
                         RI_COLOR + "d[Rival Instinct] " + RI_COLOR + "e" + link.name +
-                        RI_COLOR + "d aura spike detected!",
+                        RI_COLOR + "d transformation / aura surge detected!",
                         player
                     );
                 }
@@ -3747,9 +3976,15 @@ function rprogSyncTitle(player, title) {
 
 function recomputeHof(prog, db) {
     if (db == null || db.players == null) return;
+    if (prog.hallOfFame == null || typeof prog.hallOfFame !== "object") prog.hallOfFame = {};
+
     var bestRp = null;
     var bestStreak = null;
     var bestBattles = null;
+    var greatestRivals = null;
+    var longestRivalry = null;
+    var seenPairs = {};
+
     for (var id in db.players) {
         if (!db.players.hasOwnProperty(id)) continue;
         var rec = db.players[id];
@@ -3757,20 +3992,60 @@ function recomputeHof(prog, db) {
         var rp = rprogNum(career.rivalPointsTotal, 0);
         var streak = rprogNum(career.bestStreak, 0);
         var battles = rprogNum(career.challengesPlayed, 0);
-        if (bestRp == null || rp > bestRp.rp) bestRp = { name: rec.name + " (" + rp + ")", rp: rp };
+        if (bestRp == null || rp > bestRp.rp) bestRp = { name: rec.name + " (" + rp + " RP)", rp: rp };
         if (bestStreak == null || streak > bestStreak.v) bestStreak = { name: rec.name + " (" + streak + ")", v: streak };
         if (bestBattles == null || battles > bestBattles.v) bestBattles = { name: rec.name + " (" + battles + ")", v: battles };
+
+        if (rec.rivals == null) continue;
+        for (var rid in rec.rivals) {
+            if (!rec.rivals.hasOwnProperty(rid)) continue;
+            var link = rec.rivals[rid];
+            if (link.mutual !== true && link.isNemesis !== true) continue;
+            var pairKey = id < rid ? id + "|" + rid : rid + "|" + id;
+            if (seenPairs[pairKey]) continue;
+            seenPairs[pairKey] = true;
+
+            var fightCount = rprogNum(link.battles, 0);
+            if (fightCount <= 0) {
+                fightCount = rprogNum(link.wins, 0) + rprogNum(link.losses, 0) + rprogNum(link.draws, 0);
+            }
+            var pairScore = fightCount * 10 + rprogNum(link.points, 0) +
+                (link.isNemesis === true ? 100 : 0);
+            var pairName = rec.name + " vs " + link.name + " (" + fightCount + " battles)";
+            if (greatestRivals == null || pairScore > greatestRivals.v) {
+                greatestRivals = { name: pairName, v: pairScore };
+            }
+
+            var since = rprogNum(link.mutualSince, rprogNum(link.firstMetAt, 0));
+            if (since > 0) {
+                var age = rprogNow() - since;
+                if (longestRivalry == null || age > longestRivalry.v) {
+                    var days = Math.floor(age / (24 * 60 * 60 * 1000));
+                    longestRivalry = {
+                        name: rec.name + " & " + link.name + " (" + days + "d)",
+                        v: age
+                    };
+                }
+            }
+        }
     }
+
     var seasonRows = [];
-    for (var sid in prog.season.leaderboard) {
-        if (!prog.season.leaderboard.hasOwnProperty(sid)) continue;
-        seasonRows.push(prog.season.leaderboard[sid]);
+    if (prog.season != null && prog.season.leaderboard != null) {
+        for (var sid in prog.season.leaderboard) {
+            if (!prog.season.leaderboard.hasOwnProperty(sid)) continue;
+            seasonRows.push(prog.season.leaderboard[sid]);
+        }
     }
     seasonRows.sort(function (a, b) { return rprogNum(b.rp, 0) - rprogNum(a.rp, 0); });
     prog.hallOfFame.seasonChampion = seasonRows.length > 0 ? seasonRows[0].name + " (" + seasonRows[0].rp + " SRP)" : "-";
     prog.hallOfFame.highestRp = bestRp != null ? bestRp.name : "-";
     prog.hallOfFame.longestStreak = bestStreak != null ? bestStreak.name : "-";
-    prog.hallOfFame.mostLegendary = bestBattles != null ? bestBattles.name : "-";
+    prog.hallOfFame.mostBattles = bestBattles != null ? bestBattles.name : "-";
+    prog.hallOfFame.mostLegendary = prog.hallOfFame.mostBattles;
+    prog.hallOfFame.greatestRivals = greatestRivals != null ? greatestRivals.name : "-";
+    prog.hallOfFame.longestRivalry = longestRivalry != null ? longestRivalry.name : "-";
+    if (prog.hallOfFame.mostLegendaryMatch == null) prog.hallOfFame.mostLegendaryMatch = "-";
     if (prog.hallOfFame.greatestComeback == null) prog.hallOfFame.greatestComeback = "-";
 }
 

@@ -1,52 +1,119 @@
-# Rival System — Original Concept Checklist
+# Original Rival System Concept — Implementation Map
 
-Every item from the original design, mapped to the current build.
+> *"Every player should eventually have one or two rivals that everyone on the server recognizes."*
 
-| # | Concept | Status | Where |
+This is not another PvP system. It recreates Goku vs Vegeta — history, not assignment.
+
+## Philosophy
+
+| Idea | Status |
+|---|---|
+| A rival is history with one person | Done |
+| Not guilds / factions / everyone | Done |
+| Up to **two** Mutual rivals that matter | Done |
+| Mutual unlocks the real Rival System | Done |
+
+## Rival States
+
+| Status | Meaning | Limit | Status |
 |---|---|---|---|
-| 1 | `/Rival <player>` declare | Done | `/rival <player>` or `/rival declare <player>` |
-| 2 | Near rival → bonus on **highest offensive stat** (STR/SKP) | Done | `rpApplyOffenseBonus` |
-| 3 | Longer near → rivalry rank (RP) increases | Done | Presence RP ticks |
-| 4 | Higher rank → higher damage bonus | Done | Tier + presence offense |
-| 5 | Near rival + kills → bonus TP | Done | `rpHandleKillNearRivals` |
-| 6 | `/Challenge Rival` — most damage in 60s | Done | `/challenge` / `/challenge rival` |
-| 7 | End: both get TP + RP; **loser more RP**, **winner more TP** | Done | `chApplyRewards` |
-| 8 | Rival dies → instant win, larger TP, loser more RP | Done | Knockout bonuses |
-| 9 | More RP than rival + they are stronger → catch-up | Done | Catch-up offense |
-| 10 | Surpass rival power → large TP | Done | Surpass award |
-| 11 | One-sided vs stronger: engage TP / death RP / win TP | Done | Underdog hooks |
-| 12 | Low-level rivals you: kill TP while watched; they get RP | Done | Anti-gank witness |
-| 13 | Weak rivals ≤40% released BP: offense + TP/RP when you get hit | Done | Anti-gank |
-| 14 | Non-rival challenge win → still TP | Done | `CH_NON_RIVAL_WIN_TP` |
-| 15 | Fuse with mutual rival → power + kill TP split | Done | Fusion hooks |
+| **Unknown** | They declared you (incoming) | Unlimited | Done |
+| **Declared** | You declared them (one-sided) | Unlimited | Done |
+| **Mutual** | Both accepted — real rivalry | **Max 2** | Done |
+| **Nemesis** | Your greatest mutual rival | **Only 1** (auto) | Done |
 
-## Relationship statuses (4-part)
+Progression: `Unknown → Declared → Mutual → Nemesis`
 
-| Status | Meaning | Limit |
+- 3rd Mutual **demotes the oldest** Mutual automatically (both sides → Declared).
+- Nemesis is chosen from Mutual history (battles, wins, losses, age) — not an RP threshold.
+
+## Rival History (per link)
+
+| Field | Status |
+|---|---|
+| First met | Done (`firstMetAt`) |
+| First battle | Done (`firstBattleAt`) |
+| Wins / Losses / Draws | Done |
+| Current streak / Best streak | Done (per-link) |
+| Damage dealt / received | Done |
+| Total time fought | Done (`timeFoughtMs`) |
+| Last battle | Done |
+| Current Rival Points | Done |
+
+## Rival Instinct (Mutual+)
+
+| Sense | Status | API |
 |---|---|---|
-| **Unknown** | They declared you; you have not accepted/declared back | Unlimited |
-| **Declared** | You declared them (one-sided) | Unlimited |
-| **Mutual** | Both accepted | **Max 2** (shared with Nemesis) |
-| **Nemesis** | Mutual that reached **1500+ RP** on that link | Counts as a Mutual slot |
+| Nearby | Done | distance + RP tier range |
+| Arrive | Done | enter-range pulse |
+| Charge Ki | Done | `Status.isChargingKi` / `isActionCharging` |
+| Stronger / weaker | Done | released BP compare |
+| Transformations | Done | `isAuraActive` + `StatsData.getFormMultiplier` |
+| Fusion | Done | `Status.isFused` / `getFusionName` |
 
-Progression: `Unknown → Declared (cross-declare/accept) → Mutual → Nemesis`
+Scales with link RP. Mutual (and Nemesis) only.
 
-Nemesis gets stronger presence RP and kill TP than Mutual.
+## Official Rival Battles
 
-## Commands
+Challenge → Accept → Countdown → 60s Official Battle → Winner → History → RP
+
+| Rule | Status |
+|---|---|
+| Official battles update rivalry history | Done |
+| **Only official battles award RP** (Mutual) | Done |
+| Winner more TP, loser more RP | Done |
+| Close battles / long rivalries bonus RP | Done |
+| Combat log: hits, damage, ki, combo, duration, W/L | Done |
+
+## Rival Points
+
+RP = history, not power.
+
+| Earns RP | Status |
+|---|---|
+| Winning official battles | Done |
+| Losing / battling (loser more RP) | Done |
+| Close battles | Done |
+| Long rivalries | Done |
+
+| Unlocks | Status |
+|---|---|
+| Better sensing | Done |
+| Titles / leaderboards | Done |
+| Records / journal | Done |
+| Raw combat stat bonuses | **Disabled** (by design) |
+
+## Hall of Legends (`/rival hof`)
+
+| Category | Status |
+|---|---|
+| Greatest Rivals | Done |
+| Longest Rivalry | Done |
+| Most Battles | Done |
+| Best Win Streak | Done |
+| Most Legendary Match | Done |
+
+NPC Rival Master prints the command guide; HoL is `/rival hof`.
+
+## Commands (CMI CustomAlias)
 
 ```text
 /rival <player>
 /rival declare|accept|decline|remove <player>
-/rival list
+/rival list | stats | top | title | journal | season | quests | achievements | hof
 /challenge <player>
 /challenge rival <player>
 /challenge accept|decline|cancel
+/spectaterival <player>
 ```
+
+All aliases verified: `[playerName]` as arg0, `ExactMatch: false` when taking player args.
 
 ## Install
 
 - `Rival System.js` — Global Player
-- `Rival Command Handler.js` — script-slot
+- `Rival Command Handler.js` — script-slot (CMI triggers)
 - `CustomAlias.yml` — CMI
 - `RivalNPC_v4.js` — optional chat NPC
+
+APIs verified against CustomNPCs GBPort + DragonMineZ 2.1.3 jars — see `VERIFIED_API.md`.
