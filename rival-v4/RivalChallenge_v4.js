@@ -154,10 +154,13 @@ function chFormatMs(ms) {
 /* ========================= STORAGE ========================= */
 
 function chDataWorld(fallbackPlayer) {
-    try {
-        var world = RC_API.Instance().getIWorld("minecraft:overworld");
-        if (world !== null && world !== undefined) return world;
-    } catch (ignored1) {}
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = RC_API.Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (ignored1) {}
+    }
     try { return fallbackPlayer.getWorld(); } catch (ignored2) { return null; }
 }
 
@@ -1153,12 +1156,28 @@ function logout(event) {
     }
 }
 
+function chTriggerPlayer(event) {
+    /*
+     CustomNPCs ScriptTriggerEvent provides the player on event.entity.
+    */
+    if (event === null || event === undefined) return null;
+    if (chIsPlayer(event.entity)) return event.entity;
+    if (chIsPlayer(event.player)) return event.player;
+    return null;
+}
+
 function trigger(event) {
+    var player = null;
     try {
-        var player = event.player;
+        player = chTriggerPlayer(event);
         if (!chIsPlayer(player)) return;
+
         var id = Number(event.id);
         var args = chArgs(event);
+
+        if (args.length > 0 && chString(args[0]).toLowerCase() === chName(player).toLowerCase()) {
+            args.shift();
+        }
 
         if (id === 210) {
             chChallenge(player, args.length > 0 ? args[0] : "");
@@ -1177,9 +1196,11 @@ function trigger(event) {
             return;
         }
     } catch (error) {
+        if (player !== null) {
+            chMessage(player, CH_COLOR + "c[RivalChallenge] Error: " + error);
+        }
         try {
-            event.player.message(CH_COLOR + "c[RivalChallenge] Error: " + error);
+            print("[RivalChallenge v4] trigger error: " + error);
         } catch (ignored) {}
-        chLog("trigger failed: " + error);
     }
 }

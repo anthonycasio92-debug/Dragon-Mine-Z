@@ -87,10 +87,13 @@ function getOnlinePlayerByName(name) {
 }
 
 function getWorldStore() {
-    try {
-        var world = NpcAPI.Instance().getIWorld("minecraft:overworld");
-        if (world != null) return world.getStoreddata();
-    } catch (e) {}
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = NpcAPI.Instance().getIWorld(names[i]);
+            if (world != null) return world.getStoreddata();
+        } catch (e) {}
+    }
     return null;
 }
 
@@ -228,6 +231,7 @@ function showTop(player) {
 }
 
 function trigger(event) {
+    var player = null;
     try {
         var id = Number(event.id);
         var args = [];
@@ -238,15 +242,25 @@ function trigger(event) {
         }
 
         /*
-         First argument from noppes script trigger is usually the player name.
-         Remaining args are command arguments.
+         Script-slot triggers usually pass the executor name as arguments[0].
+         Global-player triggers expose the executor on event.entity.
         */
-        var playerName = args.length > 0 ? args[0] : "";
-        var player = event.player != null ? event.player : getOnlinePlayerByName(playerName);
+        if (event.entity != null && Number(event.entity.getType()) == 1) {
+            player = event.entity;
+        } else if (event.player != null) {
+            player = event.player;
+        } else if (args.length > 0) {
+            player = getOnlinePlayerByName(args[0]);
+        }
+
         if (player == null) return;
 
         var cmdArgs = [];
-        for (var a = 1; a < args.length; a++) cmdArgs.push(args[a]);
+        if (args.length > 0 && String(args[0]).equalsIgnoreCase(String(player.getName()))) {
+            for (var a = 1; a < args.length; a++) cmdArgs.push(args[a]);
+        } else {
+            cmdArgs = args;
+        }
 
         if (id == 200) {
             showHelp(player);
@@ -262,7 +276,7 @@ function trigger(event) {
         }
     } catch (error) {
         try {
-            if (event.player != null) event.player.message(C + "c[RivalCommands] " + error);
+            if (player != null) player.message(C + "c[RivalCommands] " + error);
         } catch (e2) {}
     }
 }

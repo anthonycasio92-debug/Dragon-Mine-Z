@@ -52,7 +52,24 @@ Example using `noppes script trigger`:
 
 If you use MyCommand / DeluxeMenus / etc., point those commands at the same trigger IDs.
 
-## What works in this build
+## Quick test
+
+After installing `RivalCore_v4.js` as a Global Player script with `trigger` enabled:
+
+```text
+noppes script trigger 200 <YourName>
+```
+
+You should see the Rival System V4 help menu.
+
+```text
+noppes script trigger 201 <YourName> <OtherPlayer>
+noppes script trigger 205 <YourName>
+```
+
+Important: CustomNPCs Global Player triggers use `event.entity` for the player.
+If nothing happens, confirm the script has the **trigger** event checkbox enabled.
+
 
 - Declare / accept / decline / remove / list
 - RP tiers through Mythic Rival

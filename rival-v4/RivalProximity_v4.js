@@ -182,10 +182,13 @@ function rpCommas(value) {
 /* ========================= DATABASE ========================= */
 
 function rpDataWorld(fallbackPlayer) {
-    try {
-        var world = RP_API.Instance().getIWorld("minecraft:overworld");
-        if (world !== null && world !== undefined) return world;
-    } catch (ignored1) {}
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = RP_API.Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (ignored1) {}
+    }
     try { return fallbackPlayer.getWorld(); } catch (ignored2) { return null; }
 }
 

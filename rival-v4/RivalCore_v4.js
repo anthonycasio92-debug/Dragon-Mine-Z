@@ -166,11 +166,14 @@ function rcTierLabel(points) {
 /* ========================= WORLD STORAGE ========================= */
 
 function rcDataWorld(fallbackPlayer) {
-    try {
-        var world = RC_API.Instance().getIWorld("minecraft:overworld");
-        if (world !== null && world !== undefined) return world;
-    } catch (error1) {
-        rcLog("Overworld lookup failed: " + error1);
+    var names = ["minecraft:overworld", "overworld"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var world = RC_API.Instance().getIWorld(names[i]);
+            if (world !== null && world !== undefined) return world;
+        } catch (error1) {
+            rcLog("World lookup failed for " + names[i] + ": " + error1);
+        }
     }
 
     if (fallbackPlayer !== null && fallbackPlayer !== undefined) {
@@ -887,13 +890,34 @@ function login(event) {
     }
 }
 
+function rcTriggerPlayer(event) {
+    /*
+     Verified from CustomNPCs ScriptTriggerEvent:
+     Global Player triggers use event.entity, not event.player.
+     Keep event.player as a fallback for other script slots.
+    */
+    if (event === null || event === undefined) return null;
+    if (rcIsPlayer(event.entity)) return event.entity;
+    if (rcIsPlayer(event.player)) return event.player;
+    return null;
+}
+
 function trigger(event) {
+    var player = null;
     try {
-        var player = event.player;
+        player = rcTriggerPlayer(event);
         if (!rcIsPlayer(player)) return;
 
         var id = Number(event.id);
         var args = rcArgs(event);
+
+        /*
+         Some command plugins pass: trigger <id> <executor> <target...>
+         If args[0] is the executor name, shift it off.
+        */
+        if (args.length > 0 && rcLower(args[0]) === rcLower(rcName(player))) {
+            args.shift();
+        }
 
         if (id === 200) {
             rcHelp(player);
@@ -920,9 +944,11 @@ function trigger(event) {
             return;
         }
     } catch (error) {
+        if (player !== null) {
+            rcMessage(player, RC_COLOR + "c[RivalCore] Error: " + error);
+        }
         try {
-            event.player.message(RC_COLOR + "c[RivalCore] Error: " + error);
+            print("[RivalCore v4] trigger error: " + error);
         } catch (ignored) {}
-        rcLog("trigger failed: " + error);
     }
 }
