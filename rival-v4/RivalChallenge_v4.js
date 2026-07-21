@@ -871,6 +871,16 @@ function chApplyRewards(player, session, result) {
         chAwardTP(loserPlayer, loseTp, "Participation");
     }
 
+    touchDuration(winnerRecord, true);
+    touchDuration(loserRecord, false);
+
+    if (!related) {
+        chWriteBattleResult(winnerPlayer, session, result, true, 0, "", {});
+        chWriteBattleResult(loserPlayer, session, result, false, 0, "", {});
+        chSaveCoreDb(player, core);
+        return;
+    }
+
     if (related && winnerRecord !== null && loserRecord !== null) {
         var winRp = CH_WIN_RP;
         var loseRp = CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0);

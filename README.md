@@ -1,16 +1,16 @@
 # Dragon-Mine-Z
 
-DBZ Legacy Reborn server scripts for DragonMineZ + CustomNPCs.
+DBZ Legacy Reborn scripts for DragonMineZ 2.1.3 + CustomNPCs GBPort + CMI + Fabled.
 
-## Rival System V4 (rework)
+## Rival System V4.1
 
-See [`rival-v4/`](rival-v4/) for the reworked rivalry system:
+Full endgame rivalry path lives in [`rival-v4/`](rival-v4/).
 
-- [`rival-v4/DESIGN.md`](rival-v4/DESIGN.md) — design + roadmap
-- [`rival-v4/INSTALL.md`](rival-v4/INSTALL.md) — install / command wiring
-- `RivalCore_v4.js` — declare / accept / RP database
-- `RivalProximity_v4.js` — near-rival bonuses, kill TP, anti-gank
-- `RivalChallenge_v4.js` — 60s damage contests + reports
-- `RivalCommands_v4.js` — stats / leaderboard triggers
+Start here:
 
-Disable old `Rival* V3.js` scripts before enabling V4.
+- [`rival-v4/INSTALL.md`](rival-v4/INSTALL.md)
+- [`rival-v4/DESIGN.md`](rival-v4/DESIGN.md)
+- [`rival-v4/VERIFIED_API.md`](rival-v4/VERIFIED_API.md)
+- [`rival-v4/cmi/Aliases-Rival.yml`](rival-v4/cmi/Aliases-Rival.yml)
+
+Old `Rival* V3.js` files are reference only — disable them before enabling V4.
