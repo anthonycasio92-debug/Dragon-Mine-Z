@@ -98,6 +98,6 @@ RP comes from **official Mutual battles only**. Instinct / titles / Hall of Lege
 
 All original concept loops are implemented — see `CONCEPT.md` checklist.
 
-Also: instinct, titles/seasons/quests/achievements/journal/HoF, spectator, level-scaled TP, command aliases.
+Also: Proving Grounds, instinct, titles/seasons/quests/achievements/journal/HoF, spectator, level-scaled TP, command aliases.
 
 See `DESIGN.md` and `VERIFIED_API.md`.
