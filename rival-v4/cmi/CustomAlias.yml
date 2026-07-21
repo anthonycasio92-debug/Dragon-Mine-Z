@@ -146,7 +146,7 @@ CustomAlias:
     - asFakeOp! noppes script trigger 200 [playerName] $1-
     AddTabs: true
     ExactMatch: true
-  rival ?:
+  'rival ?':
     Cmds:
     - asFakeOp! noppes script trigger 200 [playerName]
     AddTabs: true
@@ -221,7 +221,7 @@ CustomAlias:
     - asFakeOp! noppes script trigger 210 [playerName] $1-
     AddTabs: true
     ExactMatch: true
-  challenge ?:
+  'challenge ?':
     Cmds:
     - asConsole! cmi msg [playerName] &cUsage: /challenge <player>
     AddTabs: true
