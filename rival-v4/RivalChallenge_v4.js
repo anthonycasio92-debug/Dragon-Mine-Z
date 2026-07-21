@@ -754,6 +754,41 @@ function chBuildReport(session, winnerName, loserName) {
     return lines;
 }
 
+
+function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journalKey, extras) {
+    if (onlinePlayer === null) return;
+    try {
+        var combat = session.combat[chUuid(onlinePlayer)] || chFreshCombat();
+        var otherUuid = chUuid(onlinePlayer) === session.challengerUuid
+            ? session.opponentUuid
+            : session.challengerUuid;
+        var otherCombat = session.combat[otherUuid] || chFreshCombat();
+        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+        var payload = {
+            won: won === true,
+            seasonRp: chNumber(seasonRp, 0),
+            journalKey: chString(journalKey),
+            damageDealt: chNumber(combat.damage, 0),
+            damageTaken: chNumber(otherCombat.damage, 0),
+            physical: chNumber(combat.physical, 0),
+            ki: chNumber(combat.ki, 0),
+            longestCombo: chNumber(combat.longestCombo, 0),
+            biggestHit: chNumber(combat.biggestHit, 0),
+            fullDuration: duration >= (CH_DURATION_MS - 1500),
+            durationMs: duration,
+            knockout: result.knockout === true,
+            reason: chString(result.reason),
+            firstWin: extras && extras.firstWin === true,
+            comeback: extras && extras.comeback === true,
+            beatHigherRp: extras && extras.beatHigherRp === true,
+            remainingHpPct: extras && extras.remainingHpPct != null ? extras.remainingHpPct : -1
+        };
+        onlinePlayer.getTempdata().put("rival.v4.battleResult", JSON.stringify(payload));
+    } catch (e) {
+        chLog("battleResult write failed: " + e);
+    }
+}
+
 function chApplyRewards(player, session, result) {
     var core = chLoadCoreDb(player);
     if (core === null) return;
@@ -784,6 +819,16 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
+    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    function touchDuration(record, wonFlag) {
+        if (record === null) return;
+        record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
+        if (wonFlag === true) {
+            var fastest = chNumber(record.career.fastestWinMs, 0);
+            if (fastest <= 0 || battleDuration < fastest) record.career.fastestWinMs = battleDuration;
+        }
+    }
+
     var related = session.related === true;
     if (challengerRecord !== null && opponentRecord !== null && related) {
         chEnsureLink(challengerRecord, opponentRecord);
@@ -800,6 +845,10 @@ function chApplyRewards(player, session, result) {
             opponentRecord.rivals[challengerRecord.uuid].draws++;
             challengerRecord.career.officialDraws = chNumber(challengerRecord.career.officialDraws, 0) + 1;
             opponentRecord.career.officialDraws = chNumber(opponentRecord.career.officialDraws, 0) + 1;
+            chWriteBattleResult(challenger, session, result, false, CH_DRAW_RP,
+                challengerRecord.uuid + ">" + opponentRecord.uuid, {});
+            chWriteBattleResult(opponent, session, result, false, CH_DRAW_RP,
+                opponentRecord.uuid + ">" + challengerRecord.uuid, {});
         }
         chSaveCoreDb(player, core);
         return;
@@ -874,6 +923,33 @@ function chApplyRewards(player, session, result) {
             streak: chNumber(loserRecord.career.bestStreak, 0),
             updatedAt: chNow()
         };
+
+        touchDuration(winnerRecord, true);
+        touchDuration(loserRecord, false);
+
+        var winRpFinal = CH_WIN_RP;
+        var loseRpFinal = (result.reason === "forfeit" || result.reason === "disconnect")
+            ? 0
+            : (CH_LOSE_RP + (result.knockout ? CH_KO_LOSE_RP_BONUS : 0));
+        var winLinkPts = chNumber(winnerRecord.rivals[loserRecord.uuid].points, 0);
+        var loseLinkPts = chNumber(loserRecord.rivals[winnerRecord.uuid].points, 0);
+        var firstWin = chNumber(winnerRecord.career.officialWins, 0) === 1;
+        var comeback = chNumber(cCombat.damage, 0) < chNumber(oCombat.damage, 0) && winnerIsChallenger
+            ? false
+            : (chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) > 0 &&
+               chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
+               chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0) * 0.75);
+        /* simpler comeback: winner took more damage than dealt */
+        comeback = chNumber((session.combat[loserUuid] || chFreshCombat()).damage, 0) >
+                   chNumber((session.combat[winnerUuid] || chFreshCombat()).damage, 0);
+        var beatHigher = loseLinkPts > winLinkPts;
+
+        chWriteBattleResult(winnerPlayer, session, result, true, winRpFinal,
+            winnerRecord.uuid + ">" + loserRecord.uuid,
+            { firstWin: firstWin, comeback: comeback, beatHigherRp: beatHigher });
+        chWriteBattleResult(loserPlayer, session, result, false, loseRpFinal,
+            loserRecord.uuid + ">" + winnerRecord.uuid,
+            { firstWin: false, comeback: false, beatHigherRp: false });
     }
 
     chSaveCoreDb(player, core);

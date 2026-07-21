@@ -1,0 +1,142 @@
+# ============================================================
+# DBZ Legacy Reborn - Rival System CMI Aliases
+# ============================================================
+# Paste these entries into CMI's Aliases.yml (or create via
+# /cmi aliaseditor), then /cmi reload
+#
+# WHY asConsole! AND NOT asFakeOp!
+# CustomNPCs ScriptTriggerEvent ignores FakePlayer entities
+# (verified in EventHooks.onScriptTriggerEvent). asFakeOp!
+# therefore cannot drive Global Player scripts.
+#
+# WORKING PATTERN (same as SkillCheckCommand):
+#   asConsole! noppes script trigger <id> [playerName] <args...>
+# RivalRouter_v4.js (script-slot) resolves the player from arg0.
+#
+# Required permission node suggestion (LuckPerms):
+#   cmi.command.alias.rival
+#   cmi.command.alias.challenge
+#   ...or allow the alias itself via CMI alias perms
+# ============================================================
+
+rival:
+  Cmds:
+  - asConsole! noppes script trigger 200 [playerName]
+  Help: '&6/rival &7- Rival system help'
+
+rival declare:
+  Cmds:
+  - asConsole! noppes script trigger 201 [playerName] $1
+  Help: '&6/rival declare <player> &7- Declare a rival'
+
+# Convenience: /rival <player> also declares
+# NOTE: CMI may need this as a separate alias without spaces.
+# Prefer /rival declare <player> if your CMI version is strict.
+rivalaccept:
+  Cmds:
+  - asConsole! noppes script trigger 202 [playerName] $1
+  Help: '&6/rivalaccept <player> &7- Accept a rivalry request'
+
+rivaldecline:
+  Cmds:
+  - asConsole! noppes script trigger 203 [playerName] $1
+  Help: '&6/rivaldecline <player> &7- Decline a rivalry request'
+
+rivalremove:
+  Cmds:
+  - asConsole! noppes script trigger 204 [playerName] $1
+  Help: '&6/rivalremove <player> &7- End a rivalry'
+
+rivallist:
+  Cmds:
+  - asConsole! noppes script trigger 205 [playerName]
+  Help: '&6/rivallist &7- List your rivals'
+
+rivalstats:
+  Cmds:
+  - asConsole! noppes script trigger 206 [playerName] $1-
+  Help: '&6/rivalstats [player] &7- Career rivalry statistics'
+
+rivaltop:
+  Cmds:
+  - asConsole! noppes script trigger 220 [playerName] $1-
+  Help: '&6/rivaltop [category] &7- Leaderboards (rp|wins|streak|damage|combo|hit)'
+
+rivaltitle:
+  Cmds:
+  - asConsole! noppes script trigger 221 [playerName]
+  Help: '&6/rivaltitle &7- Show your current rival title / perks'
+
+rivaljournal:
+  Cmds:
+  - asConsole! noppes script trigger 222 [playerName] $1-
+  Help: '&6/rivaljournal [player] &7- Per-rival journal'
+
+rivalseason:
+  Cmds:
+  - asConsole! noppes script trigger 223 [playerName]
+  Help: '&6/rivalseason &7- Current season info'
+
+rivalquests:
+  Cmds:
+  - asConsole! noppes script trigger 224 [playerName]
+  Help: '&6/rivalquests &7- Weekly rival quests'
+
+rivalachievements:
+  Cmds:
+  - asConsole! noppes script trigger 225 [playerName]
+  Help: '&6/rivalachievements &7- Rival achievements'
+
+rivalhof:
+  Cmds:
+  - asConsole! noppes script trigger 226 [playerName]
+  Help: '&6/rivalhof &7- Hall of Fame'
+
+challengrival:
+  Cmds:
+  - asConsole! noppes script trigger 210 [playerName] $1
+  Help: '&6/challengrival <player> &7- Official 60s rival challenge'
+
+# Cleaner aliases players will actually type:
+challenge:
+  Cmds:
+  - asConsole! noppes script trigger 210 [playerName] $1
+  Help: '&6/challenge <player> &7- Official rival challenge'
+
+challengeaccept:
+  Cmds:
+  - asConsole! noppes script trigger 211 [playerName] $1-
+  Help: '&6/challengeaccept [player] &7- Accept a challenge'
+
+challengedecline:
+  Cmds:
+  - asConsole! noppes script trigger 212 [playerName] $1-
+  Help: '&6/challengedecline [player] &7- Decline a challenge'
+
+challengecancel:
+  Cmds:
+  - asConsole! noppes script trigger 213 [playerName]
+  Help: '&6/challengecancel &7- Cancel pending challenge or forfeit'
+
+spectaterival:
+  Cmds:
+  - asConsole! noppes script trigger 230 [playerName] $1
+  Help: '&6/spectaterival <player> &7- Spectate an official rival battle'
+
+# ---------- Optional pretty wrappers (space aliases) ----------
+# If your CMI supports multi-word aliases via aliaseditor, create:
+#   /rival declare  -> rival declare
+#   /rival accept   -> rivalaccept
+#   /rival decline  -> rivaldecline
+#   /rival remove   -> rivalremove
+#   /rival list     -> rivallist
+#   /rival stats    -> rivalstats
+#   /rival top      -> rivaltop
+#   /rival title    -> rivaltitle
+#   /rival journal  -> rivaljournal
+#   /rival season   -> rivalseason
+#   /rival quests   -> rivalquests
+#   /rival achievements -> rivalachievements
+#   /rival hof      -> rivalhof
+#   /challenge accept|decline|cancel
+#   /challenge rival <player> -> challenge
