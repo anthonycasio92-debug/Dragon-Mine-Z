@@ -1,9 +1,9 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.2.0
+ Version: 2.3.0
 
- - Stronger End mobs (tiered absolute HP around ~50k)
+ - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Ender Dragon starts at 200,000 HP and scales with player stats
  - /enddragon command spawn (CMI alias -> trigger 50)
@@ -52,47 +52,53 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /* Dragon base HP, then scaled by summoner / strongest End player stats. */
-var DRAGON_BASE_HP = 200000;
-var DRAGON_HP_PER_LEVEL = 2500;
-var DRAGON_HP_PER_BP = 0.35;          /* battle power contribution */
-var DRAGON_HP_PER_MELEE = 12;         /* melee damage contribution */
-var DRAGON_HP_PER_PLAYER_HP = 1.5;    /* player max HP contribution */
-var DRAGON_HP_CAP = 5000000;          /* safety cap */
-var DRAGON_DAMAGE_BASE = 80;
-var DRAGON_DAMAGE_PER_LEVEL = 1.5;
+var DRAGON_BASE_HP = 500000;
+var DRAGON_HP_PER_LEVEL = 5000;
+var DRAGON_HP_PER_BP = 0.5;
+var DRAGON_HP_PER_MELEE = 20;
+var DRAGON_HP_PER_PLAYER_HP = 3.0;
+var DRAGON_HP_CAP = 25000000;
+var DRAGON_DAMAGE_BASE = 120;
+var DRAGON_DAMAGE_PER_LEVEL = 2.5;
 
 /*
- * Virtual DMZ defense on the dragon (StatsData only exists on players).
- * We store DEF on the dragon and mitigate hits with the same
- * calculatePostMitigationDamage-style formula DMZ uses.
+ * Virtual DMZ defense (StatsData only exists on players).
+ * DEF must track player melee or DMZ hits still 3–4 shot everything.
  */
 var DRAGON_DEF_ENABLED = true;
-var DRAGON_DEF_BASE = 40000;
-var DRAGON_DEF_FROM_PLAYER = 3.0;     /* player getDefense() * this */
-var DRAGON_DEF_PER_LEVEL = 750;
-var DRAGON_DEF_PER_BP = 0.08;
-var DRAGON_DEF_CAP = 2500000;
+var DRAGON_DEF_BASE = 200000;
+var DRAGON_DEF_FROM_PLAYER = 5.0;
+var DRAGON_DEF_FROM_MELEE = 2.5;
+var DRAGON_DEF_PER_LEVEL = 2000;
+var DRAGON_DEF_PER_BP = 0.2;
+var DRAGON_DEF_CAP = 20000000;
 var DRAGON_DEF_NBT = "end_strength_entity_def";
-var DRAGON_MIN_DAMAGE_FRACTION = 0.02; /* always allow at least 2% of a hit through */
+var DRAGON_MIN_DAMAGE_FRACTION = 0.005;
 
 /*
- * End mob tiers (absolute HP / damage / defense targets).
- * Lower tier = weaker, higher = stronger.
- * Nearby player stats further scale HP and DEF.
+ * End mob tiers — high floors, then scaled to nearby player power.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 20000, damage: 18, defense: 8000,  label: "Endermite" },
-    phantom:   { tier: 2, hp: 35000, damage: 28, defense: 15000, label: "Phantom" },
-    enderman:  { tier: 3, hp: 50000, damage: 40, defense: 25000, label: "Enderman" },
-    shulker:   { tier: 4, hp: 65000, damage: 32, defense: 35000, label: "Shulker" }
+    endermite: { tier: 1, hp: 250000,  damage: 40,  defense: 150000, label: "Endermite" },
+    phantom:   { tier: 2, hp: 450000,  damage: 70,  defense: 250000, label: "Phantom" },
+    enderman:  { tier: 3, hp: 800000,  damage: 100, defense: 450000, label: "Enderman" },
+    shulker:   { tier: 4, hp: 1200000, damage: 80,  defense: 600000, label: "Shulker" }
 };
-var END_MOB_LEVEL_HP_PER_LEVEL = 250; /* extra HP per nearby player level */
-var END_MOB_LEVEL_SCALE_CAP = 2.5;    /* max total scale from player level */
-var END_MOB_DEF_FROM_PLAYER = 1.25;   /* nearby player getDefense() contribution */
-var END_MOB_DEF_PER_LEVEL = 200;
-var END_MOB_DEF_SCALE_CAP = 3.0;
-var END_MOB_MIN_DAMAGE_FRACTION = 0.03;
+var END_MOB_LEVEL_HP_PER_LEVEL = 2000;
+var END_MOB_LEVEL_SCALE_CAP = 8.0;
+var END_MOB_HP_FROM_MELEE = 12.0;
+var END_MOB_HP_FROM_PLAYER_HP = 10.0;
+var END_MOB_DEF_FROM_PLAYER = 5.0;
+var END_MOB_DEF_FROM_MELEE = 3.0;
+var END_MOB_DEF_PER_LEVEL = 1000;
+var END_MOB_DEF_SCALE_CAP = 15.0;
+var END_MOB_MIN_DAMAGE_FRACTION = 0.005;
+
+/* Harder mitigation than default DMZ PvP for End content. */
+var END_FLAT_ABSORB_FRAC = 0.60;
+var END_REDUCTION_CAP = 0.97;
+var END_DEF_SCALE = 6.0;
 
 /* Egg reward */
 var GIVE_EGG_TO_KILLER = true;
@@ -113,7 +119,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v2";
+var BUFF_TAG = "end_strength_v3";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -258,6 +264,7 @@ function calcDragonDamage(power) {
 function calcDragonDefense(power) {
     var def = DRAGON_DEF_BASE
         + num(power.defense, 0) * DRAGON_DEF_FROM_PLAYER
+        + num(power.melee, 0) * DRAGON_DEF_FROM_MELEE
         + power.level * DRAGON_DEF_PER_LEVEL
         + power.bp * DRAGON_DEF_PER_BP;
     if (def < DRAGON_DEF_BASE) def = DRAGON_DEF_BASE;
@@ -266,9 +273,8 @@ function calcDragonDefense(power) {
 }
 
 /*
- * Port of DMZ StatsData.calculatePostMitigationDamage core math
- * (flat absorb + defense / (scale + defense) percent reduction).
- * Used because End entities cannot hold a real StatsData capability.
+ * Port of DMZ StatsData.calculatePostMitigationDamage core math,
+ * with End-specific harder absorb/reduction caps.
  */
 function mitigateWithDmzDefense(rawDamage, defense, minFraction) {
     var raw = Math.max(0, num(rawDamage, 0));
@@ -279,24 +285,31 @@ function mitigateWithDmzDefense(rawDamage, defense, minFraction) {
     if (!(raw > 0)) return 0;
     if (!(def > 0)) return raw;
 
-    var flatMaxFrac = 0.35;
-    var defScale = 12.0;
-    var reductionCap = 0.85;
+    var flatMaxFrac = END_FLAT_ABSORB_FRAC;
+    var defScale = END_DEF_SCALE;
+    var reductionCap = END_REDUCTION_CAP;
     try {
         var cfg = ConfigManager.getCombatConfig();
-        try { flatMaxFrac = num(cfg.getFlatMitigationMaxAbsorbFraction(), flatMaxFrac); } catch (e1) {}
-        try { defScale = num(cfg.getDefenseReductionScale(), defScale); } catch (e2) {}
+        try {
+            var cfgFlat = num(cfg.getFlatMitigationMaxAbsorbFraction(), flatMaxFrac);
+            if (cfgFlat > flatMaxFrac) flatMaxFrac = cfgFlat;
+        } catch (e1) {}
+        try {
+            var cfgScale = num(cfg.getDefenseReductionScale(), defScale);
+            if (cfgScale > 0 && cfgScale < defScale) defScale = cfgScale;
+        } catch (e2) {}
         try {
             var capObj = cfg.getBaseDamageReductionCap();
-            if (capObj != null) reductionCap = num(capObj.doubleValue ? capObj.doubleValue() : capObj, reductionCap);
+            var cfgCap = num(capObj != null && capObj.doubleValue ? capObj.doubleValue() : capObj, reductionCap);
+            if (cfgCap > reductionCap) reductionCap = cfgCap;
         } catch (e3) {}
     } catch (eCfg) {}
 
     if (defScale < 1) defScale = 1;
     if (flatMaxFrac < 0) flatMaxFrac = 0;
-    if (flatMaxFrac > 1) flatMaxFrac = 1;
+    if (flatMaxFrac > 0.95) flatMaxFrac = 0.95;
     if (reductionCap < 0) reductionCap = 0;
-    if (reductionCap > 0.95) reductionCap = 0.95;
+    if (reductionCap > 0.99) reductionCap = 0.99;
 
     var flatCap = raw * flatMaxFrac;
     var flatAbsorb = def < flatCap ? def : flatCap;
@@ -497,28 +510,48 @@ function nearbyPlayerPower(entity, world) {
 
 function calcMobDefense(tier, power) {
     var base = num(tier.defense, 0);
+    var tierFactor = num(tier.tier, 1);
     var def = base
-        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER * (num(tier.tier, 1) / 4.0)
-        + num(power.level, 1) * END_MOB_DEF_PER_LEVEL * num(tier.tier, 1);
-    var maxDef = base * END_MOB_DEF_SCALE_CAP + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER;
-    if (def > maxDef && maxDef > base) def = maxDef;
+        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER * (tierFactor / 2.0)
+        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE * (tierFactor / 2.0)
+        + num(power.level, 1) * END_MOB_DEF_PER_LEVEL * tierFactor;
+    var floorFromMelee = num(power.melee, 0) * END_MOB_DEF_FROM_MELEE;
+    if (def < floorFromMelee) def = floorFromMelee;
     if (def < base) def = base;
+    var maxDef = base * END_MOB_DEF_SCALE_CAP
+        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER
+        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE * 2;
+    if (def > maxDef) def = maxDef;
     return Math.floor(def);
 }
 
+function calcMobHp(tier, power) {
+    var base = num(tier.hp, 1);
+    var tierFactor = num(tier.tier, 1);
+    var levelScale = 1 + (power.level * END_MOB_LEVEL_HP_PER_LEVEL) / Math.max(1, base);
+    if (levelScale > END_MOB_LEVEL_SCALE_CAP) levelScale = END_MOB_LEVEL_SCALE_CAP;
+    var hp = base * levelScale
+        + num(power.melee, 0) * END_MOB_HP_FROM_MELEE * (tierFactor / 2.0)
+        + num(power.maxHp, 0) * END_MOB_HP_FROM_PLAYER_HP;
+    var floorFromMelee = num(power.melee, 0) * END_MOB_HP_FROM_MELEE;
+    if (hp < floorFromMelee) hp = floorFromMelee;
+    if (hp < base) hp = base;
+    return Math.floor(hp);
+}
+
 function buffMob(entity, world) {
-    if (alreadyBuffed(entity)) return false;
     var kind = classifyEndEntity(entity);
     if (kind == null || kind === "dragon") return false;
     var tier = END_MOB_TIERS[kind];
     if (tier == null) return false;
 
-    var power = nearbyPlayerPower(entity, world);
-    var levelScale = 1 + (power.level * END_MOB_LEVEL_HP_PER_LEVEL) / Math.max(1, tier.hp);
-    if (levelScale > END_MOB_LEVEL_SCALE_CAP) levelScale = END_MOB_LEVEL_SCALE_CAP;
+    /* Re-buff if old tag / missing DEF so v3 stats always apply. */
+    var needsBuff = !alreadyBuffed(entity) || !(readEntityDefense(entity) > 0);
+    if (!needsBuff) return false;
 
-    var hp = Math.floor(tier.hp * levelScale);
-    var dmg = Math.floor(tier.damage * Math.min(2.0, 1 + power.level / 200));
+    var power = nearbyPlayerPower(entity, world);
+    var hp = calcMobHp(tier, power);
+    var dmg = Math.floor(tier.damage * Math.min(4.0, 1 + power.level / 100));
     var def = calcMobDefense(tier, power);
 
     markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp + ":def" + def);
@@ -961,7 +994,7 @@ function tick(event) {
                 var ent = list[i];
                 var kind = classifyEndEntity(ent);
                 if (kind === "dragon") {
-                    if (!alreadyBuffed(ent)) {
+                    if (!alreadyBuffed(ent) || !(readEntityDefense(ent) > 0)) {
                         applyDragonStats(ent, readPlayerPower(strongestPlayerInEnd(world) || player), "scan");
                     }
                 } else if (kind != null) {
@@ -997,37 +1030,45 @@ function kill(event) {
 }
 
 /*
- * Apply stored DMZ-style defense when players hit the dragon.
+ * Apply stored DMZ-style defense when players hit the dragon or End mobs.
  * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
  * to the post-mitigation amount before it continues.
  */
 function damagedEntity(event) {
     try {
-        if (DRAGON_DEF_ENABLED !== true) return;
         var target = event.target;
         if (target == null) return;
-        if (classifyEndEntity(target) !== "dragon") return;
+        var kind = classifyEndEntity(target);
+        if (kind == null) return;
+
+        var isDragon = kind === "dragon";
+        if (isDragon && DRAGON_DEF_ENABLED !== true) return;
+        if (!isDragon && END_MOB_DEF_ENABLED !== true) return;
 
         var raw = Number(event.damage);
         if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
-        var def = readDragonDefense(target);
+        var def = readEntityDefense(target);
         if (!(def > 0)) {
-            /* Late/unbuffed dragon: scale from strongest End player once. */
             try {
                 var world = target.getWorld();
-                var powerPlayer = strongestPlayerInEnd(world);
-                if (powerPlayer == null && isPlayer(event.player)) powerPlayer = event.player;
-                if (powerPlayer != null) {
-                    applyDragonStats(target, readPlayerPower(powerPlayer), "onhit");
-                    def = readDragonDefense(target);
+                if (isDragon) {
+                    var powerPlayer = strongestPlayerInEnd(world);
+                    if (powerPlayer == null && isPlayer(event.player)) powerPlayer = event.player;
+                    if (powerPlayer != null) {
+                        applyDragonStats(target, readPlayerPower(powerPlayer), "onhit");
+                        def = readEntityDefense(target);
+                    }
+                } else {
+                    buffMob(target, world);
+                    def = readEntityDefense(target);
                 }
             } catch (e1) {}
         }
         if (!(def > 0)) return;
 
-        var taken = mitigateWithDmzDefense(raw, def);
-        event.damage = taken;
+        var minFrac = isDragon ? DRAGON_MIN_DAMAGE_FRACTION : END_MOB_MIN_DAMAGE_FRACTION;
+        event.damage = mitigateWithDmzDefense(raw, def, minFrac);
     } catch (error) {
         try { print("[EndStrength] damagedEntity: " + error); } catch (e) {}
     }
