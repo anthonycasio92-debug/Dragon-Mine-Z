@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.10
+ Version: 4.6.11
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -1359,7 +1359,8 @@ function showStats(player, targetName) {
         C + "c" + num(career.officialLosses, 0) + C + "8-" + C + "7" + num(career.officialDraws, 0));
     uiProp(player, "Streak", C + "e" + commas(career.currentStreak) +
         C + "8   Best  " + C + "6" + commas(career.bestStreak));
-    uiProp(player, "Damage", C + "f" + commas(career.damageDealt));
+    uiProp(player, "Damage", C + "f" + commas(career.damageDealt) +
+        C + "8  Taken  " + C + "f" + commas(career.damageTaken));
     uiProp(player, "Battles", C + "f" + commas(career.challengesPlayed));
     uiFoot(player);
 }

@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.10
+ Version: 4.6.11
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -3504,14 +3504,41 @@ function chGetSession(db, uuid) {
 function chFreshCombat() {
     return {
         damage: 0,
+        damageTaken: 0,
         physical: 0,
         ki: 0,
         hits: 0,
+        hitsTaken: 0,
         biggestHit: 0,
+        biggestTaken: 0,
         combo: 0,
         longestCombo: 0,
         lastHitAt: 0
     };
+}
+
+/*
+ * Resolve the attacking player from a victim `damaged` event.
+ * Prefer true source so Ki projectiles still attribute to the owner.
+ */
+function chAttackerFromDamaged(event) {
+    var source = null;
+    try { source = event.source; } catch (ignored) {}
+    if (chIsPlayer(source)) return source;
+
+    try {
+        var ds = event.damageSource;
+        if (ds === null || ds === undefined) return null;
+        var trueSrc = null;
+        try { trueSrc = ds.getTrueSource(); } catch (ignored2) {}
+        if (chIsPlayer(trueSrc)) return trueSrc;
+        try {
+            if (trueSrc !== null && trueSrc.getMCEntity) {
+                /* already an IEntity wrapper */
+            }
+        } catch (ignored3) {}
+    } catch (ignored4) {}
+    return null;
 }
 
 /* ========================= DMZ ========================= */
@@ -4059,7 +4086,8 @@ function chBuildReport(session, winnerName, loserName) {
         lines.push(CH_COLOR + "e" + name);
         lines.push(CH_COLOR + "8  Damage  " + CH_COLOR + "f" + chCommas(combat.damage) +
             CH_COLOR + "8  (Phy " + chCommas(combat.physical) + " / Ki " + chCommas(combat.ki) + ")");
-        lines.push(CH_COLOR + "8  Hits  " + CH_COLOR + "f" + combat.hits +
+        lines.push(CH_COLOR + "8  Taken   " + CH_COLOR + "f" + chCommas(chNumber(combat.damageTaken, 0)) +
+            CH_COLOR + "8  Hits " + CH_COLOR + "f" + combat.hits +
             CH_COLOR + "8   Best  " + CH_COLOR + "f" + chCommas(combat.biggestHit) +
             CH_COLOR + "8   Combo  " + CH_COLOR + "f" + combat.longestCombo);
     }
@@ -4083,7 +4111,7 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             seasonRp: chNumber(seasonRp, 0),
             journalKey: chString(journalKey),
             damageDealt: chNumber(combat.damage, 0),
-            damageTaken: chNumber(otherCombat.damage, 0),
+            damageTaken: chNumber(combat.damageTaken, chNumber(otherCombat.damage, 0)),
             physical: chNumber(combat.physical, 0),
             ki: chNumber(combat.ki, 0),
             longestCombo: chNumber(combat.longestCombo, 0),
@@ -4123,7 +4151,8 @@ function chApplyRewards(player, session, result) {
         if (record === null) return;
         record.career.challengesPlayed = chNumber(record.career.challengesPlayed, 0) + 1;
         record.career.damageDealt = chNumber(record.career.damageDealt, 0) + chNumber(combat.damage, 0);
-        record.career.damageTaken = chNumber(record.career.damageTaken, 0) + chNumber(takenCombat.damage, 0);
+        record.career.damageTaken = chNumber(record.career.damageTaken, 0) +
+            chNumber(combat.damageTaken, chNumber(takenCombat.damage, 0));
         record.career.biggestHit = Math.max(chNumber(record.career.biggestHit, 0), chNumber(combat.biggestHit, 0));
         record.career.highestCombo = Math.max(chNumber(record.career.highestCombo, 0), chNumber(combat.longestCombo, 0));
     }
@@ -4161,7 +4190,8 @@ function chApplyRewards(player, session, result) {
         L.battles = chNumber(L.battles, 0) + 1;
         L.timeFoughtMs = chNumber(L.timeFoughtMs, 0) + battleDuration;
         L.damageDealt = chNumber(L.damageDealt, 0) + chNumber(myCombat.damage, 0);
-        L.damageTaken = chNumber(L.damageTaken, 0) + chNumber(theirCombat.damage, 0);
+        L.damageTaken = chNumber(L.damageTaken, 0) +
+            chNumber(myCombat.damageTaken, chNumber(theirCombat.damage, 0));
         if (outcome === "win") {
             L.currentStreak = chNumber(L.currentStreak, 0) + 1;
             L.bestStreak = Math.max(chNumber(L.bestStreak, 0), L.currentStreak);
@@ -4520,7 +4550,11 @@ function chRecordHit(session, attackerUuid, victimUuid, damage, isKi) {
     if (atk.combo > atk.longestCombo) atk.longestCombo = atk.combo;
     atk.lastHitAt = chNow();
 
-    session.combat[victimUuid].combo = 0;
+    var vic = session.combat[victimUuid];
+    vic.damageTaken = chNumber(vic.damageTaken, 0) + damage;
+    vic.hitsTaken = chNumber(vic.hitsTaken, 0) + 1;
+    if (damage > chNumber(vic.biggestTaken, 0)) vic.biggestTaken = damage;
+    vic.combo = 0;
 }
 
 /* ========================= EVENTS ========================= */
@@ -4686,21 +4720,13 @@ function rivalChTick(event) {
 
 function rivalChDamagedEntity(event) {
     try {
-        var attacker = event.player;
-        var target = event.target;
-        if (!chIsPlayer(attacker) || !chIsPlayer(target)) return;
-
-        var db = chLoadChallengeDb(attacker);
-        var session = chGetSession(db, chUuid(attacker));
-        if (session === null || session.state !== "active") return;
-
-        var atkUuid = chUuid(attacker);
-        var tgtUuid = chUuid(target);
-        if (tgtUuid !== session.challengerUuid && tgtUuid !== session.opponentUuid) return;
-        if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
-
-        chRecordHit(session, atkUuid, tgtUuid, Number(event.damage), chIsKiDamage(event));
-        chSaveChallengeDb(attacker, db);
+        /*
+         * Do not score challenge damage here.
+         * damagedEntity carries DMZ outgoing attack numbers (often pre-defense)
+         * and also double-counts with the victim `damaged` hook.
+         * Actual damage taken is recorded in rivalChDamaged.
+         */
+        return;
     } catch (error) {
         chLog("damagedEntity failed: " + error);
     }
@@ -4711,8 +4737,7 @@ function rivalChDamaged(event) {
         var victim = event.player;
         if (!chIsPlayer(victim)) return;
 
-        var source = null;
-        try { source = event.source; } catch (ignored) {}
+        var source = chAttackerFromDamaged(event);
         if (!chIsPlayer(source)) return;
 
         var db = chLoadChallengeDb(victim);
@@ -4723,8 +4748,16 @@ function rivalChDamaged(event) {
         var vicUuid = chUuid(victim);
         if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
         if (vicUuid !== session.challengerUuid && vicUuid !== session.opponentUuid) return;
+        if (atkUuid === vicUuid) return;
 
-        chRecordHit(session, atkUuid, vicUuid, Number(event.damage), chIsKiDamage(event));
+        /*
+         * event.damage on the victim damaged hook is the damage being applied
+         * to this player (damage taken), not the attacker's DMZ attack stat.
+         */
+        var amount = Number(event.damage);
+        if (isNaN(amount) || !isFinite(amount) || amount <= 0) return;
+
+        chRecordHit(session, atkUuid, vicUuid, amount, chIsKiDamage(event));
         chSaveChallengeDb(victim, db);
     } catch (error) {
         chLog("damaged failed: " + error);
