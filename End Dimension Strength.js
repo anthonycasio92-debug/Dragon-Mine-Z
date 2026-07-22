@@ -1,13 +1,14 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.0.0
+ Version: 2.0.1
 
  - Stronger End mobs (tiered absolute HP around ~50k)
  - Ender Dragon starts at 200,000 HP and scales with player stats
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
+ - End crystals destroyed after each dragon kill
  - Kill announce fires once (no chat spam)
 
  PLACE AS:
@@ -81,6 +82,10 @@ var EGG_CLEAR_Y_MIN = 50;
 var EGG_CLEAR_Y_MAX = 120;
 var EGG_CLEAR_ATTEMPTS = 10;
 
+/* Destroy all End Crystals when the dragon dies (retries for a few ticks). */
+var DESTROY_CRYSTALS_ON_KILL = true;
+var CRYSTAL_CLEAR_ATTEMPTS = 12;
+
 /* Announce once per dragon kill only (to killer + optional server line). */
 var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
@@ -89,6 +94,7 @@ var COLOR = "\u00A7";
 var BUFF_TAG = "end_strength_v2";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
+var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
 var TEMP_NATURAL = "end.strength.naturalCheck";
 var WORLD_EGG_LOCK = "end.strength.eggClaimed.";
 var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
@@ -486,6 +492,68 @@ function clearDragonEggBlocks(world) {
     return removed;
 }
 
+function isEndCrystal(entity) {
+    if (entity == null || isPlayer(entity)) return false;
+    var key = entityKey(entity);
+    if (key.indexOf("end_crystal") >= 0) return true;
+    if (key.indexOf("endercrystal") >= 0) return true;
+    if (key.indexOf("ender_crystal") >= 0) return true;
+    return false;
+}
+
+function clearEndCrystals(world) {
+    if (world == null || DESTROY_CRYSTALS_ON_KILL !== true) return 0;
+    var removed = 0;
+    try {
+        var list = world.getAllEntities(-1);
+        for (var i = 0; i < list.length; i++) {
+            var ent = list[i];
+            if (!isEndCrystal(ent)) continue;
+            try { ent.despawn(); removed++; }
+            catch (e1) {
+                try { ent.kill(); removed++; }
+                catch (e2) {
+                    try {
+                        var mc = ent.getMCEntity();
+                        if (mc != null) {
+                            try { mc.discard(); removed++; }
+                            catch (e3) {
+                                try { mc.m_146870_(); removed++; } catch (e4) {}
+                            }
+                        }
+                    } catch (e5) {}
+                }
+            }
+        }
+    } catch (e) {}
+
+    /* Fallback: killall via command if entity scan missed any. */
+    if (removed <= 0) {
+        try {
+            NpcAPI.Instance().executeCommand(world,
+                "execute in minecraft:the_end run kill @e[type=minecraft:end_crystal]");
+            removed = 1;
+        } catch (e6) {
+            try {
+                NpcAPI.Instance().executeCommand(world, "kill @e[type=minecraft:end_crystal]");
+                removed = 1;
+            } catch (e7) {}
+        }
+    }
+    return removed;
+}
+
+function scheduleCrystalClear(player) {
+    if (DESTROY_CRYSTALS_ON_KILL !== true || player == null) return;
+    try {
+        player.getTempdata().put(TEMP_CRYSTAL_CLEAR, "" + CRYSTAL_CLEAR_ATTEMPTS);
+    } catch (e) {}
+    try {
+        var world = getEndWorld() || player.getWorld();
+        clearEndCrystals(world);
+    } catch (e2) {}
+}
+
 function claimEggReward(player, victim) {
     var world = null;
     try { world = player.getWorld(); } catch (e0) {}
@@ -548,6 +616,8 @@ function claimEggReward(player, victim) {
         try { player.getTempdata().put(TEMP_EGG_CLEAR, "" + EGG_CLEAR_ATTEMPTS); } catch (e6) {}
         clearDragonEggBlocks(world);
     }
+
+    scheduleCrystalClear(player);
 }
 
 /* ========================= NATURAL / COMMAND SPAWN ========================= */
@@ -687,6 +757,19 @@ function tick(event) {
             }
         } catch (eClear) {}
 
+        /* Keep destroying End Crystals for a few ticks after dragon death. */
+        try {
+            if (temp.has(TEMP_CRYSTAL_CLEAR)) {
+                var cLeft = num(temp.get(TEMP_CRYSTAL_CLEAR), 0);
+                if (cLeft > 0) {
+                    clearEndCrystals(getEndWorld() || world);
+                    cLeft--;
+                    if (cLeft <= 0) temp.remove(TEMP_CRYSTAL_CLEAR);
+                    else temp.put(TEMP_CRYSTAL_CLEAR, "" + cLeft);
+                } else temp.remove(TEMP_CRYSTAL_CLEAR);
+            }
+        } catch (eCrystal) {}
+
         /* Natural spawn check (throttled per player, locked world-wide). */
         try {
             var lastNat = 0;
@@ -753,6 +836,7 @@ function kill(event) {
         } catch (e1) {}
 
         claimEggReward(player, victim);
+        scheduleCrystalClear(player);
     } catch (error) {
         try { print("[EndStrength] kill: " + error); } catch (e) {}
     }
