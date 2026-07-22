@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.6
+ Version: 4.6.7
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -77,16 +77,16 @@ var CH_DURATION_MS = 60 * 1000;
 var CH_MAX_DISTANCE = 64;
 
 var TIERS = [
-    { min: 0,     name: "Acquaintance",  color: "7", perk: "None" },
-    { min: 100,   name: "Competitor",    color: "a", perk: "Sense farther" },
-    { min: 300,   name: "Adversary",     color: "2", perk: "Better battle reports" },
-    { min: 700,   name: "Rival",         color: "e", perk: "Rival notifications" },
-    { min: 1500,  name: "Nemesis",       color: "6", perk: "Rival tracker" },
-    { min: 3000,  name: "Legendary",     color: "c", perk: "Custom aura flag" },
-    { min: 5000,  name: "Arch Rival",    color: "d", perk: "Entrance animation flag" },
-    { min: 7500,  name: "Mortal Enemy",  color: "5", perk: "Priority alerts" },
-    { min: 10000, name: "Eternal Rival", color: "b", perk: "Unique title" },
-    { min: 15000, name: "Mythic Rival",  color: "4", perk: "Mythic title + max perks" }
+    { min: 0,     name: "Acquaintance",  color: "7", tpMult: 1.00, perk: "None" },
+    { min: 100,   name: "Competitor",    color: "a", tpMult: 1.05, perk: "Sense farther + 5% rival TP" },
+    { min: 300,   name: "Adversary",     color: "2", tpMult: 1.10, perk: "Better reports + 10% rival TP" },
+    { min: 700,   name: "Rival",         color: "e", tpMult: 1.15, perk: "Notifications + 15% rival TP" },
+    { min: 1500,  name: "Nemesis",       color: "6", tpMult: 1.25, perk: "Tracker + 25% rival TP" },
+    { min: 3000,  name: "Legendary",     color: "c", tpMult: 1.35, perk: "Aura flag + 35% rival TP" },
+    { min: 5000,  name: "Arch Rival",    color: "d", tpMult: 1.45, perk: "Entrance flag + 45% rival TP" },
+    { min: 7500,  name: "Mortal Enemy",  color: "5", tpMult: 1.55, perk: "Priority alerts + 55% rival TP" },
+    { min: 10000, name: "Eternal Rival", color: "b", tpMult: 1.70, perk: "Unique title + 70% rival TP" },
+    { min: 15000, name: "Mythic Rival",  color: "4", tpMult: 2.00, perk: "Mythic title + 100% rival TP" }
 ];
 
 function now() {
@@ -1183,7 +1183,9 @@ function showTitle(player) {
     uiHead(player, "RIVAL TITLE");
     uiProp(player, "Title", C + tier.color + C_BOLD + tier.name + C_RESET);
     uiProp(player, "Perk", C + "e" + tier.perk);
+    uiProp(player, "TP Gain", C + "a" + (Math.round(num(tier.tpMult, 1) * 100)) + "%");
     uiProp(player, "RP", C + "f" + commas(rec.career.rivalPointsTotal));
+    msg(player, C + "8Rival TP awards use your title multiplier.");
     msg(player, C + "8Synced to CMI usermeta rival_title");
     uiFoot(player);
 }

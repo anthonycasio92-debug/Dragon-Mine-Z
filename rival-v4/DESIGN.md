@@ -30,20 +30,22 @@ Gameplay stays in `Rival System.js` (Global Player).
 
 ## Career RP titles (total RP — separate from Nemesis status)
 
-| RP | Title |
-|---|---|
-| 0 | Acquaintance |
-| 100 | Competitor |
-| 300 | Adversary |
-| 700 | Rival |
-| 1500 | Nemesis *(title)* |
-| 3000 | Legendary |
-| 5000 | Arch Rival |
-| 7500 | Mortal Enemy |
-| 10000 | Eternal Rival |
-| 15000 | Mythic Rival |
+| RP | Title | Rival TP mult |
+|---|---|---|
+| 0 | Acquaintance | 1.00x |
+| 100 | Competitor | 1.05x |
+| 300 | Adversary | 1.10x |
+| 700 | Rival | 1.15x |
+| 1500 | Nemesis *(title)* | 1.25x |
+| 3000 | Legendary | 1.35x |
+| 5000 | Arch Rival | 1.45x |
+| 7500 | Mortal Enemy | 1.55x |
+| 10000 | Eternal Rival | 1.70x |
+| 15000 | Mythic Rival | 2.00x |
 
 Note: the **Nemesis link status** is history-chosen (one Mutual). The career title named "Nemesis" is unrelated RP flavor.
+
+Title TP mult stacks with level scaling on all rival TP (presence, kills, challenges, fusion).
 
 ## Core loops
 

@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.6
+ Version: 4.6.7
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1903,17 +1903,20 @@ var RP_ANTIGANK_HIT_COOLDOWN_MS = 15000;
 var RP_ANTIGANK_OFFENSE_BONUS = 0.12;   // weak rival offense near strong target
 
 var RP_TIERS = [
-    { min: 0,     name: "Acquaintance" },
-    { min: 100,   name: "Competitor" },
-    { min: 300,   name: "Adversary" },
-    { min: 700,   name: "Rival" },
-    { min: 1500,  name: "Nemesis" },
-    { min: 3000,  name: "Legendary" },
-    { min: 5000,  name: "Arch Rival" },
-    { min: 7500,  name: "Mortal Enemy" },
-    { min: 10000, name: "Eternal Rival" },
-    { min: 15000, name: "Mythic Rival" }
+    { min: 0,     name: "Acquaintance",  tpMult: 1.00 },
+    { min: 100,   name: "Competitor",    tpMult: 1.05 },
+    { min: 300,   name: "Adversary",     tpMult: 1.10 },
+    { min: 700,   name: "Rival",         tpMult: 1.15 },
+    { min: 1500,  name: "Nemesis",       tpMult: 1.25 },
+    { min: 3000,  name: "Legendary",     tpMult: 1.35 },
+    { min: 5000,  name: "Arch Rival",    tpMult: 1.45 },
+    { min: 7500,  name: "Mortal Enemy",  tpMult: 1.55 },
+    { min: 10000, name: "Eternal Rival", tpMult: 1.70 },
+    { min: 15000, name: "Mythic Rival",  tpMult: 2.00 }
 ];
+
+/* Career-title TP perk (stacks with level scaling). Set false to disable. */
+var RIVAL_TITLE_TP_ENABLED = true;
 
 /* ========================= HELPERS ========================= */
 
@@ -1981,6 +1984,52 @@ function rpTierIndex(points) {
         if (rp >= RP_TIERS[i].min) index = i;
     }
     return index;
+}
+
+function rpGetTitleTier(points) {
+    return RP_TIERS[rpTierIndex(points)];
+}
+
+/*
+ * Career title TP multiplier from total Rival Points.
+ * Applied to all rival TP awards (presence, kills, challenges, fusion).
+ */
+function rivalTitleTpMultiplier(player) {
+    if (RIVAL_TITLE_TP_ENABLED !== true) return 1.0;
+    if (player === null || player === undefined) return 1.0;
+    try {
+        var database = rpLoadDatabase(player);
+        if (database === null) return 1.0;
+        var uuid = rpUuid(player);
+        if (uuid === "") return 1.0;
+        var record = database.players[uuid];
+        if (record === null || record === undefined) {
+            /* Name fallback if UUID key missing */
+            var pname = rpLower(rpName(player));
+            for (var u in database.players) {
+                if (!database.players.hasOwnProperty(u)) continue;
+                if (rpLower(database.players[u].name) === pname) {
+                    record = database.players[u];
+                    break;
+                }
+            }
+        }
+        if (record === null || record === undefined) return 1.0;
+        var careerRp = 0;
+        if (record.career !== null && typeof record.career === "object") {
+            careerRp = rpNumber(record.career.rivalPointsTotal, 0);
+        }
+        var tier = rpGetTitleTier(careerRp);
+        var mult = rpNumber(tier.tpMult, 1.0);
+        if (!(mult > 0) || isNaN(mult) || !isFinite(mult)) return 1.0;
+        return mult;
+    } catch (ignored) {
+        return 1.0;
+    }
+}
+
+function rpLower(value) {
+    return rpString(value).toLowerCase();
 }
 
 function rpCommas(value) {
@@ -2232,22 +2281,27 @@ function rivalLevelTpMultiplier(data) {
     return rivalLevelTpMultiplierFromLevel(rivalGetDmzLevel(data));
 }
 
-/* kind: "burst" (default) or "drip" */
-function rivalEffectiveTpMultiplier(data, kind) {
+/* kind: "burst" (default) or "drip". Pass player to include career-title TP perk. */
+function rivalEffectiveTpMultiplier(data, kind, player) {
     var burst = rivalLevelTpMultiplier(data);
-    if (kind !== "drip") return burst;
-    var drip = Math.pow(Math.max(1.0, burst), RIVAL_LEVEL_TP_DRIP_POWER);
-    var dripCap = Number(RIVAL_LEVEL_TP_DRIP_MAX);
-    if (isNaN(dripCap) || dripCap < 1) dripCap = 75.0;
-    if (drip > dripCap) drip = dripCap;
-    return drip;
+    var levelPart = burst;
+    if (kind === "drip") {
+        var drip = Math.pow(Math.max(1.0, burst), RIVAL_LEVEL_TP_DRIP_POWER);
+        var dripCap = Number(RIVAL_LEVEL_TP_DRIP_MAX);
+        if (isNaN(dripCap) || dripCap < 1) dripCap = 75.0;
+        if (drip > dripCap) drip = dripCap;
+        levelPart = drip;
+    }
+    var titlePart = rivalTitleTpMultiplier(player);
+    if (!(titlePart > 0) || isNaN(titlePart) || !isFinite(titlePart)) titlePart = 1.0;
+    return levelPart * titlePart;
 }
 
-function rivalScaleTpByLevel(data, amount, kind) {
+function rivalScaleTpByLevel(data, amount, kind, player) {
     var base = Math.floor(Number(amount));
     if (isNaN(base) || base <= 0) return 0;
     if (data === null || data === undefined) return base;
-    var mult = rivalEffectiveTpMultiplier(data, kind);
+    var mult = rivalEffectiveTpMultiplier(data, kind, player);
     if (!(mult > 0) || isNaN(mult) || !isFinite(mult)) mult = 1.0;
     return Math.max(1, Math.floor(base * mult));
 }
@@ -2256,7 +2310,7 @@ function rpAwardTP(player, data, amount, reason, kind) {
     try {
         if (data === null || data === undefined) return false;
         var scaleKind = kind === "drip" ? "drip" : "burst";
-        amount = rivalScaleTpByLevel(data, amount, scaleKind);
+        amount = rivalScaleTpByLevel(data, amount, scaleKind, player);
         if (amount <= 0) return false;
         var resources = data.getResources();
         if (resources === null) return false;
@@ -2269,7 +2323,7 @@ function rpAwardTP(player, data, amount, reason, kind) {
                 var lvl = rivalGetDmzLevel(data);
                 note = (note ? note + " | " : "") +
                     "Lv" + rpCommas(lvl) + " " +
-                    rivalFormatMult(rivalEffectiveTpMultiplier(data, scaleKind));
+                    rivalFormatMult(rivalEffectiveTpMultiplier(data, scaleKind, player));
             }
             rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
                 (note ? RP_COLOR + "7 (" + note + ")" : ""));
@@ -3299,7 +3353,7 @@ function chAwardTP(player, amount, reason) {
     try {
         var data = chGetDMZ(player);
         if (data === null) return false;
-        amount = rivalScaleTpByLevel(data, amount, "burst");
+        amount = rivalScaleTpByLevel(data, amount, "burst", player);
         if (amount <= 0) return false;
         data.getResources().addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
@@ -3308,7 +3362,7 @@ function chAwardTP(player, amount, reason) {
         if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
             note = (note ? note + " | " : "") +
                 "Lv" + chCommas(rivalGetDmzLevel(data)) + " " +
-                rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst"));
+                rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst", player));
         }
         chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
             (note ? CH_COLOR + "7 (" + note + ")" : ""));
@@ -5575,13 +5629,13 @@ function rivalFusionKill(event) {
         var data = rfGetDmz(killer);
         if (data == null) return;
         try {
-            var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst");
+            var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst", killer);
             data.getResources().addTrainingPoints(killerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
             var kNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 kNote = RF_C + "7 (Lv" + rivalGetDmzLevel(data) + " " +
-                    rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst")) + ")";
+                    rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst", killer)) + ")";
             }
             rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP" + kNote);
         } catch (e) {}
@@ -5591,7 +5645,7 @@ function rivalFusionKill(event) {
         var pdata = rfGetDmz(partner);
         if (pdata == null) return;
         try {
-            var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst");
+            var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst", partner);
             pdata.getResources().addTrainingPoints(partnerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
             var pNote = "";
