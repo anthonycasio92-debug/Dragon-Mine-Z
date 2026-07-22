@@ -831,7 +831,11 @@ function cmdRemove(player, targetName) {
     if (target == null || pref.rivals[target.uuid] == null) {
         msg(player, C + "cYou do not have that rival."); return;
     }
-    var wasMutual = pref.rivals[target.uuid].mutual === true;
+    var link = pref.rivals[target.uuid];
+    var wasMutual = link.mutual === true;
+    var st = linkStatus(link);
+    /* Unknown is silent — never tip them off that they were rivaled. */
+    var notifyThem = (st == "declared" || st == "mutual" || st == "nemesis");
     delete pref.rivals[target.uuid];
     if (target.rivals[pref.uuid] != null) {
         var their = target.rivals[pref.uuid];
@@ -857,8 +861,10 @@ function cmdRemove(player, targetName) {
     }
     saveDb(db);
     msg(player, C + "eRemoved rivalry with " + target.name);
-    var online = onlineByName(target.name);
-    if (online != null) msg(online, C + "c" + pref.name + " ended rivalry with you.");
+    if (notifyThem) {
+        var online = onlineByName(target.name);
+        if (online != null) msg(online, C + "c" + pref.name + " ended rivalry with you.");
+    }
 }
 
 function cmdList(player) {
