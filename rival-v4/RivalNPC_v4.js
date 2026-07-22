@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Master NPC V4
- Version: 4.3.0
+ Version: 4.6.1
 
  Chat-only Rival Master. No dialog GUI / dialog options.
 
@@ -29,33 +29,29 @@ function line(player) {
 
 function showRivalGuide(player) {
     line(player);
-    msg(player, C + "6" + C_BOLD + "Rival Master" + C_RESET);
-    msg(player, C + "7Unknown to Declared to Mutual to Nemesis");
-    msg(player, C + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
-    msg(player, C + "7RP from official battles only. TP rewards still apply.");
-    msg(player, C + "7Defeat marks Proving Grounds. Return there for bonus TP/RP.");
+    msg(player, C + "6" + C_BOLD + " RIVAL MASTER " + C_RESET);
     line(player);
-    msg(player, C + "6Rivalry" + C_RESET);
-    msg(player, C + "e/rival <player>");
-    msg(player, C + "e/rival accept|decline|remove <player>");
-    msg(player, C + "e/rival list | stats [player]");
-    line(player);
-    msg(player, C + "6Official Battle" + C_RESET);
-    msg(player, C + "e/challenge <player>");
-    msg(player, C + "e/challenge rival <player>");
-    msg(player, C + "e/challenge accept|decline|cancel");
-    msg(player, C + "e/spectaterival <player>");
-    msg(player, C + "7Battles are announced to the whole server.");
-    msg(player, C + "7Reclaim Proving Grounds on the champion's battlefield.");
-    line(player);
-    msg(player, C + "6Progress" + C_RESET);
-    msg(player, C + "e/rival top [rp|wins|streak|damage]");
-    msg(player, C + "e/rival title  /rival journal");
-    msg(player, C + "e/rival season  /rival quests");
-    msg(player, C + "e/rival achievements  /rival hof");
-    msg(player, C + "e/spectaterival <player>");
-    line(player);
-    msg(player, C + "7Type " + C + "e/rival" + C_RESET + C + "7 for the full help list.");
+    msg(player, C + "8Path  " + C + "7Unknown " + C + "8> " + C + "eDeclared " +
+        C + "8> " + C + "6Mutual " + C + "8> " + C + "cNemesis");
+    msg(player, C + "8Slots  " + C + "f2 Mutual max" + C + "8  |  " + C + "7Nemesis from history");
+    msg(player, C + "8Rewards  " + C + "7RP from battles" + C + "8  |  " + C + "7TP still active");
+    msg(player, " ");
+    msg(player, C + "6Rivalry");
+    msg(player, C + "e  /rival <player>" + C + "8  declare");
+    msg(player, C + "e  /rival accept|decline|remove <player>");
+    msg(player, C + "e  /rival list" + C + "8  rivals + proving grounds");
+    msg(player, " ");
+    msg(player, C + "6Battle");
+    msg(player, C + "e  /challenge <player>" + C + "8  60s official fight");
+    msg(player, C + "e  /challenge accept|decline|cancel");
+    msg(player, C + "e  /spectaterival <player>" + C + "8  watch live");
+    msg(player, " ");
+    msg(player, C + "6Progress");
+    msg(player, C + "e  /rival top | title | journal | hof");
+    msg(player, C + "e  /rival season | quests | achievements");
+    msg(player, " ");
+    msg(player, C + "8Defeat marks Proving Grounds. Return there for bonus rewards.");
+    msg(player, C + "8Type " + C + "e/rival" + C_RESET + C + "8 for the full help list.");
     line(player);
 }
 

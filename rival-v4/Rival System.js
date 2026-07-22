@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.0
+ Version: 4.6.1
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -703,9 +703,12 @@ function pgProcessBattle(winnerPlayer, loserPlayer, winnerRecord, loserRecord, w
             rcMessage(loserPlayer, RC_COLOR + "c[Proving Grounds] " + RC_COLOR + "7" +
                 winnerRecord.name + " reclaimed these grounds from you.");
         }
+        chBroadcast(CH_COLOR + "8--------------------------------");
         chBroadcast(CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "e" + winnerRecord.name +
-            CH_COLOR + "7 has reclaimed the Proving Grounds from " +
+            CH_COLOR + "7 has reclaimed the grounds from " +
             CH_COLOR + "c" + out.oldChampionName + CH_COLOR + "7!");
+        chBroadcast(CH_COLOR + "8" + pgDisplayName(pg));
+        chBroadcast(CH_COLOR + "8--------------------------------");
         return out;
     }
 
@@ -767,11 +770,13 @@ function pgChallengeFlavor(player, otherName, pg, myUuid) {
 function pgListLines(player, link) {
     var pg = pgNormalize(link.provingGrounds);
     if (pg.active !== true) return;
-    rcMessage(player, RC_COLOR + "8   Grounds: " + RC_COLOR + "e" + pgShortPlace(pg) +
-        RC_COLOR + "8 | " + pgTierName(pg.tier));
-    rcMessage(player, RC_COLOR + "8   Champion: " + RC_COLOR + "f" + (pg.championName || "-") +
-        RC_COLOR + "8 | Battles: " + RC_COLOR + "f" + rcCommas(pg.battles) +
-        RC_COLOR + "8 | Streak: " + RC_COLOR + "a" + rcNumber(link.currentStreak, 0) + " wins");
+    var tierLabel = "Claimed";
+    if (pg.tier >= 3) tierLabel = "Legendary";
+    else if (pg.tier >= 2) tierLabel = "Dominant";
+    rcMessage(player, RC_COLOR + "8    Grounds  " + RC_COLOR + "e" + pgShortPlace(pg) +
+        RC_COLOR + "8  (" + tierLabel + ")");
+    rcMessage(player, RC_COLOR + "8    Champion  " + RC_COLOR + "f" + (pg.championName || "-") +
+        RC_COLOR + "8   Battles  " + RC_COLOR + "f" + rcCommas(pg.battles));
 }
 
 function rcEnsurePlayer(database, player) {
@@ -1368,24 +1373,28 @@ function rcRemove(player, targetName) {
     }
 }
 
+function rcUiLine(player) {
+    rcMessage(player, RC_COLOR + "8--------------------------------");
+}
+
 function rcList(player) {
     var database = rcLoadDatabase(player);
     var record = rcEnsurePlayer(database, player);
     rcSaveDatabase(player, database);
 
-    rcMessage(player, RC_COLOR + "6========== " + RC_COLOR + "eYour Rivals " + RC_COLOR + "6==========");
-    rcMessage(player, RC_COLOR + "7Career RP: " + RC_COLOR + "f" + rcCommas(record.career.rivalPointsTotal) +
-        RC_COLOR + "7  |  Record: " + RC_COLOR + "a" + record.career.officialWins +
-        RC_COLOR + "7-" + RC_COLOR + "c" + record.career.officialLosses);
     var nemName = "-";
     if (record.nemesisUuid && record.rivals[record.nemesisUuid]) {
         nemName = record.rivals[record.nemesisUuid].name;
     }
-    rcMessage(player, RC_COLOR + "7Slots: " + RC_COLOR + "6Mutual " +
-        RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
-        RC_COLOR + "8  | Declared and Unknown unlimited");
-    rcMessage(player, RC_COLOR + "7Nemesis: " + RC_COLOR + "c" + nemName +
-        RC_COLOR + "8  (auto: only one, from history)");
+
+    rcUiLine(player);
+    rcMessage(player, RC_COLOR + "6" + RC_COLOR + "l YOUR RIVALS " + RC_COLOR + "r");
+    rcUiLine(player);
+    rcMessage(player, RC_COLOR + "8Career  " + RC_COLOR + "f" + rcCommas(record.career.rivalPointsTotal) +
+        RC_COLOR + "7 RP" + RC_COLOR + "8   " + RC_COLOR + "a" + record.career.officialWins +
+        RC_COLOR + "8-" + RC_COLOR + "c" + record.career.officialLosses);
+    rcMessage(player, RC_COLOR + "8Mutual  " + RC_COLOR + "f" + rcCountMutual(record) + "/" + RC_MAX_MUTUAL_RIVALS +
+        RC_COLOR + "8   Nemesis  " + RC_COLOR + "c" + nemName);
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var uuid in record.rivals) {
@@ -1395,29 +1404,33 @@ function rcList(player) {
         if (groups[st] != null) groups[st].push(link);
     }
 
-    function printGroup(title, arr) {
+    function printGroup(title, color, arr, showPg) {
         if (arr.length === 0) return;
-        rcMessage(player, RC_COLOR + "6--- " + title + " (" + arr.length + ") ---");
+        rcMessage(player, " ");
+        rcMessage(player, RC_COLOR + color + RC_COLOR + "l" + title + RC_COLOR + "r" +
+            RC_COLOR + "8  (" + arr.length + ")");
         for (var i = 0; i < arr.length; i++) {
             var L = arr[i];
-            rcMessage(
-                player,
-                RC_COLOR + "7- " + RC_COLOR + "f" + L.name + " " + rcLinkStatusLabel(rcLinkStatus(L)) +
-                RC_COLOR + "7 | " + rcCommas(L.points) + " RP" +
-                RC_COLOR + "7 | Rank: " + RC_COLOR + "e" + rcGetTier(L.points).name +
-                RC_COLOR + "7 | W/L " + RC_COLOR + "a" + L.wins + RC_COLOR + "7/" + RC_COLOR + "c" + L.losses
-            );
-            if (title === "Nemesis" || title === "Mutual") pgListLines(player, L);
+            var tier = rcGetTier(L.points);
+            rcMessage(player, RC_COLOR + "f  " + L.name + "  " + rcLinkStatusLabel(rcLinkStatus(L)));
+            rcMessage(player, RC_COLOR + "8    Rank  " + RC_COLOR + tier.color + tier.name +
+                RC_COLOR + "8   RP  " + RC_COLOR + "f" + rcCommas(L.points));
+            rcMessage(player, RC_COLOR + "8    Record  " + RC_COLOR + "a" + L.wins +
+                RC_COLOR + "8-" + RC_COLOR + "c" + L.losses +
+                RC_COLOR + "8   Streak  " + RC_COLOR + "a" + rcNumber(L.currentStreak, 0));
+            if (showPg) pgListLines(player, L);
+            if (i < arr.length - 1) rcMessage(player, RC_COLOR + "8  .");
         }
     }
 
-    printGroup("Nemesis", groups.nemesis);
-    printGroup("Mutual", groups.mutual);
-    printGroup("Declared", groups.declared);
-    printGroup("Unknown", groups.unknown);
+    printGroup("NEMESIS", "c", groups.nemesis, true);
+    printGroup("MUTUAL", "6", groups.mutual, true);
+    printGroup("DECLARED", "e", groups.declared, false);
+    printGroup("UNKNOWN", "7", groups.unknown, false);
 
     if (groups.nemesis.length + groups.mutual.length + groups.declared.length + groups.unknown.length === 0) {
-        rcMessage(player, RC_COLOR + "8No rivals yet. Use /rival <player> to declare one.");
+        rcMessage(player, " ");
+        rcMessage(player, RC_COLOR + "8No rivals yet. Use  " + RC_COLOR + "e/rival <player>");
     }
 
     rcCleanupExpiredRequests(database);
@@ -1426,30 +1439,43 @@ function rcList(player) {
         if (!database.requests.hasOwnProperty(key)) continue;
         var req = database.requests[key];
         if (rcString(req.toUuid) === record.uuid) {
+            if (pending === 0) {
+                rcMessage(player, " ");
+                rcMessage(player, RC_COLOR + "6Pending");
+            }
             pending++;
-            rcMessage(player, RC_COLOR + "dUnknown/Pending from " + RC_COLOR + "f" + req.fromName);
+            rcMessage(player, RC_COLOR + "d  > " + RC_COLOR + "f" + req.fromName +
+                RC_COLOR + "8  /rival accept " + req.fromName);
         }
     }
-    if (pending === 0) {
-        rcMessage(player, RC_COLOR + "8No pending incoming requests.");
-    }
+    rcUiLine(player);
 }
 
 function rcHelp(player) {
-    rcMessage(player, RC_COLOR + "6===== Rival System V4 =====");
-    rcMessage(player, RC_COLOR + "7Statuses: Unknown to Declared to Mutual to Nemesis");
-    rcMessage(player, RC_COLOR + "7Max 2 Mutual (3rd demotes oldest). One Nemesis from history.");
-    rcMessage(player, RC_COLOR + "7RP from official battles only - unlocks instinct, titles, records.");
-    rcMessage(player, RC_COLOR + "7TP still rewards: near rivals, kills, surpass, challenges, fusion.");
-    rcMessage(player, RC_COLOR + "7Defeat marks Proving Grounds. Return there for bonus TP/RP.");
-    rcMessage(player, RC_COLOR + "e/rival <player> " + RC_COLOR + "7- Declare a rival");
-    rcMessage(player, RC_COLOR + "e/rival accept <player> " + RC_COLOR + "7- Accept a request");
-    rcMessage(player, RC_COLOR + "e/rival decline <player> " + RC_COLOR + "7- Decline a request");
-    rcMessage(player, RC_COLOR + "e/rival remove <player> " + RC_COLOR + "7- End a rivalry");
-    rcMessage(player, RC_COLOR + "e/rival list " + RC_COLOR + "7- View rivals + Proving Grounds");
-    rcMessage(player, RC_COLOR + "e/rival stats [player] " + RC_COLOR + "7- Career statistics");
-    rcMessage(player, RC_COLOR + "e/challenge <player> " + RC_COLOR + "7- Official 60s rival battle");
-    rcMessage(player, RC_COLOR + "e/rival hof " + RC_COLOR + "7- Hall of Legends");
+    rcUiLine(player);
+    rcMessage(player, RC_COLOR + "6" + RC_COLOR + "l RIVAL SYSTEM " + RC_COLOR + "r");
+    rcUiLine(player);
+    rcMessage(player, RC_COLOR + "8Path  " + RC_COLOR + "7Unknown " + RC_COLOR + "8> " +
+        RC_COLOR + "eDeclared " + RC_COLOR + "8> " + RC_COLOR + "6Mutual " + RC_COLOR + "8> " +
+        RC_COLOR + "cNemesis");
+    rcMessage(player, RC_COLOR + "8Slots  " + RC_COLOR + "f2 Mutual max" + RC_COLOR + "8  |  " +
+        RC_COLOR + "7Nemesis from history");
+    rcMessage(player, " ");
+    rcMessage(player, RC_COLOR + "6Rivalry");
+    rcMessage(player, RC_COLOR + "e  /rival <player>" + RC_COLOR + "8  declare");
+    rcMessage(player, RC_COLOR + "e  /rival accept|decline|remove <player>");
+    rcMessage(player, RC_COLOR + "e  /rival list" + RC_COLOR + "8  rivals + proving grounds");
+    rcMessage(player, RC_COLOR + "e  /rival stats [player]");
+    rcMessage(player, " ");
+    rcMessage(player, RC_COLOR + "6Battle");
+    rcMessage(player, RC_COLOR + "e  /challenge <player>" + RC_COLOR + "8  60s official fight");
+    rcMessage(player, RC_COLOR + "e  /spectaterival <player>");
+    rcMessage(player, " ");
+    rcMessage(player, RC_COLOR + "6Progress");
+    rcMessage(player, RC_COLOR + "e  /rival top | title | journal | hof");
+    rcMessage(player, " ");
+    rcMessage(player, RC_COLOR + "8Defeat marks Proving Grounds. Return there for bonus rewards.");
+    rcUiLine(player);
 }
 
 /* ========================= EVENTS ========================= */
@@ -2788,12 +2814,11 @@ function chScoreLine(session) {
     var c = session.combat[session.challengerUuid] || chFreshCombat();
     var o = session.combat[session.opponentUuid] || chFreshCombat();
     var left = Math.max(0, Math.ceil((chNumber(session.battleEndsAt, chNow()) - chNow()) / 1000));
-    return CH_COLOR + "6[Rival Battle] " + CH_COLOR + "f" + session.challengerName +
-        CH_COLOR + "7 " + chCommas(c.damage) +
-        CH_COLOR + "8 vs " +
-        CH_COLOR + "f" + session.opponentName +
-        CH_COLOR + "7 " + chCommas(o.damage) +
-        CH_COLOR + "8 | " + left + "s left";
+    return CH_COLOR + "6[Live] " +
+        CH_COLOR + "f" + session.challengerName + CH_COLOR + "e " + chCommas(c.damage) +
+        CH_COLOR + "8  vs  " +
+        CH_COLOR + "f" + session.opponentName + CH_COLOR + "e " + chCommas(o.damage) +
+        CH_COLOR + "8   " + left + "s";
 }
 
 function chMessage(player, message) {
@@ -3277,10 +3302,11 @@ function chChallenge(player, targetName) {
     db.cooldowns[cooldownKey] = chNow();
     chSaveChallengeDb(player, db);
 
-    chMessage(player, CH_COLOR + "aChallenge sent to " + CH_COLOR + "e" + chName(target) + CH_COLOR + "a.");
-    chMessage(target, CH_COLOR + "6" + chName(player) + CH_COLOR + "e challenged you to a Rival Battle!");
-    chMessage(target, CH_COLOR + "7Most damage in 60 seconds. Accept: " + CH_COLOR + "f/challenge accept");
-    chMessage(target, CH_COLOR + "7Decline: " + CH_COLOR + "f/challenge decline");
+    chMessage(player, CH_COLOR + "6[Challenge] " + CH_COLOR + "aSent to " + CH_COLOR + "e" + chName(target));
+    chMessage(target, CH_COLOR + "6[Challenge] " + CH_COLOR + "e" + chName(player) +
+        CH_COLOR + "7 wants a 60s rival battle");
+    chMessage(target, CH_COLOR + "8  /challenge accept" + CH_COLOR + "7   or   " +
+        CH_COLOR + "8/challenge decline");
 }
 
 function chFindPendingFor(db, playerUuid, optionalFromName) {
@@ -3327,12 +3353,13 @@ function chStartCountdown(player, db, pending) {
 
     var a = chFindOnlineByUuid(pending.fromUuid);
     var b = chFindOnlineByUuid(pending.toUuid);
-    if (a !== null) chMessage(a, CH_COLOR + "6Rival Challenge accepted! Countdown...");
-    if (b !== null) chMessage(b, CH_COLOR + "6Rival Challenge accepted! Countdown...");
+    if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
+    if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
+    chBroadcast(CH_COLOR + "8--------------------------------");
     chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
-        CH_COLOR + "7 vs " + CH_COLOR + "e" + pending.toName +
-        CH_COLOR + "7 - countdown!");
-    chBroadcast(CH_COLOR + "8Watch live: /spectaterival " + pending.fromName);
+        CH_COLOR + "7  vs  " + CH_COLOR + "e" + pending.toName);
+    chBroadcast(CH_COLOR + "8Countdown..." + CH_COLOR + "7  Watch: " +
+        CH_COLOR + "f/spectaterival " + pending.fromName);
 
     try {
         if (pending.related === true) {
@@ -3348,14 +3375,14 @@ function chStartCountdown(player, db, pending) {
                         if (b !== null) pgChallengeFlavor(b, pending.fromName, pgCtx, pending.toUuid);
                         if (pgCtx.active === true &&
                             ((a !== null && pgOnGrounds(a, pgCtx)) || (b !== null && pgOnGrounds(b, pgCtx)))) {
-                            chBroadcast(CH_COLOR + "6[Proving Grounds] " + CH_COLOR + "7Battle on " +
-                                CH_COLOR + "e" + pgShortPlace(pgCtx) + CH_COLOR + "7!");
+                            chBroadcast(CH_COLOR + "6Grounds  " + CH_COLOR + "e" + pgShortPlace(pgCtx));
                         }
                     }
                 }
             }
         }
     } catch (pgErr) {}
+    chBroadcast(CH_COLOR + "8--------------------------------");
 }
 
 function chAccept(player, fromName) {
@@ -3439,13 +3466,16 @@ function chBeginBattle(player, db, session) {
 
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
-    if (a !== null) chMessage(a, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
-    if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "eDeal the most damage in 60 seconds!");
+    if (a !== null) chMessage(a, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
+        CH_COLOR + "eMost damage in 60 seconds!");
+    if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
+        CH_COLOR + "eMost damage in 60 seconds!");
 
-    chBroadcast(CH_COLOR + "6--------------------------------");
-    chBroadcast(CH_COLOR + "c" + CH_COLOR + "l[Rival Battle] FIGHT!" + CH_COLOR + "r");
-    chBroadcast(CH_COLOR + "e" + session.challengerName + CH_COLOR + "7 vs " +
-        CH_COLOR + "e" + session.opponentName + CH_COLOR + "7 - 60s most damage");
+    chBroadcast(CH_COLOR + "8--------------------------------");
+    chBroadcast(CH_COLOR + "c" + CH_COLOR + "l FIGHT! " + CH_COLOR + "r");
+    chBroadcast(CH_COLOR + "e" + session.challengerName + CH_COLOR + "7  vs  " +
+        CH_COLOR + "e" + session.opponentName);
+    chBroadcast(CH_COLOR + "860s most damage");
     try {
         if (session.related === true) {
             var fightCore = chLoadCoreDb(player);
@@ -3455,39 +3485,46 @@ function chBeginBattle(player, db, session) {
                     var fightPg = pgNormalize(fightRec.rivals[session.opponentUuid].provingGrounds);
                     if (fightPg.active === true &&
                         ((a !== null && pgOnGrounds(a, fightPg)) || (b !== null && pgOnGrounds(b, fightPg)))) {
-                        chBroadcast(CH_COLOR + "6Proving Grounds: " + CH_COLOR + "e" + pgShortPlace(fightPg) +
-                            CH_COLOR + "8 | Champion: " + CH_COLOR + "f" + (fightPg.championName || "-"));
+                        chBroadcast(CH_COLOR + "6Grounds  " + CH_COLOR + "e" + pgShortPlace(fightPg) +
+                            CH_COLOR + "8   Champion  " + CH_COLOR + "f" + (fightPg.championName || "-"));
                     }
                 }
             }
         }
     } catch (fightPgErr) {}
-    chBroadcast(CH_COLOR + "8/spectaterival " + session.challengerName);
-    chBroadcast(CH_COLOR + "6--------------------------------");
+    chBroadcast(CH_COLOR + "8Watch  " + CH_COLOR + "f/spectaterival " + session.challengerName);
+    chBroadcast(CH_COLOR + "8--------------------------------");
 }
 
 function chBuildReport(session, winnerName, loserName) {
     var lines = [];
     /* ASCII-only borders - unicode box lines render as ? on many clients */
-    lines.push(CH_COLOR + "6--------------------------------");
-    lines.push(CH_COLOR + "e" + CH_COLOR + "lOfficial Rival Challenge" + CH_COLOR + "r");
-    lines.push(CH_COLOR + "7Winner: " + CH_COLOR + "a" + (winnerName || "Draw"));
-    if (loserName) lines.push(CH_COLOR + "7Runner-up: " + CH_COLOR + "c" + loserName);
-    lines.push(CH_COLOR + "7Duration: " + CH_COLOR + "f" + chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))));
-    lines.push(CH_COLOR + "7Reason: " + CH_COLOR + "f" + session.endReason);
+    lines.push(CH_COLOR + "8--------------------------------");
+    lines.push(CH_COLOR + "6" + CH_COLOR + "l RIVAL BATTLE REPORT " + CH_COLOR + "r");
+    lines.push(CH_COLOR + "8--------------------------------");
+    if (winnerName === "Draw" || !loserName) {
+        lines.push(CH_COLOR + "8Result  " + CH_COLOR + "eDraw");
+    } else {
+        lines.push(CH_COLOR + "8Winner  " + CH_COLOR + "a" + winnerName);
+        lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
+    }
+    lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
+        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
     for (var i = 0; i < ids.length; i++) {
         var combat = session.combat[ids[i]] || chFreshCombat();
         var name = ids[i] === session.challengerUuid ? session.challengerName : session.opponentName;
-        lines.push(CH_COLOR + "6--- " + CH_COLOR + "f" + name + CH_COLOR + "6 ---");
-        lines.push(CH_COLOR + "7Damage: " + CH_COLOR + "f" + chCommas(combat.damage) +
-            CH_COLOR + "8 (Phy " + chCommas(combat.physical) + " / Ki " + chCommas(combat.ki) + ")");
-        lines.push(CH_COLOR + "7Hits: " + CH_COLOR + "f" + combat.hits +
-            CH_COLOR + "7  Best Hit: " + CH_COLOR + "f" + chCommas(combat.biggestHit) +
-            CH_COLOR + "7  Combo: " + CH_COLOR + "f" + combat.longestCombo);
+        lines.push(" ");
+        lines.push(CH_COLOR + "e" + name);
+        lines.push(CH_COLOR + "8  Damage  " + CH_COLOR + "f" + chCommas(combat.damage) +
+            CH_COLOR + "8  (Phy " + chCommas(combat.physical) + " / Ki " + chCommas(combat.ki) + ")");
+        lines.push(CH_COLOR + "8  Hits  " + CH_COLOR + "f" + combat.hits +
+            CH_COLOR + "8   Best  " + CH_COLOR + "f" + chCommas(combat.biggestHit) +
+            CH_COLOR + "8   Combo  " + CH_COLOR + "f" + combat.longestCombo);
     }
-    lines.push(CH_COLOR + "6--------------------------------");
+    lines.push(CH_COLOR + "8--------------------------------");
     return lines;
 }
 
@@ -3838,10 +3875,10 @@ function chEndSession(player, db, session, result) {
     if (CH_BROADCAST_REPORT === true) {
         chBroadcastLines(report);
         if (result.reason === "draw") {
-            chBroadcast(CH_COLOR + "e[Rival Battle] Draw!");
+            chBroadcast(CH_COLOR + "e[Rival Battle] " + CH_COLOR + "fDraw!");
         } else {
-            chBroadcast(CH_COLOR + "a[Rival Battle] Winner: " + CH_COLOR + "f" + winnerName +
-                CH_COLOR + "a!");
+            chBroadcast(CH_COLOR + "a[Rival Battle] " + CH_COLOR + "f" + winnerName +
+                CH_COLOR + "a takes the win!");
         }
     } else {
         for (var i = 0; i < report.length; i++) {
@@ -3852,12 +3889,12 @@ function chEndSession(player, db, session, result) {
 
     if (result.reason !== "draw") {
         if (a !== null) {
-            if (chUuid(a) === result.winnerUuid) chMessage(a, CH_COLOR + "aVictory!");
-            else chMessage(a, CH_COLOR + "cDefeat!");
+            if (chUuid(a) === result.winnerUuid) chMessage(a, CH_COLOR + "a[Rival] Victory!");
+            else chMessage(a, CH_COLOR + "c[Rival] Defeat!");
         }
         if (b !== null) {
-            if (chUuid(b) === result.winnerUuid) chMessage(b, CH_COLOR + "aVictory!");
-            else chMessage(b, CH_COLOR + "cDefeat!");
+            if (chUuid(b) === result.winnerUuid) chMessage(b, CH_COLOR + "a[Rival] Victory!");
+            else chMessage(b, CH_COLOR + "c[Rival] Defeat!");
         }
     }
 

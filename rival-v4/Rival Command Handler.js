@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.0
+ Version: 4.6.1
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -477,25 +477,31 @@ function syncCmiTitle(playerName, title) {
 /* ========================= COMMANDS ========================= */
 
 function cmdHelp(player) {
-    line(player);
-    message(player, C + "6" + C_BOLD + "Rival System" + C_RESET);
-    line(player);
-    message(player, C + "6Statuses: " + C_RESET + C + "7Unknown to Declared to Mutual to Nemesis");
-    message(player, C + "7Max " + MAX_MUTUAL + " Mutual (3rd demotes oldest)");
-    message(player, C + "7Declared and Unknown are unlimited");
-    message(player, C + "7One Nemesis: auto from official battle history");
-    message(player, C + "7RP from official battles only");
-    message(player, C + "7TP rewards: near rivals, kills, surpass, challenges, fusion");
-    line(player);
-    message(player, C + "e/rival <player>" + C_RESET + C + "8  (or /rival declare <player>)");
-    message(player, C + "e/rival accept|decline|remove <player>");
-    message(player, C + "e/rival list | stats [player] | top [cat]");
-    message(player, C + "e/challenge <player>" + C_RESET + C + "8  (or /challenge rival <player>)");
-    message(player, C + "e/challenge accept | decline | cancel");
-    message(player, C + "e/spectaterival <player>" + C_RESET + C + "8  (watch a live battle)");
-    message(player, C + "7Official battles are announced server-wide.");
-    message(player, C + "7Defeat marks Proving Grounds - return there for bonus rewards.");
-    line(player);
+    uiHead(player, "RIVAL SYSTEM");
+    uiProp(player, "Path", C + "7Unknown " + C + "8> " + C + "eDeclared " + C + "8> " +
+        C + "6Mutual " + C + "8> " + C + "cNemesis");
+    uiProp(player, "Slots", C + "f" + MAX_MUTUAL + C + "7 Mutual max" + C + "8  |  " +
+        C + "7Nemesis auto from history");
+    uiProp(player, "Rewards", C + "7RP from official battles" + C + "8  |  " + C + "7TP still active");
+    uiBlank(player);
+    uiSection(player, "Rivalry");
+    uiCmd(player, "/rival <player>", "declare a rival");
+    uiCmd(player, "/rival accept|decline|remove <player>", "");
+    uiCmd(player, "/rival list", "rivals + proving grounds");
+    uiCmd(player, "/rival stats [player]", "career record");
+    uiBlank(player);
+    uiSection(player, "Battle");
+    uiCmd(player, "/challenge <player>", "60s official fight");
+    uiCmd(player, "/challenge accept|decline|cancel", "");
+    uiCmd(player, "/spectaterival <player>", "watch live");
+    uiBlank(player);
+    uiSection(player, "Progress");
+    uiCmd(player, "/rival top [rp|wins|streak|damage]", "");
+    uiCmd(player, "/rival title | journal | season", "");
+    uiCmd(player, "/rival quests | achievements | hof", "");
+    uiBlank(player);
+    msg(player, C + "8Defeat marks Proving Grounds. Return there for bonus rewards.");
+    uiFoot(player);
 }
 
 function cmdDeclare(player, targetName) {
@@ -532,10 +538,10 @@ function cmdDeclare(player, targetName) {
         pref.totals.declarationsAccepted++;
         tref.totals.declarationsAccepted++;
         saveDb(db);
-        msg(player, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + tref.name);
-        msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
-        msg(target, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + pref.name);
-        msg(target, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+        uiBanner(player, "MUTUAL", C + "e" + tref.name + C_RESET);
+        msg(player, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
+        uiBanner(target, "MUTUAL", C + "e" + pref.name + C_RESET);
+        msg(target, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
         return;
     }
 
@@ -558,9 +564,9 @@ function cmdDeclare(player, targetName) {
     pref.totals.declarationsSent++;
     saveDb(db);
 
-    msg(player, C + "aDeclared Rival: " + C + "e" + tref.name);
-    msg(target, C + "6" + pref.name + C + "e declared you. Status: " + C + "7Unknown");
-    msg(target, C + "7Accept: " + C + "f/rival accept " + pref.name);
+    uiBanner(player, "Rival", C + "aDeclared " + C + "e" + tref.name + C_RESET);
+    uiBanner(target, "Rival", C + "e" + pref.name + C + "7 declared you  " + C + "8(Unknown)");
+    msg(target, C + "8Accept with  " + C + "f/rival accept " + pref.name);
 }
 
 function cmdAccept(player, fromName) {
@@ -578,12 +584,12 @@ function cmdAccept(player, fromName) {
     pref.totals.declarationsAccepted++;
     from.totals.declarationsAccepted++;
     saveDb(db);
-    msg(player, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + from.name);
-    msg(player, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+    uiBanner(player, "MUTUAL", C + "e" + from.name + C_RESET);
+    msg(player, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
     var online = onlineByName(from.name);
     if (online != null) {
-        msg(online, C + "6" + C_BOLD + "MUTUAL RIVAL! " + C_RESET + C + "e" + pref.name + C + "a accepted!");
-        msg(online, C + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+        uiBanner(online, "MUTUAL", C + "e" + pref.name + C + "a accepted!" + C_RESET);
+        msg(online, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
     }
 }
 
@@ -645,14 +651,16 @@ function cmdList(player) {
     var db = loadDb();
     var pref = ensurePlayer(db, player);
     saveDb(db);
-    msg(player, C + "6========== Your Rivals ==========");
-    msg(player, C + "7Career RP: " + C + "f" + commas(pref.career.rivalPointsTotal) +
-        C + "7 | " + C + "a" + pref.career.officialWins + C + "7-" + C + "c" + pref.career.officialLosses);
+
     var nemName = "-";
     if (pref.nemesisUuid && pref.rivals[pref.nemesisUuid]) nemName = pref.rivals[pref.nemesisUuid].name;
-    msg(player, C + "7Mutual: " + C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
-        C + "8  | Declared and Unknown unlimited");
-    msg(player, C + "7Nemesis: " + C + "c" + nemName + C + "8  (auto: only one)");
+
+    uiHead(player, "YOUR RIVALS");
+    uiProp(player, "Career", C + "f" + commas(pref.career.rivalPointsTotal) + C + "7 RP" +
+        C + "8   " + C + "a" + num(pref.career.officialWins, 0) + C + "8-" +
+        C + "c" + num(pref.career.officialLosses, 0));
+    uiProp(player, "Mutual", C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
+        C + "8   Nemesis  " + C + "c" + nemName);
 
     var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
     for (var u in pref.rivals) {
@@ -662,48 +670,40 @@ function cmdList(player) {
         if (groups[st] != null) groups[st].push(link);
     }
 
-    function printGroup(title, arr) {
+    function printGroup(title, color, arr, showPg) {
         if (arr.length == 0) return;
-        msg(player, C + "6--- " + title + " (" + arr.length + ") ---");
+        uiBlank(player);
+        msg(player, C + color + C_BOLD + title + C_RESET + C + "8  (" + arr.length + ")");
         for (var i = 0; i < arr.length; i++) {
-            var L = arr[i];
-            var rankName = "Acquaintance";
-            for (var t = 0; t < TIERS.length; t++) {
-                if (num(L.points, 0) >= TIERS[t].min) rankName = TIERS[t].name;
-            }
-            msg(player, C + "7- " + C + "f" + L.name + " " + linkStatusLabel(linkStatus(L)) +
-                C + "7 | " + commas(L.points) + " RP" +
-                C + "7 | Rank: " + C + "e" + rankName +
-                C + "7 | W/L " + C + "a" + num(L.wins, 0) + C + "7/" + C + "c" + num(L.losses, 0));
-            if ((title == "Nemesis" || title == "Mutual") && L.provingGrounds && L.provingGrounds.active === true) {
-                var pg = L.provingGrounds;
-                var place = str(pg.name);
-                if (place == "") place = "Unknown Lands";
-                var tierLabel = "Claimed Proving Grounds";
-                if (num(pg.tier, 0) >= 3) tierLabel = "Legendary Proving Grounds";
-                else if (num(pg.tier, 0) >= 2) tierLabel = "Dominant Grounds";
-                msg(player, C + "8   Grounds: " + C + "e" + place + C + "8 | " + tierLabel);
-                msg(player, C + "8   Champion: " + C + "f" + str(pg.championName || "-") +
-                    C + "8 | Battles: " + C + "f" + commas(pg.battles) +
-                    C + "8 | Streak: " + C + "a" + num(L.currentStreak, 0) + " wins");
-            }
+            printRivalCard(player, arr[i], showPg);
+            if (i < arr.length - 1) msg(player, C + "8  .");
         }
     }
 
-    printGroup("Nemesis", groups.nemesis);
-    printGroup("Mutual", groups.mutual);
-    printGroup("Declared", groups.declared);
-    printGroup("Unknown", groups.unknown);
+    printGroup("NEMESIS", "c", groups.nemesis, true);
+    printGroup("MUTUAL", "6", groups.mutual, true);
+    printGroup("DECLARED", "e", groups.declared, false);
+    printGroup("UNKNOWN", "7", groups.unknown, false);
 
     if (groups.nemesis.length + groups.mutual.length + groups.declared.length + groups.unknown.length == 0) {
-        msg(player, C + "8No rivals yet. /rival <player>");
+        uiBlank(player);
+        msg(player, C + "8No rivals yet. Use  " + C + "e/rival <player>");
     }
+
+    var pending = 0;
     for (var key in db.requests) {
         if (!db.requests.hasOwnProperty(key)) continue;
         if (str(db.requests[key].toUuid) == pref.uuid) {
-            msg(player, C + "dUnknown/Pending from " + C + "f" + db.requests[key].fromName);
+            if (pending == 0) {
+                uiBlank(player);
+                uiSection(player, "Pending");
+            }
+            pending++;
+            msg(player, C + "d  > " + C + "f" + db.requests[key].fromName +
+                C + "8  /rival accept " + db.requests[key].fromName);
         }
     }
+    uiFoot(player);
 }
 
 function cmdChallenge(player, targetName) {
@@ -743,9 +743,9 @@ function cmdChallenge(player, targetName) {
     saveCh(ch);
     saveDb(db);
 
-    msg(player, C + "aChallenge sent to " + C + "e" + nameOf(target));
-    msg(target, C + "6" + nameOf(player) + C + "e challenged you! 60s most damage.");
-    msg(target, C + "7/challenge accept   or   /challenge decline");
+    uiBanner(player, "Challenge", C + "aSent to " + C + "e" + nameOf(target));
+    uiBanner(target, "Challenge", C + "e" + nameOf(player) + C + "7 wants a 60s rival battle");
+    msg(target, C + "8  /challenge accept" + C + "7   or   " + C + "8/challenge decline");
 }
 
 function findPendingFor(ch, toUuid, optionalFrom) {
@@ -790,11 +790,13 @@ function startCountdown(ch, pending) {
 
     var a = onlineByName(pending.fromName);
     var b = onlineByName(pending.toName);
-    if (a != null) msg(a, C + "6Challenge accepted! Countdown...");
-    if (b != null) msg(b, C + "6Challenge accepted! Countdown...");
+    if (a != null) uiBanner(a, "Challenge", C + "6Accepted! Countdown...");
+    if (b != null) uiBanner(b, "Challenge", C + "6Accepted! Countdown...");
+    broadcast(C + "8--------------------------------");
     broadcast(C + "6[Rival Battle] " + C + "e" + pending.fromName +
-        C + "7 vs " + C + "e" + pending.toName + C + "7 - countdown!");
-    broadcast(C + "8Watch live: /spectaterival " + pending.fromName);
+        C + "7  vs  " + C + "e" + pending.toName);
+    broadcast(C + "8Countdown..." + C + "7  Watch: " + C + "f/spectaterival " + pending.fromName);
+    broadcast(C + "8--------------------------------");
 }
 
 function cmdChallengeAccept(player, fromName) {
@@ -862,38 +864,37 @@ function showStats(player, targetName) {
     var name = targetName != "" ? targetName : nameOf(player);
     var record = findRecord(db, name);
     if (record == null) {
-        message(player, C + "c[Rival] No record for " + name);
+        uiBanner(player, "Rival", C + "cNo record for " + name);
         return;
     }
     var career = record.career || {};
     var tier = getTier(career.rivalPointsTotal);
 
-    line(player);
-    message(player, C + "6" + C_BOLD + "Rival Statistics" + C_RESET);
-    message(player, C + "7Player: " + C + "f" + record.name);
-    line(player);
-    message(player, C + "7Rank: " + C + tier.color + tier.name + C_RESET +
-        C + "7 (" + C + "a" + commas(career.rivalPointsTotal) + C + "7 RP)");
-    message(player, C + "7Official Record: " + C + "a" + num(career.officialWins, 0) +
-        C + "7-" + C + "c" + num(career.officialLosses, 0));
-    message(player, C + "7Current Streak: " + C + "6" + commas(career.currentStreak));
-    message(player, C + "7Best Streak: " + C + "6" + commas(career.bestStreak));
-    message(player, C + "7Damage Dealt: " + C + "f" + commas(career.damageDealt));
-    message(player, C + "7Battles Played: " + C + "f" + commas(career.challengesPlayed));
-    line(player);
+    uiHead(player, "RIVAL STATS");
+    uiProp(player, "Player", C + "f" + record.name);
+    uiProp(player, "Rank", C + tier.color + tier.name + C_RESET +
+        C + "8  (" + C + "f" + commas(career.rivalPointsTotal) + C + "7 RP)");
+    uiBlank(player);
+    uiProp(player, "Record", C + "a" + num(career.officialWins, 0) + C + "8-" +
+        C + "c" + num(career.officialLosses, 0) + C + "8-" + C + "7" + num(career.officialDraws, 0));
+    uiProp(player, "Streak", C + "e" + commas(career.currentStreak) +
+        C + "8   Best  " + C + "6" + commas(career.bestStreak));
+    uiProp(player, "Damage", C + "f" + commas(career.damageDealt));
+    uiProp(player, "Battles", C + "f" + commas(career.challengesPlayed));
+    uiFoot(player);
 }
 
 function showTop(player, category) {
     var db = loadDb();
     var cat = lower(category || "rp");
     var key = "rp";
-    var title = "Top Rival Points";
-    if (cat == "wins") { key = "wins"; title = "Top Official Wins"; }
-    else if (cat == "streak") { key = "streak"; title = "Top Rival Streaks"; }
-    else if (cat == "damage") { key = "damage"; title = "Top Rival Damage"; }
-    else if (cat == "combo") { key = "combo"; title = "Top Rival Combos"; }
-    else if (cat == "hit") { key = "hit"; title = "Biggest Rival Hits"; }
-    else if (cat == "battles") { key = "battles"; title = "Most Rival Battles"; }
+    var title = "TOP RIVAL POINTS";
+    if (cat == "wins") { key = "wins"; title = "TOP OFFICIAL WINS"; }
+    else if (cat == "streak") { key = "streak"; title = "TOP RIVAL STREAKS"; }
+    else if (cat == "damage") { key = "damage"; title = "TOP RIVAL DAMAGE"; }
+    else if (cat == "combo") { key = "combo"; title = "TOP RIVAL COMBOS"; }
+    else if (cat == "hit") { key = "hit"; title = "BIGGEST RIVAL HITS"; }
+    else if (cat == "battles") { key = "battles"; title = "MOST RIVAL BATTLES"; }
 
     var rows = [];
     for (var u in db.players) {
@@ -913,13 +914,11 @@ function showTop(player, category) {
     }
     rows.sort(function (a, b) { return num(b[key], 0) - num(a[key], 0); });
 
-    line(player);
-    message(player, C + "6" + C_BOLD + title + C_RESET);
-    line(player);
+    uiHead(player, title);
 
     if (rows.length == 0 || num(rows[0][key], 0) <= 0) {
-        message(player, C + "7No records have been saved yet.");
-        line(player);
+        msg(player, C + "8No records have been saved yet.");
+        uiFoot(player);
         return;
     }
 
@@ -927,15 +926,15 @@ function showTop(player, category) {
     for (var i = 0; i < rows.length && shown < 10; i++) {
         if (num(rows[i][key], 0) <= 0) continue;
         shown++;
-        message(
-            player,
-            C + "e#" + shown +
-            C + "f " + rows[i].name +
-            C + "7 - " +
+        var placeColor = shown == 1 ? "6" : (shown == 2 ? "7" : (shown == 3 ? "e" : "8"));
+        msg(player,
+            C + placeColor + "#" + shown + C_RESET +
+            C + "f  " + rows[i].name +
+            C + "8  ........  " +
             C + "a" + commas(rows[i][key])
         );
     }
-    line(player);
+    uiFoot(player);
 }
 
 function showTitle(player) {
@@ -944,9 +943,12 @@ function showTitle(player) {
     if (rec == null) { msg(player, C + "cNo record."); return; }
     var tier = getTier(num(rec.career.rivalPointsTotal, 0));
     syncCmiTitle(nameOf(player), tier.name);
-    msg(player, C + "6Title: " + C + tier.color + tier.name + C_RESET);
-    msg(player, C + "7Perk: " + C + "e" + tier.perk + C_RESET);
-    msg(player, C + "8Synced CMI usermeta rival_title");
+    uiHead(player, "RIVAL TITLE");
+    uiProp(player, "Title", C + tier.color + C_BOLD + tier.name + C_RESET);
+    uiProp(player, "Perk", C + "e" + tier.perk);
+    uiProp(player, "RP", C + "f" + commas(rec.career.rivalPointsTotal));
+    msg(player, C + "8Synced to CMI usermeta rival_title");
+    uiFoot(player);
 }
 
 function showJournal(player, targetName) {
@@ -954,73 +956,108 @@ function showJournal(player, targetName) {
     var name = targetName != "" ? targetName : nameOf(player);
     var rec = findRecord(db, name);
     if (rec == null) { msg(player, C + "cNo record."); return; }
-    msg(player, C + "6===== Rival Journal: " + rec.name + " =====");
+    uiHead(player, "RIVAL JOURNAL");
+    uiProp(player, "Fighter", C + "f" + rec.name);
+    uiBlank(player);
     var n = 0;
     for (var u in rec.rivals) {
         if (!rec.rivals.hasOwnProperty(u)) continue;
         var l = rec.rivals[u];
         n++;
-        msg(player, C + "e" + l.name + C + "7 | " + getTier(l.points).name +
-            " | W/L " + num(l.wins, 0) + "/" + num(l.losses, 0));
+        var tier = getTier(l.points);
+        msg(player, C + "f  " + l.name + "  " + linkStatusLabel(linkStatus(l)));
+        msg(player, C + "8    " + C + tier.color + tier.name + C_RESET +
+            C + "8   " + C + "a" + num(l.wins, 0) + C + "8-" + C + "c" + num(l.losses, 0) +
+            C + "8   " + C + "f" + commas(l.points) + C + "7 RP");
     }
-    if (n == 0) msg(player, C + "8Empty.");
+    if (n == 0) msg(player, C + "8No rival history yet.");
+    uiFoot(player);
 }
 
 function showSeason(player) {
     var prog = loadJson(PROG_KEY);
     if (prog == null || prog.season == null) {
-        msg(player, C + "eSeason data will appear after first login with RivalProgression installed.");
+        uiHead(player, "RIVAL SEASON");
+        msg(player, C + "8Season data appears after RivalProgression login.");
+        uiFoot(player);
         return;
     }
     var s = prog.season;
     var left = Math.max(0, num(s.endsAt, 0) - now());
-    msg(player, C + "6===== " + s.name + " =====");
-    msg(player, C + "7Ends in " + C + "f" + Math.ceil(left / 86400000) + "d");
     var entry = s.leaderboard[uuidOf(player)] || { rp: 0, wins: 0 };
-    msg(player, C + "7Your Season RP: " + C + "f" + commas(entry.rp));
+    uiHead(player, str(s.name).toUpperCase());
+    uiProp(player, "Ends", C + "f" + Math.ceil(left / 86400000) + "d");
+    uiProp(player, "Your RP", C + "f" + commas(entry.rp));
+    uiProp(player, "Wins", C + "a" + commas(entry.wins));
+    uiFoot(player);
 }
 
 function showQuests(player) {
-    msg(player, C + "6===== Weekly Rival Quests =====");
-    msg(player, C + "7Install/keep RivalProgression_v4 enabled for live quest tracking.");
-    msg(player, C + "8Use /rivalquests after progression login tick.");
+    uiHead(player, "WEEKLY QUESTS");
     var prog = loadJson(PROG_KEY);
-    if (prog == null || prog.quests == null || prog.quests[uuidOf(player)] == null) return;
+    if (prog == null || prog.quests == null || prog.quests[uuidOf(player)] == null) {
+        msg(player, C + "8No active quests yet. Keep RivalProgression enabled.");
+        uiFoot(player);
+        return;
+    }
     var q = prog.quests[uuidOf(player)];
     for (var i = 0; i < q.list.length; i++) {
         var item = q.list[i];
-        msg(player, C + "7* " + item.name + C + "8 (" + Math.min(num(item.progress, 0), item.goal) + "/" + item.goal + ")");
+        var cur = Math.min(num(item.progress, 0), item.goal);
+        var done = cur >= item.goal;
+        msg(player, (done ? C + "a  + " : C + "e  > ") + C + "f" + item.name);
+        msg(player, C + "8    " + cur + " / " + item.goal);
     }
+    uiFoot(player);
 }
 
 function showAchievements(player) {
     var prog = loadJson(PROG_KEY);
     var list = prog != null && prog.achievements != null ? (prog.achievements[uuidOf(player)] || {}) : {};
-    var defs = ["first_blood", "nemesis", "unbreakable", "comeback_king", "legend_killer",
-        "perfect_victory", "untouchable", "combo_master", "ki_dominator", "battle_hardened", "god_rival"];
-    msg(player, C + "6===== Achievements =====");
+    var defs = [
+        ["first_blood", "First Blood"],
+        ["nemesis", "True Nemesis"],
+        ["unbreakable", "Unbreakable"],
+        ["comeback_king", "Comeback King"],
+        ["legend_killer", "Legend Killer"],
+        ["perfect_victory", "Perfect Victory"],
+        ["untouchable", "Untouchable"],
+        ["combo_master", "Combo Master"],
+        ["ki_dominator", "Ki Dominator"],
+        ["battle_hardened", "Battle Hardened"],
+        ["god_rival", "God Rival"]
+    ];
+    uiHead(player, "ACHIEVEMENTS");
+    var unlocked = 0;
     for (var i = 0; i < defs.length; i++) {
-        msg(player, (list[defs[i]] === true ? C + "a[+] " : C + "8[ ] ") + C + "f" + defs[i].replace(/_/g, " "));
+        var ok = list[defs[i][0]] === true;
+        if (ok) unlocked++;
+        msg(player, (ok ? C + "a  [x] " : C + "8  [ ] ") +
+            (ok ? C + "f" : C + "7") + defs[i][1] + C_RESET);
     }
+    uiBlank(player);
+    uiProp(player, "Progress", C + "f" + unlocked + C + "8 / " + defs.length);
+    uiFoot(player);
 }
 
 function showHof(player) {
     var prog = loadJson(PROG_KEY);
     var hof = prog != null && prog.hallOfFame != null ? prog.hallOfFame : {};
-    msg(player, C + "6===== Hall of Legends =====");
-    msg(player, C + "7Greatest Rivals: " + C + "f" + (hof.greatestRivals || "-"));
-    msg(player, C + "7Longest Rivalry: " + C + "f" + (hof.longestRivalry || "-"));
-    msg(player, C + "7Most Battles: " + C + "f" + (hof.mostBattles || hof.mostLegendary || "-"));
-    msg(player, C + "7Best Win Streak: " + C + "f" + (hof.longestStreak || "-"));
-    msg(player, C + "7Most Legendary Match: " + C + "f" + (hof.mostLegendaryMatch || "-"));
-    msg(player, C + "7Season Champion: " + C + "f" + (hof.seasonChampion || "-"));
-    msg(player, C + "7Highest RP: " + C + "f" + (hof.highestRp || "-"));
+    uiHead(player, "HALL OF LEGENDS");
+    uiProp(player, "Greatest", C + "f" + (hof.greatestRivals || "-"));
+    uiProp(player, "Longest", C + "f" + (hof.longestRivalry || "-"));
+    uiProp(player, "Battles", C + "f" + (hof.mostBattles || hof.mostLegendary || "-"));
+    uiProp(player, "Streak", C + "f" + (hof.longestStreak || "-"));
+    uiProp(player, "Match", C + "f" + (hof.mostLegendaryMatch || "-"));
+    uiProp(player, "Season", C + "f" + (hof.seasonChampion || "-"));
+    uiProp(player, "Highest RP", C + "f" + (hof.highestRp || "-"));
+    uiFoot(player);
 }
 
 function showSpectate(player, targetName) {
     if (targetName == "") { msg(player, C + "cUsage: /spectaterival <player>"); return; }
     var target = onlineByName(targetName);
-    if (target == null) { msg(player, C + "cOffline."); return; }
+    if (target == null) { msg(player, C + "cThat player is offline."); return; }
     var ch = loadCh();
     var sid = ch.playerSessions[uuidOf(target)];
     if (sid == null || ch.sessions[String(sid)] == null) {
@@ -1029,24 +1066,85 @@ function showSpectate(player, targetName) {
     var session = ch.sessions[String(sid)];
     var a = (session.combat && session.combat[session.challengerUuid]) || {};
     var b = (session.combat && session.combat[session.opponentUuid]) || {};
-    msg(player, C + "6===== Spectating =====");
-    msg(player, C + "f" + session.challengerName + C + "7 dmg " + commas(a.damage || 0));
-    msg(player, C + "f" + session.opponentName + C + "7 dmg " + commas(b.damage || 0));
+    uiHead(player, "SPECTATING");
+    uiProp(player, session.challengerName, C + "f" + commas(a.damage || 0) + C + "7 dmg");
+    uiProp(player, session.opponentName, C + "f" + commas(b.damage || 0) + C + "7 dmg");
     try {
         player.getTempdata().put("rival.v4.spectateSession", String(sid));
         player.getTempdata().put("rival.v4.spectateUntil", String(now() + 120000));
     } catch (e) {}
-    msg(player, C + "aSpectating 2 minutes.");
+    msg(player, C + "aSpectating for 2 minutes.");
+    uiFoot(player);
 }
 
-/* ========================= TRIGGER ========================= */
+/* ========================= UI HELPERS ========================= */
 
 function message(player, text) {
     msg(player, text);
 }
 
 function line(player) {
-    message(player, C + "8--------------------------------" + C_RESET);
+    uiLine(player);
+}
+
+function uiLine(player) {
+    msg(player, C + "8--------------------------------" + C_RESET);
+}
+
+function uiBlank(player) {
+    msg(player, " ");
+}
+
+function uiHead(player, title) {
+    uiLine(player);
+    msg(player, C + "6" + C_BOLD + " " + title + " " + C_RESET);
+    uiLine(player);
+}
+
+function uiFoot(player) {
+    uiLine(player);
+}
+
+function uiSection(player, title) {
+    msg(player, C + "6" + title + C_RESET);
+}
+
+function uiProp(player, label, value) {
+    msg(player, C + "8" + label + C_RESET + "  " + value);
+}
+
+function uiCmd(player, cmd, desc) {
+    if (desc != null && desc != "") {
+        msg(player, C + "e  " + cmd + C_RESET + C + "8  " + desc);
+    } else {
+        msg(player, C + "e  " + cmd);
+    }
+}
+
+function uiBanner(player, tag, text) {
+    msg(player, C + "6[" + tag + "] " + C_RESET + text);
+}
+
+function printRivalCard(player, L, showPg) {
+    var st = linkStatus(L);
+    var tier = getTier(L.points);
+    msg(player, C + "f  " + L.name + "  " + linkStatusLabel(st));
+    msg(player, C + "8    Rank  " + C + tier.color + tier.name + C_RESET +
+        C + "8   RP  " + C + "f" + commas(L.points));
+    msg(player, C + "8    Record  " + C + "a" + num(L.wins, 0) + C + "8-" +
+        C + "c" + num(L.losses, 0) +
+        C + "8   Streak  " + C + "a" + num(L.currentStreak, 0));
+    if (showPg === true && L.provingGrounds && L.provingGrounds.active === true) {
+        var pg = L.provingGrounds;
+        var place = str(pg.name);
+        if (place == "") place = "Unknown Lands";
+        var tierLabel = "Claimed";
+        if (num(pg.tier, 0) >= 3) tierLabel = "Legendary";
+        else if (num(pg.tier, 0) >= 2) tierLabel = "Dominant";
+        msg(player, C + "8    Grounds  " + C + "e" + place + C + "8  (" + tierLabel + ")");
+        msg(player, C + "8    Champion  " + C + "f" + str(pg.championName || "-") +
+            C + "8   Battles  " + C + "f" + commas(pg.battles));
+    }
 }
 
 function argAt(event, index) {
