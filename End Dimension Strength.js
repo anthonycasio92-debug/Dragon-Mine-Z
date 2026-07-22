@@ -1,11 +1,12 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.3.0
+ Version: 2.4.0
 
  - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
- - Ender Dragon starts at 200,000 HP and scales with player stats
+ - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
+ - Ender Dragon scales hard with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -51,13 +52,16 @@ var NATURAL_SPAWN_X = 0;
 var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
-/* Dragon base HP, then scaled by summoner / strongest End player stats. */
-var DRAGON_BASE_HP = 500000;
-var DRAGON_HP_PER_LEVEL = 5000;
-var DRAGON_HP_PER_BP = 0.5;
-var DRAGON_HP_PER_MELEE = 20;
-var DRAGON_HP_PER_PLAYER_HP = 3.0;
-var DRAGON_HP_CAP = 25000000;
+/*
+ * Dragon target HP/DEF (stored as virtual pool — see VANILLA_HP_SHELL).
+ * Melee is the primary scaler so high-DMZ players don't melt it in a few hits.
+ */
+var DRAGON_BASE_HP = 1000000;
+var DRAGON_HP_PER_LEVEL = 8000;
+var DRAGON_HP_PER_BP = 0.75;
+var DRAGON_HP_FROM_MELEE = 40.0;
+var DRAGON_HP_FROM_PLAYER_HP = 25.0;
+var DRAGON_HP_CAP = 50000000;
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
 
@@ -66,14 +70,26 @@ var DRAGON_DAMAGE_PER_LEVEL = 2.5;
  * DEF must track player melee or DMZ hits still 3–4 shot everything.
  */
 var DRAGON_DEF_ENABLED = true;
-var DRAGON_DEF_BASE = 200000;
-var DRAGON_DEF_FROM_PLAYER = 5.0;
-var DRAGON_DEF_FROM_MELEE = 2.5;
-var DRAGON_DEF_PER_LEVEL = 2000;
-var DRAGON_DEF_PER_BP = 0.2;
-var DRAGON_DEF_CAP = 20000000;
+var DRAGON_DEF_BASE = 400000;
+var DRAGON_DEF_FROM_PLAYER = 6.0;
+var DRAGON_DEF_FROM_MELEE = 4.0;
+var DRAGON_DEF_PER_LEVEL = 3000;
+var DRAGON_DEF_PER_BP = 0.3;
+var DRAGON_DEF_CAP = 40000000;
 var DRAGON_DEF_NBT = "end_strength_entity_def";
-var DRAGON_MIN_DAMAGE_FRACTION = 0.005;
+var DRAGON_MIN_DAMAGE_FRACTION = 0.003;
+
+/* Re-scale living dragons upward if a stronger End player is present. */
+var DRAGON_RESCALE_MS = 8000;
+
+/*
+ * Vanilla Attributes.MAX_HEALTH hard-caps near 1024. End content uses a
+ * virtual HP pool in persistent NBT; the entity shell stays at this value.
+ */
+var VANILLA_HP_SHELL = 1024;
+var VHP_NBT = "end_strength_vhp";
+var VMAX_NBT = "end_strength_vmax";
+var VHP_ENABLED = true;
 
 /*
  * End mob tiers — high floors, then scaled to nearby player power.
@@ -119,11 +135,12 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v3";
+var BUFF_TAG = "end_strength_v4";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
 var TEMP_NATURAL = "end.strength.naturalCheck";
+var TEMP_DRAGON_RESCALE = "end.strength.dragonRescale";
 var WORLD_EGG_LOCK = "end.strength.eggClaimed.";
 var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
 var WORLD_NATURAL_LOCK = "end.strength.naturalLock";
@@ -248,8 +265,10 @@ function calcDragonHp(power) {
     var hp = DRAGON_BASE_HP
         + power.level * DRAGON_HP_PER_LEVEL
         + power.bp * DRAGON_HP_PER_BP
-        + power.melee * DRAGON_HP_PER_MELEE
-        + power.maxHp * DRAGON_HP_PER_PLAYER_HP;
+        + num(power.melee, 0) * DRAGON_HP_FROM_MELEE
+        + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
+    var floorFromMelee = num(power.melee, 0) * DRAGON_HP_FROM_MELEE * 1.5;
+    if (hp < floorFromMelee) hp = floorFromMelee;
     if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
     if (hp > DRAGON_HP_CAP) hp = DRAGON_HP_CAP;
     return Math.floor(hp);
@@ -442,9 +461,22 @@ function markBuffed(entity, meta) {
 
 function setAbsoluteHealth(entity, targetHp) {
     targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
+    /* Prefer virtual pool when above vanilla attribute cap. */
+    if (VHP_ENABLED === true && targetHp > VANILLA_HP_SHELL) {
+        applyVirtualHealth(entity, targetHp, targetHp);
+        return true;
+    }
     try {
         entity.setMaxHealth(targetHp);
         entity.setHealth(targetHp);
+        /* If the attribute clamped, fall back to virtual HP. */
+        var applied = 0;
+        try { applied = num(entity.getMaxHealth(), 0); } catch (e0) {}
+        if (VHP_ENABLED === true && applied > 0 && applied + 1 < targetHp) {
+            applyVirtualHealth(entity, targetHp, targetHp);
+            return true;
+        }
+        clearVirtualHealth(entity);
         return true;
     } catch (e) {
         try {
@@ -454,16 +486,152 @@ function setAbsoluteHealth(entity, targetHp) {
             try { attr = mc.getAttribute(Attributes.MAX_HEALTH); } catch (e1) {
                 try { attr = mc.m_21051_(Attributes.f_22276_); } catch (e2) {}
             }
-            if (attr == null) return false;
+            if (attr == null) {
+                if (VHP_ENABLED === true) {
+                    applyVirtualHealth(entity, targetHp, targetHp);
+                    return true;
+                }
+                return false;
+            }
             attr.setBaseValue(targetHp);
             try { mc.setHealth(targetHp); } catch (e3) {
                 try { mc.m_21153_(targetHp); } catch (e4) {}
             }
+            var applied2 = 0;
+            try { applied2 = num(attr.getBaseValue(), 0); } catch (e5) {}
+            if (VHP_ENABLED === true && applied2 > 0 && applied2 + 1 < targetHp) {
+                applyVirtualHealth(entity, targetHp, targetHp);
+                return true;
+            }
+            clearVirtualHealth(entity);
             return true;
-        } catch (e5) {
+        } catch (e6) {
+            if (VHP_ENABLED === true) {
+                applyVirtualHealth(entity, targetHp, targetHp);
+                return true;
+            }
             return false;
         }
     }
+}
+
+function putNbtNumber(entity, key, value) {
+    value = Math.max(0, num(value, 0));
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null) temp.put(key, "" + value);
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return;
+        var nbt = mc.getPersistentData();
+        try { nbt.putDouble(key, value); }
+        catch (e2) {
+            try { nbt.m_128347_(key, value); } catch (e3) {}
+        }
+    } catch (e4) {}
+}
+
+function readNbtNumber(entity, key) {
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null && temp.has(key)) {
+            var t = num(temp.get(key), -1);
+            if (t >= 0) return t;
+        }
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return -1;
+        var nbt = mc.getPersistentData();
+        var has = false;
+        try { has = nbt.contains(key) === true; } catch (e2) {
+            try { has = nbt.m_128441_(key) === true; } catch (e3) {}
+        }
+        if (!has) return -1;
+        try { return Math.max(0, num(nbt.getDouble(key), 0)); }
+        catch (e4) {
+            try { return Math.max(0, num(nbt.m_128459_(key), 0)); } catch (e5) {}
+        }
+    } catch (e6) {}
+    return -1;
+}
+
+function clearVirtualHealth(entity) {
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null) {
+            try { temp.remove(VHP_NBT); } catch (e1) {}
+            try { temp.remove(VMAX_NBT); } catch (e2) {}
+        }
+    } catch (e3) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return;
+        var nbt = mc.getPersistentData();
+        try { nbt.remove(VHP_NBT); } catch (e4) {
+            try { nbt.m_128473_(VHP_NBT); } catch (e5) {}
+        }
+        try { nbt.remove(VMAX_NBT); } catch (e6) {
+            try { nbt.m_128473_(VMAX_NBT); } catch (e7) {}
+        }
+    } catch (e8) {}
+}
+
+function readVirtualHp(entity) { return readNbtNumber(entity, VHP_NBT); }
+function readVirtualMax(entity) { return readNbtNumber(entity, VMAX_NBT); }
+
+function storeVirtualHp(entity, hp) { putNbtNumber(entity, VHP_NBT, hp); }
+function storeVirtualMax(entity, maxHp) { putNbtNumber(entity, VMAX_NBT, maxHp); }
+
+function refillVanillaShell(entity) {
+    var shell = VANILLA_HP_SHELL;
+    try {
+        entity.setMaxHealth(shell);
+        entity.setHealth(shell);
+        return;
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
+        var attr = null;
+        try { attr = mc.getAttribute(Attributes.MAX_HEALTH); } catch (e2) {
+            try { attr = mc.m_21051_(Attributes.f_22276_); } catch (e3) {}
+        }
+        if (attr != null) attr.setBaseValue(shell);
+        try { mc.setHealth(shell); } catch (e4) {
+            try { mc.m_21153_(shell); } catch (e5) {}
+        }
+    } catch (e6) {}
+}
+
+function applyVirtualHealth(entity, currentHp, maxHp) {
+    maxHp = Math.max(1, Math.floor(num(maxHp, 1)));
+    currentHp = Math.max(0, Math.floor(num(currentHp, maxHp)));
+    if (currentHp > maxHp) currentHp = maxHp;
+    storeVirtualMax(entity, maxHp);
+    storeVirtualHp(entity, currentHp);
+    refillVanillaShell(entity);
+}
+
+function hasVirtualHealth(entity) {
+    return readVirtualMax(entity) > VANILLA_HP_SHELL;
+}
+
+function formatHpLabel(hp) {
+    hp = Math.max(0, Math.floor(num(hp, 0)));
+    if (hp >= 1000000) return (Math.floor(hp / 100000) / 10) + "M";
+    if (hp >= 1000) return Math.floor(hp / 1000) + "k";
+    return "" + hp;
+}
+
+function updateDragonName(entity, power, vhp, vmax, def) {
+    try {
+        var pct = vmax > 0 ? Math.max(0, Math.min(100, Math.floor((vhp / vmax) * 100))) : 100;
+        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level +
+            " / " + formatHpLabel(vhp) + "/" + formatHpLabel(vmax) +
+            " HP " + pct + "% / DEF " + formatHpLabel(def) + "]");
+    } catch (e) {}
 }
 
 function setAttackDamage(entity, targetDmg) {
@@ -498,7 +666,7 @@ function nearbyPlayerPower(entity, world) {
         for (var i = 0; i < players.length; i++) {
             if (!isPlayer(players[i])) continue;
             var p = readPlayerPower(players[i]);
-            var score = p.level * 1000 + p.defense + p.bp * 0.01;
+            var score = p.level * 1000 + p.defense + p.bp * 0.01 + p.melee * 10 + p.maxHp;
             if (score > bestScore) {
                 bestScore = score;
                 best = p;
@@ -545,8 +713,10 @@ function buffMob(entity, world) {
     var tier = END_MOB_TIERS[kind];
     if (tier == null) return false;
 
-    /* Re-buff if old tag / missing DEF so v3 stats always apply. */
-    var needsBuff = !alreadyBuffed(entity) || !(readEntityDefense(entity) > 0);
+    /* Re-buff if old tag / missing DEF / missing virtual HP so v4 stats always apply. */
+    var needsBuff = !alreadyBuffed(entity)
+        || !(readEntityDefense(entity) > 0)
+        || (VHP_ENABLED === true && !hasVirtualHealth(entity));
     if (!needsBuff) return false;
 
     var power = nearbyPlayerPower(entity, world);
@@ -565,15 +735,73 @@ function applyDragonStats(entity, power, sourceLabel) {
     var hp = calcDragonHp(power);
     var dmg = calcDragonDamage(power);
     var def = calcDragonDefense(power);
+    var prevMax = readVirtualMax(entity);
+    var prevHp = readVirtualHp(entity);
+    var keepRatio = false;
+    var newCurrent = hp;
+
+    /* Mid-fight rescale: keep remaining % when raising the pool. */
+    if (prevMax > 0 && prevHp >= 0 && (sourceLabel === "rescale" || sourceLabel === "onhit")) {
+        keepRatio = true;
+        var ratio = prevHp / prevMax;
+        if (!(ratio >= 0)) ratio = 1;
+        if (ratio > 1) ratio = 1;
+        newCurrent = Math.max(1, Math.floor(hp * ratio));
+        /* Only grow the fight — never shrink the remaining pool mid-combat. */
+        if (hp > prevMax) {
+            newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
+        } else {
+            newCurrent = prevHp;
+            hp = prevMax;
+        }
+        if (newCurrent > hp) newCurrent = hp;
+    }
+
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
-    setAbsoluteHealth(entity, hp);
+    if (VHP_ENABLED === true && (hp > VANILLA_HP_SHELL || keepRatio)) {
+        applyVirtualHealth(entity, newCurrent, hp);
+    } else {
+        setAbsoluteHealth(entity, hp);
+        newCurrent = hp;
+    }
     setAttackDamage(entity, dmg);
     storeEntityDefense(entity, def);
+    updateDragonName(entity, power, newCurrent, hp, def);
+    return { hp: hp, current: newCurrent, damage: dmg, defense: def };
+}
+
+function maybeRescaleDragon(entity, world, player) {
+    if (entity == null || world == null) return false;
+    var now = nowMs();
     try {
-        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level +
-            " / " + Math.floor(hp / 1000) + "k HP / DEF " + Math.floor(def / 1000) + "k]");
-    } catch (e) {}
-    return { hp: hp, damage: dmg, defense: def };
+        var temp = entity.getTempdata();
+        if (temp != null && temp.has(TEMP_DRAGON_RESCALE)) {
+            var last = num(temp.get(TEMP_DRAGON_RESCALE), 0);
+            if (now - last < DRAGON_RESCALE_MS) return false;
+        }
+        if (temp != null) temp.put(TEMP_DRAGON_RESCALE, "" + now);
+    } catch (e1) {}
+
+    var powerPlayer = strongestPlayerInEnd(world) || player;
+    if (powerPlayer == null) return false;
+    var power = readPlayerPower(powerPlayer);
+    var desiredHp = calcDragonHp(power);
+    var desiredDef = calcDragonDefense(power);
+    var curMax = readVirtualMax(entity);
+    var curDef = readEntityDefense(entity);
+
+    var needs = !alreadyBuffed(entity)
+        || !(curDef > 0)
+        || (VHP_ENABLED === true && !hasVirtualHealth(entity))
+        || desiredHp > curMax + 1000
+        || desiredDef > curDef + 1000;
+    if (!needs) {
+        /* Keep vanilla shell topped up while virtual HP remains. */
+        if (hasVirtualHealth(entity) && readVirtualHp(entity) > 0) refillVanillaShell(entity);
+        return false;
+    }
+    applyDragonStats(entity, power, alreadyBuffed(entity) ? "rescale" : "scan");
+    return true;
 }
 
 function findDragons(world) {
@@ -813,12 +1041,9 @@ function tryNaturalDragonSpawn(player) {
 
     var dragons = findDragons(world);
     if (dragons.length > 0) {
-        /* Keep existing dragons scaled if somehow unbuffed. */
+        /* Keep existing dragons scaled / virtual-HP ready. */
         for (var d = 0; d < dragons.length; d++) {
-            if (!alreadyBuffed(dragons[d])) {
-                var powerPlayer = strongestPlayerInEnd(world) || player;
-                applyDragonStats(dragons[d], readPlayerPower(powerPlayer), "existing");
-            }
+            maybeRescaleDragon(dragons[d], world, player);
         }
         return;
     }
@@ -994,9 +1219,7 @@ function tick(event) {
                 var ent = list[i];
                 var kind = classifyEndEntity(ent);
                 if (kind === "dragon") {
-                    if (!alreadyBuffed(ent) || !(readEntityDefense(ent) > 0)) {
-                        applyDragonStats(ent, readPlayerPower(strongestPlayerInEnd(world) || player), "scan");
-                    }
+                    maybeRescaleDragon(ent, world, player);
                 } else if (kind != null) {
                     buffMob(ent, world);
                 }
@@ -1033,6 +1256,7 @@ function kill(event) {
  * Apply stored DMZ-style defense when players hit the dragon or End mobs.
  * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
  * to the post-mitigation amount before it continues.
+ * Virtual HP (above vanilla ~1024 cap) absorbs mitigated damage until depleted.
  */
 function damagedEntity(event) {
     try {
@@ -1049,7 +1273,7 @@ function damagedEntity(event) {
         if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
         var def = readEntityDefense(target);
-        if (!(def > 0)) {
+        if (!(def > 0) || (VHP_ENABLED === true && !hasVirtualHealth(target))) {
             try {
                 var world = target.getWorld();
                 if (isDragon) {
@@ -1068,7 +1292,34 @@ function damagedEntity(event) {
         if (!(def > 0)) return;
 
         var minFrac = isDragon ? DRAGON_MIN_DAMAGE_FRACTION : END_MOB_MIN_DAMAGE_FRACTION;
-        event.damage = mitigateWithDmzDefense(raw, def, minFrac);
+        var mitigated = mitigateWithDmzDefense(raw, def, minFrac);
+
+        if (VHP_ENABLED === true && hasVirtualHealth(target)) {
+            var vhp = readVirtualHp(target);
+            var vmax = readVirtualMax(target);
+            if (vhp < 0) vhp = vmax;
+            var next = vhp - mitigated;
+            if (next > 0) {
+                storeVirtualHp(target, next);
+                refillVanillaShell(target);
+                event.damage = 0;
+                if (isDragon) {
+                    try {
+                        var p = isPlayer(event.player) ? readPlayerPower(event.player) : { level: 1 };
+                        updateDragonName(target, p, next, vmax, def);
+                    } catch (eName) {}
+                }
+                return;
+            }
+            /* Virtual pool depleted — allow a killing blow through the shell. */
+            storeVirtualHp(target, 0);
+            var shellHp = VANILLA_HP_SHELL;
+            try { shellHp = Math.max(1, num(target.getHealth(), VANILLA_HP_SHELL)); } catch (e2) {}
+            event.damage = Math.max(mitigated, shellHp + 1000);
+            return;
+        }
+
+        event.damage = mitigated;
     } catch (error) {
         try { print("[EndStrength] damagedEntity: " + error); } catch (e) {}
     }
