@@ -1,9 +1,13 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.0
+ Version: 2.0.1
 
  Changelog:
+ - Blocked self-started sparring sessions (same player as both sides).
+ - Strengthened Ki-attack detection so Ki blasts/beams/explosions
+   cannot count as melee hits or start sessions.
+ - Only true player-vs-player melee exchanges may start sparring.
  - Added complete persistent sparring statistics for command displays.
  - Added total sessions, rewarded sparring time, best payout, perfect payouts,
    highest combo, current streak, and best streak tracking.
@@ -56,6 +60,7 @@
  IMPORTANT:
  - Directly awards DMZ Training Points. No commands.
  - Only exchanged player-vs-player melee hits start sparring.
+ - Ki blasts, beams, disks, explosions, and self-hits never start sessions.
 ============================================================
 */
 
@@ -309,6 +314,51 @@ function getPlayerName(player) {
         return String(player.getName());
     } catch (e) {
         return "";
+    }
+}
+
+function getPlayerUuid(player) {
+    try {
+        if (player == null) return "";
+        if (player.getUUID) return String(player.getUUID());
+    } catch (e1) {}
+    try {
+        var mc = player.getMCEntity ? player.getMCEntity() : player;
+        if (mc != null && mc.m_20148_) return String(mc.m_20148_());
+    } catch (e2) {}
+    return "";
+}
+
+function isSamePlayer(a, b) {
+    if (a == null || b == null) return true;
+    try {
+        if (a === b) return true;
+    } catch (e0) {}
+    var au = getPlayerUuid(a);
+    var bu = getPlayerUuid(b);
+    if (au != "" && bu != "" && au == bu) return true;
+    var an = getPlayerName(a).toLowerCase();
+    var bn = getPlayerName(b).toLowerCase();
+    return an != "" && an == bn;
+}
+
+function unwrapMcEntity(entity) {
+    if (entity == null) return null;
+    try {
+        if (entity.getMCEntity) {
+            var mc = entity.getMCEntity();
+            if (mc != null) return mc;
+        }
+    } catch (e) {}
+    return entity;
+}
+
+function isPlayerEntity(entity) {
+    try {
+        var mc = unwrapMcEntity(entity);
+        return mc != null && MCPlayerClass.class.isInstance(mc);
+    } catch (e) {
+        return false;
     }
 }
 
@@ -880,6 +930,7 @@ function snapshotPlayer(player) {
 
 function startSession(a, b) {
     if (a == null || b == null) return false;
+    if (isSamePlayer(a, b)) return false;
 
     var now = nowMs();
     var aTemp = a.getTempdata();
@@ -898,6 +949,9 @@ function startSession(a, b) {
 
     var aName = getPlayerName(a);
     var bName = getPlayerName(b);
+    if (aName == "" || bName == "" || aName.toLowerCase() == bName.toLowerCase()) {
+        return false;
+    }
 
     putString(aTemp, K_PARTNER, bName);
     putString(bTemp, K_PARTNER, aName);
@@ -978,31 +1032,150 @@ function endSession(player, partner, reason) {
 
 /* ========================= HIT TRACKING ========================= */
 
-function isKiAttack(event) {
+function getDamageTypeId(event) {
     try {
-        var immediate =
-            event.damageSource != null
-                ? event.damageSource.getImmediateSource()
-                : null;
+        var source = event.damageSource;
+        if (source == null) return "";
 
-        var immediateMC =
-            immediate != null
-                ? immediate.getMCEntity()
-                : null;
+        try {
+            if (source.getType != null) {
+                return String(source.getType()).toLowerCase();
+            }
+        } catch (e1) {}
 
-        return (
-            immediateMC != null &&
-            AbstractKiProjectile.class.isInstance(immediateMC)
-        );
+        try {
+            if (source.m_19385_ != null) {
+                return String(source.m_19385_()).toLowerCase();
+            }
+        } catch (e2) {}
+
+        try {
+            if (source.getMsgId != null) {
+                return String(source.getMsgId()).toLowerCase();
+            }
+        } catch (e3) {}
+    } catch (e) {}
+    return "";
+}
+
+function resolveDamageEntity(raw) {
+    if (raw == null) return null;
+    try {
+        if (raw.getMCEntity) {
+            var wrapped = raw.getMCEntity();
+            if (wrapped != null) return wrapped;
+        }
+    } catch (e) {}
+    return raw;
+}
+
+function getImmediateDamageEntity(event) {
+    try {
+        if (event.damageSource == null) return null;
+        var source = event.damageSource;
+        var immediate = null;
+        try { immediate = source.getImmediateSource(); } catch (e1) {}
+        if (immediate == null) {
+            try { immediate = source.m_7640_(); } catch (e2) {}
+        }
+        return resolveDamageEntity(immediate);
     } catch (e) {
-        return false;
+        return null;
     }
 }
 
+function getTrueDamageEntity(event) {
+    try {
+        if (event.damageSource == null) return null;
+        var source = event.damageSource;
+        var trueSrc = null;
+        try { trueSrc = source.getTrueSource(); } catch (e1) {}
+        if (trueSrc == null) {
+            try { trueSrc = source.getSourceEntity(); } catch (e2) {}
+        }
+        if (trueSrc == null) {
+            try { trueSrc = source.m_7639_(); } catch (e3) {}
+        }
+        return resolveDamageEntity(trueSrc);
+    } catch (e) {
+        return null;
+    }
+}
+
+function isKiEntity(entity) {
+    if (entity == null) return false;
+    try {
+        if (AbstractKiProjectile.class.isInstance(entity)) return true;
+    } catch (e1) {}
+    try {
+        var name = String(entity.getClass().getName()).toLowerCase();
+        if (name.indexOf(".ki.") >= 0) return true;
+        if (name.indexOf("kiprojectile") >= 0) return true;
+        if (name.indexOf("kiblast") >= 0) return true;
+        if (name.indexOf("kiwave") >= 0) return true;
+        if (name.indexOf("kilaser") >= 0) return true;
+        if (name.indexOf("kidisk") >= 0) return true;
+        if (name.indexOf("kiexplosion") >= 0) return true;
+        if (name.indexOf("kibarrier") >= 0) return true;
+        if (name.indexOf("kiarea") >= 0) return true;
+    } catch (e2) {}
+    return false;
+}
+
+/*
+ * Ki blasts must never count as sparring melee.
+ * Detect by projectile class, package name, and damage-type id.
+ */
+function isKiAttack(event) {
+    try {
+        var type = getDamageTypeId(event);
+        if (type != "") {
+            if (
+                type.indexOf("ki") >= 0 ||
+                type.indexOf("blast") >= 0 ||
+                type.indexOf("beam") >= 0 ||
+                type.indexOf("energy") >= 0 ||
+                type.indexOf("disk") >= 0 ||
+                type.indexOf("laser") >= 0
+            ) {
+                return true;
+            }
+        }
+
+        if (isKiEntity(getImmediateDamageEntity(event))) return true;
+        if (isKiEntity(getTrueDamageEntity(event))) return true;
+    } catch (e) {}
+    return false;
+}
+
+/*
+ * Sparring starts from melee PvP only:
+ * - two different players
+ * - not a Ki attack
+ * - immediate damage source is absent or another player (fist/weapon),
+ *   never a projectile / area entity
+ */
+function isMeleeSparringHit(event, attacker, target) {
+    if (attacker == null || target == null) return false;
+    if (isSamePlayer(attacker, target)) return false;
+    if (isKiAttack(event)) return false;
+
+    var immediate = getImmediateDamageEntity(event);
+    if (immediate != null && !isPlayerEntity(immediate)) {
+        return false;
+    }
+
+    return true;
+}
+
 function recordMeleeHit(attacker, target) {
+    if (isSamePlayer(attacker, target)) return;
+
     var now = nowMs();
     var attackerName = getPlayerName(attacker);
     var targetName = getPlayerName(target);
+    if (attackerName == "" || targetName == "") return;
+    if (attackerName.toLowerCase() == targetName.toLowerCase()) return;
 
     var attackerTemp = attacker.getTempdata();
     var targetTemp = target.getTempdata();
@@ -1991,9 +2164,10 @@ function damagedEntity(event) {
         }
 
         /*
-         * Ki projectiles never count as sparring activity.
+         * Melee PvP only. Ki blasts / beams / self-hits never
+         * start or refresh sparring activity.
          */
-        if (isKiAttack(event)) return;
+        if (!isMeleeSparringHit(event, attacker, target)) return;
 
         recordMeleeHit(attacker, target);
     } catch (e) {
