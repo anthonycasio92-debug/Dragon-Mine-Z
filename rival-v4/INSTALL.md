@@ -87,8 +87,8 @@ Nametag/tab (if enabled):
 
 | Status | Meaning | Limit |
 |---|---|---|
-| Unknown | They sent a visible request | Unlimited |
-| Declared | You silently declared them | Unlimited |
+| Unknown | You silently rivaled them (hidden from them) | Unlimited |
+| Declared | Both silently rivaled each other | Unlimited |
 | Mutual | Both accepted — real rivalry | Max **2** (3rd demotes oldest) |
 | Nemesis | Greatest mutual by battle history | **Only 1** (automatic) |
 

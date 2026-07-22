@@ -17,16 +17,17 @@ This is not another PvP system. It recreates Goku vs Vegeta — history, not ass
 
 | Status | Meaning | Limit | Status |
 |---|---|---|---|
-| **Unknown** | They sent you a visible request | Unlimited | Done |
-| **Declared** | You silently declared them (they may not know) | Unlimited | Done |
-| **Mutual** | Both accepted — real rivalry | **Max 2** | Done |
+| **Unknown** | You silently rivaled them (they are not told) | Unlimited | Done |
+| **Declared** | Both silently rivaled each other | Unlimited | Done |
+| **Mutual** | Both accepted Mutual | **Max 2** | Done |
 | **Nemesis** | Your greatest mutual rival | **Only 1** (auto) | Done |
 
-Progression: `Declared / Unknown → Mutual → Nemesis`
+Progression: `Unknown → Declared → Mutual → Nemesis`
 
-- `/rival <player>` = silent Declared (no notify)
-- `/rival request <player>` = visible invite → Unknown on their list
-- If both silently declare each other, rivalry becomes Mutual automatically.
+- `/rival <player>` = silent Unknown (hidden from target)
+- If both silently rival each other → **Declared** (not Mutual yet)
+- Mutual via `/rival request` + accept, or both `/rival accept` when already Declared
+- Target of a silent rival does not see the rivalry at all
 
 - 3rd Mutual **demotes the oldest** Mutual automatically (both sides → Declared).
 - Nemesis is chosen from Mutual history (battles, wins, losses, age) — not an RP threshold.
@@ -133,8 +134,8 @@ NPC Rival Master prints the command guide; HoL is `/rival hof`.
 ## Commands (CMI CustomAlias)
 
 ```text
-/rival <player>                         # silent declare (they are not told)
-/rival request|invite <player>          # visible invite (Unknown until accept)
+/rival <player>                         # silent rival -> Unknown (hidden from them)
+/rival request|invite <player>          # propose Mutual
 /rival declare|accept|decline|remove <player>
 /rival list | stats [player] | top [cat]
 /rival title | journal | season | quests | achievements | hof
