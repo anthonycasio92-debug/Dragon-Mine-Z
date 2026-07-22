@@ -1,15 +1,16 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.4
+ Version: 2.5.5
 
  - Stronger End mobs (scaled HP/DEF, killable in a short hit band)
+ - Live virtual-HP nameplates (bar + remaining HP) while damaged
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
  - Never rewrite dragon/enderman max-health attributes (keeps AI working)
  - Dragon spawned via EndDragonFight (not orphan /summon)
  - Dragon HP targets ~200–300 matched hits (derived from mitigation)
- - End mobs target ~6–12 matched hits (trash, not mini-bosses)
+ - End mobs target ~10–22 matched hits with visible HP readout
  - Ender Dragon scales with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -111,15 +112,15 @@ var VANILLA_MOB_MAX_HP = {
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — short fights, not mini-bosses.
+ * End mob tiers — short fights with visible virtual HP nameplates.
  * HP is sized from nearby player melee × hit-target × post-mitigation fraction.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 6000,  damage: 40, defense: 1500, hits: 6,  label: "Endermite" },
-    phantom:   { tier: 2, hp: 10000, damage: 70, defense: 3000, hits: 8,  label: "Phantom" },
-    enderman:  { tier: 3, hp: 16000, damage: 12, defense: 5000, hits: 10, label: "Enderman" },
-    shulker:   { tier: 4, hp: 24000, damage: 80, defense: 7000, hits: 12, label: "Shulker" }
+    endermite: { tier: 1, hp: 10000, damage: 40, defense: 2000, hits: 10, label: "Endermite" },
+    phantom:   { tier: 2, hp: 16000, damage: 70, defense: 4000, hits: 14, label: "Phantom" },
+    enderman:  { tier: 3, hp: 28000, damage: 12, defense: 7000, hits: 18, label: "Enderman" },
+    shulker:   { tier: 4, hp: 40000, damage: 80, defense: 9000, hits: 22, label: "Shulker" }
 };
 var END_MOB_LEVEL_HP_PER_LEVEL = 200;
 var END_MOB_DEF_FROM_PLAYER = 0.25;
@@ -128,6 +129,10 @@ var END_MOB_DEF_PER_LEVEL = 50;
 var END_MOB_DEF_SCALE_CAP = 3.0;
 var END_MOB_MIN_DAMAGE_FRACTION = 0.05;
 var END_MOB_HIT_BAND = 0.25; /* allow ±25% around tier hit target */
+
+/* Show remaining virtual HP on nametags while fighting. */
+var SHOW_VIRTUAL_HP_NAME = true;
+var HP_BAR_WIDTH = 10;
 
 /* Dragon mitigation — harder than End mobs, but still finishable. */
 var END_FLAT_ABSORB_FRAC = 0.45;
@@ -158,7 +163,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v9";
+var BUFF_TAG = "end_strength_v10";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -727,13 +732,62 @@ function formatHpLabel(hp) {
     return "" + hp;
 }
 
-function updateDragonName(entity, power, vhp, vmax, def) {
+function formatHpBar(pct, width) {
+    width = Math.max(4, Math.floor(num(width, HP_BAR_WIDTH)));
+    pct = Math.max(0, Math.min(100, Math.floor(num(pct, 0))));
+    var filled = Math.floor((pct / 100.0) * width);
+    var fillColor = COLOR + "a";
+    if (pct <= 25) fillColor = COLOR + "c";
+    else if (pct <= 50) fillColor = COLOR + "e";
+    var bar = "";
+    for (var i = 0; i < width; i++) {
+        bar += (i < filled) ? (fillColor + "|") : (COLOR + "8|");
+    }
+    return bar;
+}
+
+function setNameAlwaysVisible(entity) {
+    try { entity.setShowName(1); return; } catch (e1) {}
+    try { entity.setNameVisible(true); return; } catch (e2) {}
     try {
-        var pct = vmax > 0 ? Math.max(0, Math.min(100, Math.floor((vhp / vmax) * 100))) : 100;
-        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level +
-            " / " + formatHpLabel(vhp) + "/" + formatHpLabel(vmax) +
-            " HP " + pct + "% / DEF " + formatHpLabel(def) + "]");
-    } catch (e) {}
+        var mc = entity.getMCEntity();
+        if (mc == null) return;
+        try { mc.setCustomNameVisible(true); return; } catch (e3) {}
+        try { mc.m_20340_(true); } catch (e4) {}
+    } catch (e5) {}
+}
+
+function updateEndEntityName(entity, kind, vhp, vmax, def, level) {
+    if (SHOW_VIRTUAL_HP_NAME !== true || entity == null) return;
+    vmax = Math.max(1, Math.floor(num(vmax, 1)));
+    vhp = Math.max(0, Math.floor(num(vhp, 0)));
+    if (vhp > vmax) vhp = vmax;
+    var pct = Math.max(0, Math.min(100, Math.floor((vhp / vmax) * 100)));
+    var pctColor = COLOR + "a";
+    if (pct <= 25) pctColor = COLOR + "c";
+    else if (pct <= 50) pctColor = COLOR + "e";
+    var label = "End Mob";
+    var nameColor = COLOR + "d";
+    if (kind === "dragon") {
+        label = "Ender Dragon";
+        nameColor = COLOR + "c";
+    } else if (END_MOB_TIERS[kind] != null) {
+        label = END_MOB_TIERS[kind].label;
+    }
+    var lv = Math.max(1, Math.floor(num(level, 1)));
+    var text = nameColor + label + COLOR + "7 [" +
+        formatHpBar(pct, HP_BAR_WIDTH) + COLOR + "7] " +
+        pctColor + formatHpLabel(vhp) + COLOR + "8/" + formatHpLabel(vmax) +
+        COLOR + "7 (" + pctColor + pct + "%" + COLOR + "7)";
+    if (kind === "dragon") {
+        text += COLOR + "8 Lv" + lv + " DEF " + formatHpLabel(def);
+    }
+    try { entity.setName(text); } catch (e1) {}
+    setNameAlwaysVisible(entity);
+}
+
+function updateDragonName(entity, power, vhp, vmax, def) {
+    updateEndEntityName(entity, "dragon", vhp, vmax, def, power != null ? power.level : 1);
 }
 
 function setAttackDamage(entity, targetDmg) {
@@ -866,6 +920,7 @@ function buffMob(entity, world) {
     if (kind !== "enderman") setAttackDamage(entity, dmg);
     else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
+    updateEndEntityName(entity, kind, hp, hp, def, power.level);
     return true;
 }
 
@@ -898,9 +953,7 @@ function applyDragonStats(entity, power, sourceLabel) {
     /* Never rewrite dragon max-health / attack attributes — breaks phase AI. */
     applyVirtualHealth(entity, newCurrent, hp, "dragon");
     storeEntityDefense(entity, def);
-    if (sourceLabel !== "onhit") {
-        updateDragonName(entity, power, newCurrent, hp, def);
-    }
+    updateDragonName(entity, power, newCurrent, hp, def);
     return { hp: hp, current: newCurrent, damage: 0, defense: def };
 }
 
@@ -1700,7 +1753,13 @@ function damagedEntity(event) {
                 var check = readVirtualHp(target);
                 if (check > next + 1) storeVirtualHp(target, next);
                 syncVanillaHealthFromVirtual(target, next, vmax, kind);
-                event.damage = 0;
+                updateEndEntityName(target, kind, next, vmax, def,
+                    isPlayer(event.player) ? readPlayerPower(event.player).level : 1);
+                /*
+                 * Tiny non-zero hurt keeps vanilla damage feedback/animation,
+                 * while the real durability lives in the virtual pool.
+                 */
+                event.damage = 0.001;
                 return;
             }
             /* Virtual pool depleted — allow a killing blow. */
