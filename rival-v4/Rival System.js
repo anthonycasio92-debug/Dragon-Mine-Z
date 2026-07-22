@@ -1580,19 +1580,33 @@ function rcRemove(player, targetName) {
 
     var link = playerRecord.rivals[targetRecord.uuid];
     var st = rcLinkStatus(link);
-    var wasBond = (st === "declared" || st === "mutual" || st === "nemesis");
-    var notifyThem = wasBond;
+    var wasShared = (st === "mutual" || st === "nemesis");
+    var wasDeclared = (st === "declared");
+    var notifyThem = wasShared || wasDeclared;
 
     rcArchiveRivalLink(playerRecord, targetRecord.uuid);
     delete playerRecord.rivals[targetRecord.uuid];
 
-    if (wasBond) {
+    if (wasShared) {
         if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
             rcArchiveRivalLink(targetRecord, playerRecord.uuid);
             delete targetRecord.rivals[playerRecord.uuid];
         }
         rcRecomputeNemesis(playerRecord);
         rcRecomputeNemesis(targetRecord);
+    } else if (wasDeclared) {
+        if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
+            var kept = targetRecord.rivals[playerRecord.uuid];
+            kept.mutual = false;
+            kept.isNemesis = false;
+            kept.declaredByThem = false;
+            kept.inviteSent = false;
+            kept.mutualAccepted = false;
+            kept.mutualSince = 0;
+            if (kept.declaredByMe !== true) kept.declaredByMe = true;
+            rcRefreshLinkStatus(kept);
+            rcPushHistory(kept, "demoted", playerRecord.name + " ended Declared rivalry");
+        }
     } else if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
         var theirLink = targetRecord.rivals[playerRecord.uuid];
         theirLink.declaredByThem = false;
@@ -1613,14 +1627,21 @@ function rcRemove(player, targetName) {
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "eRemoved rivalry with " + targetRecord.name + ".");
-    if (wasBond) {
+    if (wasShared) {
         rcMessage(player, RC_COLOR + "8History saved. Rematch keeps prior record.");
+    } else if (wasDeclared) {
+        rcMessage(player, RC_COLOR + "8History saved. They may still have you as Unknown.");
     }
     if (notifyThem) {
         var online = rcFindOnlinePlayerAnyWorld(targetRecord.name);
         if (online !== null) {
-            rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
-            rcMessage(online, RC_COLOR + "8History saved if you rival again later.");
+            if (wasShared) {
+                rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
+                rcMessage(online, RC_COLOR + "8History saved if you rival again later.");
+            } else if (wasDeclared) {
+                rcMessage(online, RC_COLOR + "e" + playerRecord.name + " ended Declared rivalry with you.");
+                rcMessage(online, RC_COLOR + "8You still have them as a one-way Unknown rival.");
+            }
         }
     }
 }
