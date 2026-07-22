@@ -1,20 +1,24 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.6.3
+ Version: 2.7.0
 
- - End mobs/dragon use REAL vanilla max_health (DMZ uncaps generic.max_health)
- - TP-SAFE HP CAPS: DMZ kill TP = maxHealth * tpHealthRatio (default 0.25)
-   before global/potion/class TP boosts — multi-million HP → billions of TP.
-   Real max_health is therefore hard-capped; fight length comes from per-hit caps.
- - Hard per-hit damage caps lock fight length vs other combat systems
- - Sets DMZ battlePower explicitly so inflated HP doesn't break other scaling
- - DMZ StatsData is player-only — mobs cannot use DMZ HP capability
- - DEF mitigation still applied on hit; damage actually chips the health bar
+ DESIGN (why this exists):
+ - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
+   real DMZ health capability, so we MIRROR the strongest End player's DMZ
+   HP + DEF onto the entity:
+     • vanilla max_health = TP-safe mapped copy of player DMZ maxHealth
+     • NBT defense     = strong DMZ-style DEF (this is the real toughness)
+ - DMZ kill TP = entity.getMaxHealth() * tpHealthRatio (default 0.25) then
+   TP boosts. Absurd vanilla HP → billions of TP. So HP stays modest and
+   DEF carries the fight (flat absorb + % reduction like DMZ).
+ - Per-hit damage caps remain as a safety net vs one-shot skills.
+
+ FEATURES:
  - Dragon always scales to the strongest player currently in The End
  - Dragon spawned via EndDragonFight (not orphan /summon)
- - Dragon fights target ~200–300 matched hits (via damage caps, not huge HP)
- - End mobs target ~10–22 matched hits
+ - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
+ - End mobs ~10–22 matched hits
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -44,6 +48,8 @@ var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
 var StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
 var ConfigManager = Java.type("com.dragonminez.common.config.ConfigManager");
+var TpSource = null;
+try { TpSource = Java.type("com.dragonminez.common.config.TpSource"); } catch (eTp) { TpSource = null; }
 
 /* ========================= CONFIG ========================= */
 
@@ -61,18 +67,13 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /*
- * Dragon HP/DEF — TP-safe real max_health + hit-count fight length.
- *
- * DMZ awards kill TP from entity.getMaxHealth() * tpHealthRatio (default 0.25),
- * then multiplies by TpSource.KILL boosts (global TP boost, potions, etc.).
- * Keep real HP in the tens of thousands so kill TP stays sane.
- * Fight length (~200–300 hits) is enforced by END_DAMAGE_HIT_CAP_*, not HP size.
+ * Dragon HP — TP-safe vanilla max_health MIRRORED from player DMZ maxHealth.
+ * Never copy raw multi-million DMZ HP onto the entity (that breaks kill TP).
+ * Log-map player DMZ HP into [BASE .. CAP]. Toughness comes from DEF.
  */
-var DRAGON_BASE_HP = 35000;
-var DRAGON_HP_PER_LEVEL = 40;
-var DRAGON_HP_PER_BP = 0.00002;
-var DRAGON_HP_FROM_PLAYER_HP = 0.02;
-var DRAGON_HP_CAP = 80000; /* hard TP-safe ceiling (kill TP ≈ HP * 0.25) */
+var DRAGON_BASE_HP = 12000;
+var DRAGON_HP_CAP = 28000; /* kill TP ≈ HP * 0.25 before boosts */
+var DRAGON_HP_LOG_REF = 10000000; /* player DMZ HP that maps near the cap */
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
 var DRAGON_MIN_HITS = 200;
@@ -80,18 +81,18 @@ var DRAGON_TARGET_HITS = 250;
 var DRAGON_MAX_HITS = 300;
 
 /*
- * Virtual DMZ defense (StatsData only exists on players).
- * DEF stays below nearby melee so hits always chip the pool.
+ * Dragon DEF — the real toughness. Scale ABOVE the strongest player's
+ * DMZ defense / melee so mitigation (not absurd HP) carries the fight.
  */
 var DRAGON_DEF_ENABLED = true;
-var DRAGON_DEF_BASE = 80000;
-var DRAGON_DEF_FROM_PLAYER = 1.5;
-var DRAGON_DEF_FROM_MELEE = 1.0;
-var DRAGON_DEF_PER_LEVEL = 500;
-var DRAGON_DEF_PER_BP = 0.1;
-var DRAGON_DEF_CAP = 5000000;
+var DRAGON_DEF_BASE = 50000;
+var DRAGON_DEF_FROM_PLAYER = 2.25; /* × player DMZ defense */
+var DRAGON_DEF_FROM_MELEE = 1.75;  /* × player melee — sits above threat */
+var DRAGON_DEF_PER_LEVEL = 750;
+var DRAGON_DEF_PER_BP = 0.15;
+var DRAGON_DEF_CAP = 25000000;
 var DRAGON_DEF_NBT = "end_strength_entity_def";
-var DRAGON_MIN_DAMAGE_FRACTION = 0.015;
+var DRAGON_MIN_DAMAGE_FRACTION = 0.008; /* tiny chip when DEF is winning */
 
 /* Re-scale living dragons to the strongest End-dimension player. */
 var DRAGON_ALWAYS_SCALE_TO_STRONGEST = true;
@@ -99,11 +100,8 @@ var DRAGON_RESCALE_MS = 3000;
 var DRAGON_SCALE_SCORE_EPSILON = 0.01;
 
 /*
- * REAL vanilla health — DMZ GenericAttributes raises minecraft:generic.max_health
- * to Float.MAX, so multi-million HP works on LivingEntities.
- * StatsData / DMZ HP capability attaches to players ONLY, so End mobs/dragon
- * cannot use DMZ health; they use Attributes.MAX_HEALTH instead.
- * Virtual HP nameplates are disabled.
+ * Vanilla max_health on the entity (TP-safe). DMZ StatsData cannot attach
+ * to mobs — we only mirror player DMZ HP into this attribute.
  */
 var USE_REAL_VANILLA_HEALTH = true;
 var VHP_ENABLED = false;
@@ -112,6 +110,7 @@ var END_STRENGTH_HEALTH_MOD_UUID = "e5d57e10-6c3a-4f2b-9a11-e0d57e1197b1";
 var END_STRENGTH_HEALTH_MOD_NAME = "End Strength Health";
 var END_STRENGTH_MAX_NBT = "end_strength_real_max";
 var END_STRENGTH_HITS_NBT = "end_strength_hit_target";
+var END_STRENGTH_DMZ_HP_NBT = "end_strength_dmz_hp_src"; /* player DMZ HP we mirrored from */
 
 /*
  * Cap each hit to maxHealth / hitTarget so ki/skills/other systems cannot
@@ -124,35 +123,34 @@ var END_DAMAGE_HIT_CAP_MULT = 1.0; /* 1.0 => ~exact hit-target length */
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — short fights; HP is TP-safe real vanilla max_health.
- * Do NOT scale mob HP with player melee (that created millions of HP → TP bombs).
- * Hit-count length is enforced by per-hit damage caps.
+ * End mob tiers — short fights.
+ * hp/hpCap = TP-safe vanilla pools (mirrored from player DMZ HP).
+ * defense  = base DEF; real DEF scales from player DMZ defense/melee.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 2500,  damage: 40, defense: 2000, hits: 10, label: "Endermite", hpCap: 4000 },
-    phantom:   { tier: 2, hp: 4000,  damage: 70, defense: 4000, hits: 14, label: "Phantom",   hpCap: 6500 },
-    enderman:  { tier: 3, hp: 6000,  damage: 12, defense: 7000, hits: 18, label: "Enderman",  hpCap: 9000 },
-    shulker:   { tier: 4, hp: 8000,  damage: 80, defense: 9000, hits: 22, label: "Shulker",   hpCap: 12000 }
+    endermite: { tier: 1, hp: 1200, damage: 40, defense: 5000,  hits: 10, label: "Endermite", hpCap: 2200 },
+    phantom:   { tier: 2, hp: 1800, damage: 70, defense: 9000,  hits: 14, label: "Phantom",   hpCap: 3200 },
+    enderman:  { tier: 3, hp: 2400, damage: 12, defense: 14000, hits: 18, label: "Enderman",  hpCap: 4200 },
+    shulker:   { tier: 4, hp: 3200, damage: 80, defense: 18000, hits: 22, label: "Shulker",   hpCap: 5500 }
 };
-var END_MOB_LEVEL_HP_PER_LEVEL = 8;
-var END_MOB_HP_GLOBAL_CAP = 12000; /* absolute TP-safe ceiling for any End mob */
-var END_MOB_DEF_FROM_PLAYER = 0.25;
-var END_MOB_DEF_FROM_MELEE = 0.20;
-var END_MOB_DEF_PER_LEVEL = 50;
-var END_MOB_DEF_SCALE_CAP = 3.0;
-var END_MOB_MIN_DAMAGE_FRACTION = 0.05;
-var END_MOB_HIT_BAND = 0.25; /* allow ±25% around tier hit target */
+var END_MOB_HP_GLOBAL_CAP = 5500;
+var END_MOB_DEF_FROM_PLAYER = 1.10;
+var END_MOB_DEF_FROM_MELEE = 0.85;
+var END_MOB_DEF_PER_LEVEL = 120;
+var END_MOB_DEF_SCALE_CAP = 8.0; /* allow DEF to grow with the player */
+var END_MOB_MIN_DAMAGE_FRACTION = 0.03;
+var END_MOB_HIT_BAND = 0.25;
 
-/* Dragon mitigation — harder than End mobs, but still finishable. */
-var END_FLAT_ABSORB_FRAC = 0.45;
-var END_REDUCTION_CAP = 0.88;
-var END_DEF_SCALE = 15.0;
+/* Dragon mitigation — DEF does the work (near DMZ reduction ceiling). */
+var END_FLAT_ABSORB_FRAC = 0.55;
+var END_REDUCTION_CAP = 0.92;
+var END_DEF_SCALE = 12.0;
 
-/* End-mob mitigation (light — trash packs must die quickly). */
-var END_MOB_FLAT_ABSORB_FRAC = 0.25;
-var END_MOB_REDUCTION_CAP = 0.65;
-var END_MOB_DEF_SCALE = 40.0;
+/* End-mob mitigation — tougher than before, still shorter than the dragon. */
+var END_MOB_FLAT_ABSORB_FRAC = 0.35;
+var END_MOB_REDUCTION_CAP = 0.80;
+var END_MOB_DEF_SCALE = 20.0;
 
 /* Egg reward */
 var GIVE_EGG_TO_KILLER = true;
@@ -173,7 +171,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v13"; /* v13 = TP-safe HP caps (kill TP uses maxHealth) */
+var BUFF_TAG = "end_strength_v14"; /* v14 = DMZ HP mirror + DEF-carried toughness */
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -186,6 +184,21 @@ var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
 var WORLD_NATURAL_LOCK = "end.strength.naturalLock";
 var WORLD_ANNOUNCE_LOCK = "end.strength.announce.";
 var WORLD_PENDING_DRAGON_BUFF = "end.strength.pendingDragonBuff";
+var TEMP_TP_CLAWBACK = "end.strength.tpClawback";
+
+/*
+ * After DMZ awards kill TP from maxHealth, claw back anything above a fair
+ * End-content payout (boosts still apply to the fair base). Safety net if
+ * an old inflated entity is killed before it gets rebuffed.
+ */
+var END_TP_CLAWBACK_ENABLED = true;
+var END_TP_FAIR_DRAGON = 5000;
+var END_TP_FAIR_MOB = {
+    endermite: 400,
+    phantom: 700,
+    enderman: 1100,
+    shulker: 1600
+};
 
 /* ========================= HELPERS ========================= */
 
@@ -346,18 +359,32 @@ function expectedDragonThroughFraction() {
 }
 
 /*
- * Real max_health only — kept TP-safe.
- * Matched-hit fight length is handled by capDamageForHitCount(), not by
- * inflating HP to melee * hits * through (that broke kill TP into billions).
+ * Map a player's (possibly huge) DMZ maxHealth into a TP-safe vanilla pool.
+ * log10 progression: low DMZ HP → near base; huge DMZ HP → approaches cap.
+ * Never copies raw multi-million values onto the entity attribute.
+ */
+function mapDmzHpToTpSafe(playerDmzHp, baseHp, capHp, logRef) {
+    baseHp = Math.max(1, num(baseHp, 1));
+    capHp = Math.max(baseHp, num(capHp, baseHp));
+    logRef = Math.max(1000, num(logRef, DRAGON_HP_LOG_REF));
+    var src = Math.max(20, num(playerDmzHp, 20));
+    var t = Math.log(src / 20) / Math.log(logRef / 20);
+    if (!(t >= 0)) t = 0;
+    if (t > 1) t = 1;
+    return Math.floor(baseHp + (capHp - baseHp) * t);
+}
+
+/*
+ * Vanilla max_health mirrored from the strongest player's DMZ maxHealth.
+ * Fight length is carried by DEF mitigation + hit caps, not by huge HP.
  */
 function calcDragonHp(power) {
-    var bonus = num(power.level, 1) * DRAGON_HP_PER_LEVEL
-        + num(power.bp, 0) * DRAGON_HP_PER_BP
-        + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
-    var hp = DRAGON_BASE_HP + bonus;
-    if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
-    if (hp > DRAGON_HP_CAP) hp = DRAGON_HP_CAP;
-    return Math.floor(hp);
+    return mapDmzHpToTpSafe(
+        num(power != null ? power.maxHp : 20, 20),
+        DRAGON_BASE_HP,
+        DRAGON_HP_CAP,
+        DRAGON_HP_LOG_REF
+    );
 }
 
 function tpSafeHpCap(kind) {
@@ -384,16 +411,26 @@ function calcDragonDamage(power) {
 }
 
 function calcDragonDefense(power) {
-    var def = DRAGON_DEF_BASE
-        + num(power.defense, 0) * DRAGON_DEF_FROM_PLAYER
-        + num(power.melee, 0) * DRAGON_DEF_FROM_MELEE
-        + power.level * DRAGON_DEF_PER_LEVEL
-        + power.bp * DRAGON_DEF_PER_BP;
-    if (def < DRAGON_DEF_BASE) def = DRAGON_DEF_BASE;
+    /*
+     * DEF is the toughness layer. Track ABOVE the strongest player's DMZ
+     * defense and melee so mitigation absorbs most hits without needing
+     * multi-million HP (which breaks kill TP).
+     */
+    var playerDef = num(power != null ? power.defense : 0, 0);
+    var melee = num(power != null ? power.melee : 0, 0);
+    var level = num(power != null ? power.level : 1, 1);
+    var bp = num(power != null ? power.bp : 0, 0);
 
-    /* Keep DEF under nearby melee so every hit still chips virtual HP. */
-    var meleeCap = num(power.melee, 0) * 0.85 + DRAGON_DEF_BASE;
-    if (meleeCap > DRAGON_DEF_BASE && def > meleeCap) def = meleeCap;
+    var fromPlayer = playerDef * DRAGON_DEF_FROM_PLAYER;
+    var fromMelee = melee * DRAGON_DEF_FROM_MELEE;
+    var def = Math.max(DRAGON_DEF_BASE, fromPlayer, fromMelee);
+    def += level * DRAGON_DEF_PER_LEVEL + bp * DRAGON_DEF_PER_BP;
+
+    /* Floor: at least 1.5× player melee so DEF usually wins the trade. */
+    var threatFloor = melee * 1.5 + DRAGON_DEF_BASE * 0.25;
+    if (def < threatFloor) def = threatFloor;
+
+    if (def < DRAGON_DEF_BASE) def = DRAGON_DEF_BASE;
     if (def > DRAGON_DEF_CAP) def = DRAGON_DEF_CAP;
     return Math.floor(def);
 }
@@ -891,10 +928,124 @@ function formatHpLabel(hp) {
 function updateDragonName(entity, power, hp, def) {
     try {
         var who = (power != null && power.name) ? str(power.name) : "?";
+        var src = num(power != null ? power.maxHp : 0, 0);
         entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" +
             (power != null ? power.level : 1) + " / " + formatHpLabel(hp) +
-            " HP / DEF " + formatHpLabel(def) + COLOR + "7 vs " + who + COLOR + "8]");
+            " HP / DEF " + formatHpLabel(def) +
+            COLOR + "7 vs " + who +
+            (src > 0 ? COLOR + "8 | DMZ " + formatHpLabel(src) : "") +
+            COLOR + "8]");
     } catch (e) {}
+}
+
+function storeDmzHpSource(entity, playerDmzHp) {
+    putNbtNumber(entity, END_STRENGTH_DMZ_HP_NBT, Math.max(0, num(playerDmzHp, 0)));
+}
+
+function fairEndKillTpBase(kind) {
+    if (kind === "dragon") return END_TP_FAIR_DRAGON;
+    if (kind != null && END_TP_FAIR_MOB[kind] != null) return END_TP_FAIR_MOB[kind];
+    return 500;
+}
+
+function estimateDmzKillTpAward(player, maxHp) {
+    maxHp = Math.max(0, num(maxHp, 0));
+    var ratio = 0.25;
+    var tpPerHit = 2;
+    try {
+        var gp = ConfigManager.getServerConfig().getGameplay();
+        try { ratio = num(gp.getTpHealthRatio(), ratio); } catch (e1) {}
+        try { tpPerHit = Math.floor(num(gp.getTpPerHit(), tpPerHit)); } catch (e2) {}
+    } catch (e3) {}
+    var base = tpPerHit + Math.round(maxHp * ratio);
+    if (base < 0) base = 0;
+    var data = getDmz(player);
+    if (data == null) return base;
+    try {
+        if (TpSource != null && TpSource.KILL != null) {
+            return Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, base), base)));
+        }
+    } catch (e4) {}
+    try {
+        return Math.max(0, Math.floor(num(data.calculateTPGain(base), base)));
+    } catch (e5) {}
+    return base;
+}
+
+function estimateFairEndKillTp(player, kind) {
+    var fairBase = fairEndKillTpBase(kind);
+    var data = getDmz(player);
+    if (data == null) return fairBase;
+    try {
+        if (TpSource != null && TpSource.KILL != null) {
+            return Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, fairBase), fairBase)));
+        }
+    } catch (e1) {}
+    try {
+        return Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
+    } catch (e2) {}
+    return fairBase;
+}
+
+function scheduleEndKillTpClawback(player, kind, maxHp) {
+    if (END_TP_CLAWBACK_ENABLED !== true || !isPlayer(player)) return;
+    try {
+        var temp = player.getTempdata();
+        if (temp == null) return;
+        /* delay|kind|maxHp|startedAt — wait a few ticks so DMZ LivingDeath TP lands first */
+        var payload = "4|" + str(kind) + "|" + Math.floor(num(maxHp, 0)) + "|" + nowMs();
+        temp.put(TEMP_TP_CLAWBACK, payload);
+    } catch (e) {}
+}
+
+function processEndKillTpClawback(player) {
+    if (END_TP_CLAWBACK_ENABLED !== true || !isPlayer(player)) return false;
+    var temp = null;
+    var payload = null;
+    try {
+        temp = player.getTempdata();
+        if (temp == null || !temp.has(TEMP_TP_CLAWBACK)) return false;
+        payload = str(temp.get(TEMP_TP_CLAWBACK));
+    } catch (e1) { return false; }
+    if (payload === "" || payload.indexOf("|") < 0) return false;
+
+    var parts = payload.split("|");
+    if (parts.length < 3) {
+        try { temp.remove(TEMP_TP_CLAWBACK); } catch (eR) {}
+        return false;
+    }
+
+    var delay = Math.floor(num(parts[0], 0));
+    if (delay > 0) {
+        try { temp.put(TEMP_TP_CLAWBACK, (delay - 1) + "|" + parts[1] + "|" + parts[2] + "|" + (parts[3] || "0")); } catch (eD) {}
+        return false;
+    }
+
+    try { temp.remove(TEMP_TP_CLAWBACK); } catch (eR2) {}
+
+    var kind = parts[1];
+    var maxHp = num(parts[2], 0);
+    var awarded = estimateDmzKillTpAward(player, maxHp);
+    var fair = estimateFairEndKillTp(player, kind);
+    var excess = awarded - fair;
+    if (!(excess > 1)) return false;
+
+    var data = getDmz(player);
+    if (data == null) return false;
+    try {
+        data.getResources().removeTrainingPoints(excess);
+        msg(player, COLOR + "7[End] Kill TP adjusted to fair End payout (" +
+            formatHpLabel(fair) + " TP after boosts).");
+        return true;
+    } catch (e2) {
+        try {
+            data.getResources().setTrainingPoints(
+                Math.max(0, num(data.getResources().getTrainingPoints(), 0) - excess)
+            );
+            return true;
+        } catch (e3) {}
+    }
+    return false;
 }
 
 function setAttackDamage(entity, targetDmg) {
@@ -954,33 +1105,41 @@ function expectedMobThroughFraction() {
 }
 
 function calcMobDefense(tier, power) {
+    /*
+     * Strong DMZ-style DEF scaled from the nearby player's stats.
+     * Higher tiers get a larger share of player DEF/melee.
+     */
     var base = num(tier.defense, 0);
-    var tierFactor = num(tier.tier, 1);
-    var def = base
-        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER * (tierFactor / 2.0)
-        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE * (tierFactor / 2.0)
-        + num(power.level, 1) * END_MOB_DEF_PER_LEVEL * tierFactor;
-    if (def < base) def = base;
+    var tierFactor = Math.max(1, num(tier.tier, 1));
+    var playerDef = num(power != null ? power.defense : 0, 0);
+    var melee = num(power != null ? power.melee : 0, 0);
+    var level = num(power != null ? power.level : 1, 1);
+
+    var def = Math.max(
+        base,
+        playerDef * END_MOB_DEF_FROM_PLAYER * (0.55 + tierFactor * 0.2),
+        melee * END_MOB_DEF_FROM_MELEE * (0.45 + tierFactor * 0.15)
+    );
+    def += level * END_MOB_DEF_PER_LEVEL * tierFactor;
+
     var maxDef = base * END_MOB_DEF_SCALE_CAP
-        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER
-        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE;
-    /* Keep DEF well below nearby melee so trash dies in a short burst. */
-    var meleeCap = num(power.melee, 0) * 0.45 + base;
-    if (meleeCap > base && maxDef > meleeCap) maxDef = meleeCap;
+        + playerDef * END_MOB_DEF_FROM_PLAYER * tierFactor
+        + melee * END_MOB_DEF_FROM_MELEE * tierFactor;
     if (def > maxDef) def = maxDef;
     return Math.floor(def);
 }
 
 function calcMobHp(tier, power) {
-    /* TP-safe pool only; hit-count length comes from damage caps. */
+    /* TP-safe pool mirrored from player DMZ maxHealth. */
     var base = num(tier.hp, 1);
-    var bonus = num(power.level, 1) * END_MOB_LEVEL_HP_PER_LEVEL * (num(tier.tier, 1) / 2.0);
-    var hp = base + bonus;
-    if (hp < base) hp = base;
     var cap = num(tier.hpCap, END_MOB_HP_GLOBAL_CAP);
     if (cap > END_MOB_HP_GLOBAL_CAP) cap = END_MOB_HP_GLOBAL_CAP;
-    if (hp > cap) hp = cap;
-    return Math.floor(hp);
+    return mapDmzHpToTpSafe(
+        num(power != null ? power.maxHp : 20, 20),
+        base,
+        cap,
+        DRAGON_HP_LOG_REF
+    );
 }
 
 function buffMob(entity, world) {
@@ -1004,11 +1163,16 @@ function buffMob(entity, world) {
 
     markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp + ":def" + def);
     setAbsoluteHealth(entity, hp, kind);
+    storeDmzHpSource(entity, num(power.maxHp, 0));
     storeHitTarget(entity, num(tier.hits, 10));
     setEntityBattlePower(entity, calcEndBattlePower(kind, power, hp));
     if (kind !== "enderman") setAttackDamage(entity, dmg);
     else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
+    try {
+        entity.setName(COLOR + "d" + tier.label + COLOR + "8[" +
+            formatHpLabel(hp) + " HP / DEF " + formatHpLabel(def) + "]");
+    } catch (eName) {}
     return true;
 }
 
@@ -1048,6 +1212,7 @@ function applyDragonStats(entity, power, sourceLabel) {
 
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
     storeEntityDefense(entity, def);
+    storeDmzHpSource(entity, num(power != null ? power.maxHp : 0, 0));
     storeHitTarget(entity, DRAGON_TARGET_HITS);
     setEntityBattlePower(entity, calcEndBattlePower("dragon", power, hp));
     try {
@@ -1716,6 +1881,9 @@ function tick(event) {
         var player = event.player;
         if (!isPlayer(player)) return;
 
+        /* Runs in any dimension — DMZ kill TP may land a few ticks after death. */
+        try { processEndKillTpClawback(player); } catch (eClaw) {}
+
         var world = player.getWorld();
         if (!isInTheEnd(world)) return;
 
@@ -1806,7 +1974,15 @@ function kill(event) {
         var player = event.player;
         var victim = event.entity;
         if (!isPlayer(player) || victim == null) return;
-        if (classifyEndEntity(victim) !== "dragon") return;
+        var kind = classifyEndEntity(victim);
+        if (kind == null) return;
+
+        /* Claw back HP-scaled kill TP down to a fair End payout. */
+        try {
+            scheduleEndKillTpClawback(player, kind, getEntityMaxHealthSafe(victim));
+        } catch (eTp) {}
+
+        if (kind !== "dragon") return;
 
         /* Reset natural spawn timer so next dragon waits the full interval. */
         try {
