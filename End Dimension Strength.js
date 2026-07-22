@@ -1,13 +1,14 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.0
+ Version: 2.5.1
 
  - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
  - Never rewrite dragon/enderman max-health attributes (keeps AI working)
  - Dragon spawned via EndDragonFight (not orphan /summon)
+ - End mobs use softer mitigation than the dragon (killable, not immortal)
  - Ender Dragon scales hard with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -106,29 +107,38 @@ var VANILLA_MOB_MAX_HP = {
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — high floors, then scaled to nearby player power.
+ * End mob tiers — tough, but killable (~20–40 hits for a matched player).
+ * Dragon keeps the hard mitigation; mobs use END_MOB_* absorb/cap below.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 250000,  damage: 40,  defense: 150000, label: "Endermite" },
-    phantom:   { tier: 2, hp: 450000,  damage: 70,  defense: 250000, label: "Phantom" },
-    enderman:  { tier: 3, hp: 800000,  damage: 12,  defense: 450000, label: "Enderman" },
-    shulker:   { tier: 4, hp: 1200000, damage: 80,  defense: 600000, label: "Shulker" }
+    endermite: { tier: 1, hp: 40000,  damage: 40, defense: 15000, label: "Endermite" },
+    phantom:   { tier: 2, hp: 70000,  damage: 70, defense: 25000, label: "Phantom" },
+    enderman:  { tier: 3, hp: 100000, damage: 12, defense: 40000, label: "Enderman" },
+    shulker:   { tier: 4, hp: 160000, damage: 80, defense: 60000, label: "Shulker" }
 };
-var END_MOB_LEVEL_HP_PER_LEVEL = 2000;
-var END_MOB_LEVEL_SCALE_CAP = 8.0;
-var END_MOB_HP_FROM_MELEE = 12.0;
-var END_MOB_HP_FROM_PLAYER_HP = 10.0;
-var END_MOB_DEF_FROM_PLAYER = 5.0;
-var END_MOB_DEF_FROM_MELEE = 3.0;
-var END_MOB_DEF_PER_LEVEL = 1000;
-var END_MOB_DEF_SCALE_CAP = 15.0;
-var END_MOB_MIN_DAMAGE_FRACTION = 0.005;
+var END_MOB_LEVEL_HP_PER_LEVEL = 800;
+var END_MOB_LEVEL_SCALE_CAP = 4.0;
+var END_MOB_HP_FROM_MELEE = 3.0;
+var END_MOB_HP_FROM_PLAYER_HP = 2.0;
+var END_MOB_DEF_FROM_PLAYER = 1.0;
+var END_MOB_DEF_FROM_MELEE = 0.75;
+var END_MOB_DEF_PER_LEVEL = 200;
+var END_MOB_DEF_SCALE_CAP = 6.0;
+var END_MOB_MIN_DAMAGE_FRACTION = 0.025;
+/* Rough hit-count target used to soft-cap mob virtual HP vs nearby melee. */
+var END_MOB_TARGET_HITS = 30;
+var END_MOB_HP_CAP_FROM_MELEE = 0.20; /* hp <= melee * hits * this (post-mitigation share) */
 
-/* Harder mitigation than default DMZ PvP for End content. */
+/* Dragon-tier mitigation (hard). */
 var END_FLAT_ABSORB_FRAC = 0.60;
 var END_REDUCTION_CAP = 0.97;
 var END_DEF_SCALE = 6.0;
+
+/* End-mob mitigation (softer — must remain killable). */
+var END_MOB_FLAT_ABSORB_FRAC = 0.35;
+var END_MOB_REDUCTION_CAP = 0.80;
+var END_MOB_DEF_SCALE = 25.0;
 
 /* Egg reward */
 var GIVE_EGG_TO_KILLER = true;
@@ -149,7 +159,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v5";
+var BUFF_TAG = "end_strength_v6";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -307,10 +317,11 @@ function calcDragonDefense(power) {
 }
 
 /*
- * Port of DMZ StatsData.calculatePostMitigationDamage core math,
- * with End-specific harder absorb/reduction caps.
+ * Port of DMZ StatsData.calculatePostMitigationDamage core math.
+ * opts: { flatAbsorb, reductionCap, defScale, useConfigBoost }
+ * Dragon uses hard End defaults; mobs pass softer END_MOB_* values.
  */
-function mitigateWithDmzDefense(rawDamage, defense, minFraction) {
+function mitigateWithDmzDefense(rawDamage, defense, minFraction, opts) {
     var raw = Math.max(0, num(rawDamage, 0));
     var def = Math.max(0, num(defense, 0));
     var minFrac = num(minFraction, DRAGON_MIN_DAMAGE_FRACTION);
@@ -319,25 +330,30 @@ function mitigateWithDmzDefense(rawDamage, defense, minFraction) {
     if (!(raw > 0)) return 0;
     if (!(def > 0)) return raw;
 
-    var flatMaxFrac = END_FLAT_ABSORB_FRAC;
-    var defScale = END_DEF_SCALE;
-    var reductionCap = END_REDUCTION_CAP;
-    try {
-        var cfg = ConfigManager.getCombatConfig();
+    opts = opts || {};
+    var flatMaxFrac = num(opts.flatAbsorb, END_FLAT_ABSORB_FRAC);
+    var defScale = num(opts.defScale, END_DEF_SCALE);
+    var reductionCap = num(opts.reductionCap, END_REDUCTION_CAP);
+    var useConfigBoost = opts.useConfigBoost !== false;
+
+    if (useConfigBoost === true) {
         try {
-            var cfgFlat = num(cfg.getFlatMitigationMaxAbsorbFraction(), flatMaxFrac);
-            if (cfgFlat > flatMaxFrac) flatMaxFrac = cfgFlat;
-        } catch (e1) {}
-        try {
-            var cfgScale = num(cfg.getDefenseReductionScale(), defScale);
-            if (cfgScale > 0 && cfgScale < defScale) defScale = cfgScale;
-        } catch (e2) {}
-        try {
-            var capObj = cfg.getBaseDamageReductionCap();
-            var cfgCap = num(capObj != null && capObj.doubleValue ? capObj.doubleValue() : capObj, reductionCap);
-            if (cfgCap > reductionCap) reductionCap = cfgCap;
-        } catch (e3) {}
-    } catch (eCfg) {}
+            var cfg = ConfigManager.getCombatConfig();
+            try {
+                var cfgFlat = num(cfg.getFlatMitigationMaxAbsorbFraction(), flatMaxFrac);
+                if (cfgFlat > flatMaxFrac) flatMaxFrac = cfgFlat;
+            } catch (e1) {}
+            try {
+                var cfgScale = num(cfg.getDefenseReductionScale(), defScale);
+                if (cfgScale > 0 && cfgScale < defScale) defScale = cfgScale;
+            } catch (e2) {}
+            try {
+                var capObj = cfg.getBaseDamageReductionCap();
+                var cfgCap = num(capObj != null && capObj.doubleValue ? capObj.doubleValue() : capObj, reductionCap);
+                if (cfgCap > reductionCap) reductionCap = cfgCap;
+            } catch (e3) {}
+        } catch (eCfg) {}
+    }
 
     if (defScale < 1) defScale = 1;
     if (flatMaxFrac < 0) flatMaxFrac = 0;
@@ -756,6 +772,17 @@ function calcMobHp(tier, power) {
     var floorFromMelee = num(power.melee, 0) * END_MOB_HP_FROM_MELEE;
     if (hp < floorFromMelee) hp = floorFromMelee;
     if (hp < base) hp = base;
+
+    /*
+     * Soft-cap so a matched player clears the mob in roughly END_MOB_TARGET_HITS
+     * assuming ~END_MOB_HP_CAP_FROM_MELEE of raw melee lands after mitigation.
+     */
+    var melee = num(power.melee, 0);
+    if (melee > 0) {
+        var cap = melee * END_MOB_TARGET_HITS * END_MOB_HP_CAP_FROM_MELEE;
+        if (cap < base) cap = base;
+        if (hp > cap) hp = cap;
+    }
     return Math.floor(hp);
 }
 
@@ -1605,15 +1632,23 @@ function damagedEntity(event) {
         if (!(def > 0)) return;
 
         var minFrac = isDragon ? DRAGON_MIN_DAMAGE_FRACTION : END_MOB_MIN_DAMAGE_FRACTION;
-        var mitigated = mitigateWithDmzDefense(raw, def, minFrac);
+        var mitOpts = isDragon
+            ? { flatAbsorb: END_FLAT_ABSORB_FRAC, reductionCap: END_REDUCTION_CAP, defScale: END_DEF_SCALE, useConfigBoost: true }
+            : { flatAbsorb: END_MOB_FLAT_ABSORB_FRAC, reductionCap: END_MOB_REDUCTION_CAP, defScale: END_MOB_DEF_SCALE, useConfigBoost: false };
+        var mitigated = mitigateWithDmzDefense(raw, def, minFrac, mitOpts);
 
         if (VHP_ENABLED === true && readVirtualMax(target) > 0) {
             var vhp = readVirtualHp(target);
             var vmax = readVirtualMax(target);
-            if (vhp < 0) vhp = vmax;
+            if (!(vhp >= 0)) vhp = vmax;
+            /* Always chip at least a meaningful fraction of raw into the pool. */
+            if (!(mitigated > 0)) mitigated = raw * minFrac;
             var next = vhp - mitigated;
             if (next > 0) {
                 storeVirtualHp(target, next);
+                /* Re-assert stored value so a failed NBT write can't soft-lock immortality. */
+                var check = readVirtualHp(target);
+                if (check > next + 1) storeVirtualHp(target, next);
                 syncVanillaHealthFromVirtual(target, next, vmax, kind);
                 event.damage = 0;
                 return;
