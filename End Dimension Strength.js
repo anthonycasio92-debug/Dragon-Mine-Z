@@ -1,11 +1,13 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.4.0
+ Version: 2.5.0
 
  - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
+ - Never rewrite dragon/enderman max-health attributes (keeps AI working)
+ - Dragon spawned via EndDragonFight (not orphan /summon)
  - Ender Dragon scales hard with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -84,12 +86,24 @@ var DRAGON_RESCALE_MS = 8000;
 
 /*
  * Vanilla Attributes.MAX_HEALTH hard-caps near 1024. End content uses a
- * virtual HP pool in persistent NBT; the entity shell stays at this value.
+ * virtual HP pool in persistent NBT. Do NOT force a 1024 shell on living
+ * mobs/dragon — rewriting max-health breaks Enderman teleport AI and the
+ * dragon's EndDragonFight phase machine.
  */
-var VANILLA_HP_SHELL = 1024;
+var VANILLA_HP_SHELL = 1024; /* detection threshold only */
 var VHP_NBT = "end_strength_vhp";
 var VMAX_NBT = "end_strength_vmax";
 var VHP_ENABLED = true;
+var PRESERVE_VANILLA_MAX_HP = true;
+var VANILLA_MOB_MAX_HP = {
+    endermite: 8,
+    phantom: 20,
+    enderman: 40,
+    shulker: 30,
+    dragon: 200
+};
+/* Enderman melee attribute — keep modest so pathing/teleport AI stays sane. */
+var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
  * End mob tiers — high floors, then scaled to nearby player power.
@@ -98,7 +112,7 @@ var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
     endermite: { tier: 1, hp: 250000,  damage: 40,  defense: 150000, label: "Endermite" },
     phantom:   { tier: 2, hp: 450000,  damage: 70,  defense: 250000, label: "Phantom" },
-    enderman:  { tier: 3, hp: 800000,  damage: 100, defense: 450000, label: "Enderman" },
+    enderman:  { tier: 3, hp: 800000,  damage: 12,  defense: 450000, label: "Enderman" },
     shulker:   { tier: 4, hp: 1200000, damage: 80,  defense: 600000, label: "Shulker" }
 };
 var END_MOB_LEVEL_HP_PER_LEVEL = 2000;
@@ -135,7 +149,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v4";
+var BUFF_TAG = "end_strength_v5";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -145,6 +159,7 @@ var WORLD_EGG_LOCK = "end.strength.eggClaimed.";
 var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
 var WORLD_NATURAL_LOCK = "end.strength.naturalLock";
 var WORLD_ANNOUNCE_LOCK = "end.strength.announce.";
+var WORLD_PENDING_DRAGON_BUFF = "end.strength.pendingDragonBuff";
 
 /* ========================= HELPERS ========================= */
 
@@ -459,60 +474,97 @@ function markBuffed(entity, meta) {
     } catch (e6) {}
 }
 
-function setAbsoluteHealth(entity, targetHp) {
-    targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
-    /* Prefer virtual pool when above vanilla attribute cap. */
-    if (VHP_ENABLED === true && targetHp > VANILLA_HP_SHELL) {
-        applyVirtualHealth(entity, targetHp, targetHp);
-        return true;
-    }
+function setEntityMaxHealthSafe(entity, maxHp) {
+    maxHp = Math.max(1, Math.floor(num(maxHp, 1)));
     try {
-        entity.setMaxHealth(targetHp);
-        entity.setHealth(targetHp);
-        /* If the attribute clamped, fall back to virtual HP. */
-        var applied = 0;
-        try { applied = num(entity.getMaxHealth(), 0); } catch (e0) {}
-        if (VHP_ENABLED === true && applied > 0 && applied + 1 < targetHp) {
-            applyVirtualHealth(entity, targetHp, targetHp);
-            return true;
-        }
-        clearVirtualHealth(entity);
+        entity.setMaxHealth(maxHp);
         return true;
-    } catch (e) {
-        try {
-            var mc = entity.getMCEntity();
-            var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
-            var attr = null;
-            try { attr = mc.getAttribute(Attributes.MAX_HEALTH); } catch (e1) {
-                try { attr = mc.m_21051_(Attributes.f_22276_); } catch (e2) {}
-            }
-            if (attr == null) {
-                if (VHP_ENABLED === true) {
-                    applyVirtualHealth(entity, targetHp, targetHp);
-                    return true;
-                }
-                return false;
-            }
-            attr.setBaseValue(targetHp);
-            try { mc.setHealth(targetHp); } catch (e3) {
-                try { mc.m_21153_(targetHp); } catch (e4) {}
-            }
-            var applied2 = 0;
-            try { applied2 = num(attr.getBaseValue(), 0); } catch (e5) {}
-            if (VHP_ENABLED === true && applied2 > 0 && applied2 + 1 < targetHp) {
-                applyVirtualHealth(entity, targetHp, targetHp);
-                return true;
-            }
-            clearVirtualHealth(entity);
-            return true;
-        } catch (e6) {
-            if (VHP_ENABLED === true) {
-                applyVirtualHealth(entity, targetHp, targetHp);
-                return true;
-            }
-            return false;
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
+        var attr = null;
+        try { attr = mc.getAttribute(Attributes.MAX_HEALTH); } catch (e2) {
+            try { attr = mc.m_21051_(Attributes.f_22276_); } catch (e3) {}
         }
+        if (attr == null) return false;
+        attr.setBaseValue(maxHp);
+        return true;
+    } catch (e4) {
+        return false;
     }
+}
+
+function setEntityHealthSafe(entity, hp) {
+    hp = Math.max(0, num(hp, 0));
+    try {
+        entity.setHealth(hp);
+        return true;
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        try { mc.setHealth(hp); return true; } catch (e2) {
+            try { mc.m_21153_(hp); return true; } catch (e3) {}
+        }
+    } catch (e4) {}
+    return false;
+}
+
+function getEntityMaxHealthSafe(entity) {
+    try { return Math.max(1, num(entity.getMaxHealth(), 1)); } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        try { return Math.max(1, num(mc.getMaxHealth(), 1)); } catch (e2) {
+            try { return Math.max(1, num(mc.m_21233_(), 1)); } catch (e3) {}
+        }
+    } catch (e4) {}
+    return 1;
+}
+
+function getEntityHealthSafe(entity) {
+    try { return Math.max(0, num(entity.getHealth(), 0)); } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        try { return Math.max(0, num(mc.getHealth(), 0)); } catch (e2) {
+            try { return Math.max(0, num(mc.m_21223_(), 0)); } catch (e3) {}
+        }
+    } catch (e4) {}
+    return 0;
+}
+
+function restoreKindVanillaMaxHp(entity, kind) {
+    var defHp = VANILLA_MOB_MAX_HP[kind];
+    if (!(defHp > 0)) return;
+    var cur = getEntityMaxHealthSafe(entity);
+    /* Only repair inflated shells from older script versions. */
+    if (cur > defHp + 1) {
+        setEntityMaxHealthSafe(entity, defHp);
+        setEntityHealthSafe(entity, defHp);
+    }
+}
+
+/*
+ * Virtual HP only — never inflate Attributes.MAX_HEALTH.
+ * Inflating max HP to 1024 breaks Enderman AI and dragon fight phases.
+ */
+function setAbsoluteHealth(entity, targetHp, kind) {
+    targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
+    if (kind != null) restoreKindVanillaMaxHp(entity, kind);
+
+    if (VHP_ENABLED === true && (PRESERVE_VANILLA_MAX_HP === true || targetHp > VANILLA_HP_SHELL)) {
+        applyVirtualHealth(entity, targetHp, targetHp, kind);
+        return true;
+    }
+
+    if (!setEntityMaxHealthSafe(entity, targetHp)) return false;
+    setEntityHealthSafe(entity, targetHp);
+    var applied = getEntityMaxHealthSafe(entity);
+    if (VHP_ENABLED === true && applied + 1 < targetHp) {
+        applyVirtualHealth(entity, targetHp, targetHp, kind);
+        return true;
+    }
+    clearVirtualHealth(entity);
+    return true;
 }
 
 function putNbtNumber(entity, key, value) {
@@ -584,38 +636,38 @@ function readVirtualMax(entity) { return readNbtNumber(entity, VMAX_NBT); }
 function storeVirtualHp(entity, hp) { putNbtNumber(entity, VHP_NBT, hp); }
 function storeVirtualMax(entity, maxHp) { putNbtNumber(entity, VMAX_NBT, maxHp); }
 
-function refillVanillaShell(entity) {
-    var shell = VANILLA_HP_SHELL;
-    try {
-        entity.setMaxHealth(shell);
-        entity.setHealth(shell);
-        return;
-    } catch (e1) {}
-    try {
-        var mc = entity.getMCEntity();
-        var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
-        var attr = null;
-        try { attr = mc.getAttribute(Attributes.MAX_HEALTH); } catch (e2) {
-            try { attr = mc.m_21051_(Attributes.f_22276_); } catch (e3) {}
+function syncVanillaHealthFromVirtual(entity, vhp, vmax, kind) {
+    if (PRESERVE_VANILLA_MAX_HP !== true) return;
+    var maxH = getEntityMaxHealthSafe(entity);
+    if (kind != null && VANILLA_MOB_MAX_HP[kind] > 0) {
+        /* Keep natural max; repair only if previously inflated. */
+        var natural = VANILLA_MOB_MAX_HP[kind];
+        if (maxH > natural + 1) {
+            setEntityMaxHealthSafe(entity, natural);
+            maxH = natural;
         }
-        if (attr != null) attr.setBaseValue(shell);
-        try { mc.setHealth(shell); } catch (e4) {
-            try { mc.m_21153_(shell); } catch (e5) {}
-        }
-    } catch (e6) {}
+    }
+    if (!(maxH > 0) || !(vmax > 0)) return;
+    if (vhp <= 0) return;
+    var ratio = vhp / vmax;
+    if (ratio > 1) ratio = 1;
+    if (ratio < 0) ratio = 0;
+    var display = Math.max(1, Math.min(maxH, Math.ceil(maxH * ratio)));
+    setEntityHealthSafe(entity, display);
 }
 
-function applyVirtualHealth(entity, currentHp, maxHp) {
+function applyVirtualHealth(entity, currentHp, maxHp, kind) {
     maxHp = Math.max(1, Math.floor(num(maxHp, 1)));
     currentHp = Math.max(0, Math.floor(num(currentHp, maxHp)));
     if (currentHp > maxHp) currentHp = maxHp;
     storeVirtualMax(entity, maxHp);
     storeVirtualHp(entity, currentHp);
-    refillVanillaShell(entity);
+    if (kind != null) restoreKindVanillaMaxHp(entity, kind);
+    syncVanillaHealthFromVirtual(entity, currentHp, maxHp, kind);
 }
 
 function hasVirtualHealth(entity) {
-    return readVirtualMax(entity) > VANILLA_HP_SHELL;
+    return readVirtualMax(entity) > 0;
 }
 
 function formatHpLabel(hp) {
@@ -713,27 +765,38 @@ function buffMob(entity, world) {
     var tier = END_MOB_TIERS[kind];
     if (tier == null) return false;
 
-    /* Re-buff if old tag / missing DEF / missing virtual HP so v4 stats always apply. */
-    var needsBuff = !alreadyBuffed(entity)
-        || !(readEntityDefense(entity) > 0)
-        || (VHP_ENABLED === true && !hasVirtualHealth(entity));
-    if (!needsBuff) return false;
+    /*
+     * Buff once per entity. Do NOT re-apply every scan just because virtual
+     * HP NBT looked missing — that heal/reset loop breaks Enderman AI.
+     */
+    var needsBuff = !alreadyBuffed(entity) || !(readEntityDefense(entity) > 0);
+    if (!needsBuff) {
+        /* One-time repair: restore natural max HP if an older build inflated it. */
+        restoreKindVanillaMaxHp(entity, kind);
+        if (VHP_ENABLED === true && readVirtualMax(entity) <= 0) {
+            var powerFix = nearbyPlayerPower(entity, world);
+            var hpFix = calcMobHp(tier, powerFix);
+            applyVirtualHealth(entity, hpFix, hpFix, kind);
+        }
+        return false;
+    }
 
     var power = nearbyPlayerPower(entity, world);
     var hp = calcMobHp(tier, power);
     var dmg = Math.floor(tier.damage * Math.min(4.0, 1 + power.level / 100));
+    if (kind === "enderman") dmg = ENDERMAN_ATTACK_DAMAGE;
     var def = calcMobDefense(tier, power);
 
     markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp + ":def" + def);
-    setAbsoluteHealth(entity, hp);
-    setAttackDamage(entity, dmg);
+    setAbsoluteHealth(entity, hp, kind);
+    if (kind !== "enderman") setAttackDamage(entity, dmg);
+    else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
     return true;
 }
 
 function applyDragonStats(entity, power, sourceLabel) {
     var hp = calcDragonHp(power);
-    var dmg = calcDragonDamage(power);
     var def = calcDragonDefense(power);
     var prevMax = readVirtualMax(entity);
     var prevHp = readVirtualHp(entity);
@@ -758,16 +821,13 @@ function applyDragonStats(entity, power, sourceLabel) {
     }
 
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
-    if (VHP_ENABLED === true && (hp > VANILLA_HP_SHELL || keepRatio)) {
-        applyVirtualHealth(entity, newCurrent, hp);
-    } else {
-        setAbsoluteHealth(entity, hp);
-        newCurrent = hp;
-    }
-    setAttackDamage(entity, dmg);
+    /* Never rewrite dragon max-health / attack attributes — breaks phase AI. */
+    applyVirtualHealth(entity, newCurrent, hp, "dragon");
     storeEntityDefense(entity, def);
-    updateDragonName(entity, power, newCurrent, hp, def);
-    return { hp: hp, current: newCurrent, damage: dmg, defense: def };
+    if (sourceLabel !== "onhit") {
+        updateDragonName(entity, power, newCurrent, hp, def);
+    }
+    return { hp: hp, current: newCurrent, damage: 0, defense: def };
 }
 
 function maybeRescaleDragon(entity, world, player) {
@@ -792,12 +852,14 @@ function maybeRescaleDragon(entity, world, player) {
 
     var needs = !alreadyBuffed(entity)
         || !(curDef > 0)
-        || (VHP_ENABLED === true && !hasVirtualHealth(entity))
+        || (VHP_ENABLED === true && readVirtualMax(entity) <= 0)
         || desiredHp > curMax + 1000
         || desiredDef > curDef + 1000;
     if (!needs) {
-        /* Keep vanilla shell topped up while virtual HP remains. */
-        if (hasVirtualHealth(entity) && readVirtualHp(entity) > 0) refillVanillaShell(entity);
+        /* Keep boss-bar health proportional; do not touch max-health. */
+        if (hasVirtualHealth(entity) && readVirtualHp(entity) > 0) {
+            syncVanillaHealthFromVirtual(entity, readVirtualHp(entity), readVirtualMax(entity), "dragon");
+        }
         return false;
     }
     applyDragonStats(entity, power, alreadyBuffed(entity) ? "rescale" : "scan");
@@ -816,7 +878,215 @@ function findDragons(world) {
     return found;
 }
 
-function spawnDragonEntity(world, x, y, z) {
+function wrapMcEntity(mcEntity) {
+    if (mcEntity == null) return null;
+    try { return NpcAPI.Instance().getIEntity(mcEntity); } catch (e1) {}
+    try { return NpcAPI.Instance().getIEntity(mcEntity.getUUID ? mcEntity.getUUID() : null); } catch (e2) {}
+    return null;
+}
+
+function getMcServerLevel(world) {
+    if (world == null) return null;
+    try {
+        var lvl = world.getMCLevel();
+        if (lvl != null) return lvl;
+    } catch (e1) {}
+    try {
+        var w = world.getMCWorld();
+        if (w != null) return w;
+    } catch (e2) {}
+    try {
+        var players = world.getAllPlayers();
+        if (players != null && players.length > 0) {
+            var mc = players[0].getMCEntity();
+            try { return mc.level(); } catch (e3) {
+                try { return mc.m_9236_(); } catch (e4) {
+                    try { return mc.getCommandSenderWorld(); } catch (e5) {}
+                }
+            }
+        }
+    } catch (e6) {}
+    return null;
+}
+
+function getEndDragonFight(world) {
+    var level = getMcServerLevel(world);
+    if (level == null) return null;
+    try {
+        var fight = level.getDragonFight();
+        if (fight != null) return fight;
+    } catch (e1) {}
+    try {
+        var fight2 = level.m_8850_();
+        if (fight2 != null) return fight2;
+    } catch (e2) {}
+    try {
+        var fight3 = level.dragonFight();
+        if (fight3 != null) return fight3;
+    } catch (e3) {}
+    return null;
+}
+
+function setFightBoolean(fight, names, value) {
+    if (fight == null) return false;
+    var flag = value === true;
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var f = fight.getClass().getDeclaredField(names[i]);
+            f.setAccessible(true);
+            try { f.setBoolean(fight, flag); return true; } catch (e1) {
+                try { f.set(fight, flag); return true; } catch (e2) {}
+            }
+        } catch (e3) {}
+    }
+    return false;
+}
+
+function invokeFightMethod(fight, names) {
+    if (fight == null) return null;
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var m = fight.getClass().getDeclaredMethod(names[i]);
+            m.setAccessible(true);
+            return m.invoke(fight);
+        } catch (e1) {}
+        try {
+            var m0 = fight.getClass().getMethod(names[i]);
+            return m0.invoke(fight);
+        } catch (e2) {}
+    }
+    return null;
+}
+
+function despawnDragonEntity(entity) {
+    if (entity == null) return;
+    try { entity.despawn(); return; } catch (e1) {}
+    try { entity.kill(); return; } catch (e2) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return;
+        try { mc.discard(); } catch (e3) {
+            try { mc.m_146870_(); } catch (e4) {}
+        }
+    } catch (e5) {}
+}
+
+function clearAllDragons(world) {
+    var list = findDragons(world);
+    for (var i = 0; i < list.length; i++) despawnDragonEntity(list[i]);
+    return list.length;
+}
+
+function restoreTowerCrystals(world) {
+    if (world == null) return 0;
+    var level = getMcServerLevel(world);
+    var placed = 0;
+    try {
+        var Feature = Java.type("net.minecraft.world.level.levelgen.feature.EndSpikeFeature");
+        var spikes = null;
+        try { spikes = Feature.getSpikesForLevel(level); } catch (e1) {
+            try { spikes = Feature.m_66819_(level); } catch (e2) {
+                try { spikes = Feature.getSpikes(level); } catch (e3) {}
+            }
+        }
+        if (spikes == null) return 0;
+        var it = spikes.iterator();
+        while (it.hasNext()) {
+            var spike = it.next();
+            var cx = 0;
+            var cz = 0;
+            var height = 0;
+            try { cx = spike.getCenterX(); } catch (e4) {
+                try { cx = spike.m_66805_(); } catch (e5) {}
+            }
+            try { cz = spike.getCenterZ(); } catch (e6) {
+                try { cz = spike.m_66806_(); } catch (e7) {}
+            }
+            try { height = spike.getHeight(); } catch (e8) {
+                try { height = spike.m_66808_(); } catch (e9) {}
+            }
+            var y = Math.max(70, num(height, 70) + 1);
+            try {
+                NpcAPI.Instance().executeCommand(world,
+                    "execute in minecraft:the_end run summon minecraft:end_crystal " +
+                    cx + " " + y + " " + cz + " {ShowBottom:1b}");
+                placed++;
+            } catch (e10) {
+                try {
+                    var crystal = world.createEntity("minecraft:end_crystal");
+                    if (crystal != null) {
+                        try { crystal.setPosition(cx, y, cz); } catch (e11) {}
+                        world.spawnEntity(crystal);
+                        placed++;
+                    }
+                } catch (e12) {}
+            }
+        }
+    } catch (e) {}
+    return placed;
+}
+
+/*
+ * Spawn through EndDragonFight so the dragon has a linked fight manager.
+ * Raw /summon or createEntity orphans break perch/charge/crystal phase AI.
+ */
+function spawnDragonViaFight(world) {
+    if (world == null) return null;
+    clearAllDragons(world);
+
+    var fight = getEndDragonFight(world);
+    if (fight == null) return null;
+
+    try { fight.skipArenaLoadedCheck(); } catch (e1) {
+        try { invokeFightMethod(fight, ["skipArenaLoadedCheck", "m_287277_", "setSkipChunksLoadedCheck"]); } catch (e2) {}
+    }
+
+    /* Ensure fight will track a living dragon. */
+    setFightBoolean(fight,
+        ["dragonKilled", "f_64068_", "field_13115"],
+        false);
+    setFightBoolean(fight,
+        ["previouslyKilled", "f_64069_", "field_13114"],
+        true);
+
+    /* Fresh crystal set for a proper fight (avoid duplicates / empty towers). */
+    try { clearEndCrystals(world); } catch (eClr) {}
+    try { fight.resetSpikeCrystals(); } catch (e3) {
+        try { invokeFightMethod(fight, ["resetSpikeCrystals", "m_64101_", "resetEndCrystals"]); } catch (e4) {}
+    }
+
+    /* Re-place tower crystals so the dragon keeps normal heal/perch AI. */
+    try { restoreTowerCrystals(world); } catch (eCrystal) {}
+
+    var mcDragon = null;
+    try {
+        mcDragon = invokeFightMethod(fight, ["createNewDragon", "m_64110_"]);
+    } catch (e5) {
+        mcDragon = null;
+    }
+
+    if (mcDragon == null) {
+        /* Fallback: findOrCreateDragon private path */
+        try {
+            mcDragon = invokeFightMethod(fight, ["findOrCreateDragon", "m_64103_", "checkDragonSeen"]);
+        } catch (e6) {}
+    }
+
+    if (mcDragon == null) return null;
+
+    setFightBoolean(fight,
+        ["dragonKilled", "f_64068_", "field_13115"],
+        false);
+
+    var wrapped = wrapMcEntity(mcDragon);
+    if (wrapped != null) return wrapped;
+
+    /* Wrapper may lag one tick — re-find. */
+    var found = findDragons(world);
+    return found.length > 0 ? found[found.length - 1] : null;
+}
+
+function spawnDragonEntityFallback(world, x, y, z) {
     if (world == null) return null;
     try {
         var ent = world.createEntity("minecraft:ender_dragon");
@@ -830,12 +1100,21 @@ function spawnDragonEntity(world, x, y, z) {
         try {
             NpcAPI.Instance().executeCommand(world,
                 "summon minecraft:ender_dragon " + x + " " + y + " " + z);
-            /* Re-find shortly after summon */
             var dragons = findDragons(world);
             if (dragons.length > 0) return dragons[dragons.length - 1];
         } catch (e4) {}
     }
     return null;
+}
+
+function spawnDragonEntity(world, x, y, z) {
+    var viaFight = spawnDragonViaFight(world);
+    if (viaFight != null) return viaFight;
+    try {
+        print("[EndStrength] EndDragonFight spawn failed; using fallback summon (AI may be limited).");
+    } catch (e1) {}
+    clearAllDragons(world);
+    return spawnDragonEntityFallback(world, x, y, z);
 }
 
 function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
@@ -846,11 +1125,18 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
     var power = readPlayerPower(powerPlayer);
     var dragon = spawnDragonEntity(world, x, y, z);
     if (dragon == null) {
-        /* Command summon may lag one tick; scan again */
+        /* Fight/command summon may lag one tick */
         existing = findDragons(world);
         if (existing.length > 0) dragon = existing[0];
     }
-    if (dragon == null) return null;
+    if (dragon == null) {
+        try {
+            var stored = world.getStoreddata();
+            stored.put(WORLD_PENDING_DRAGON_BUFF, sourceLabel + "|" +
+                (powerPlayer != null ? str(powerPlayer.getName()) : "") + "|" + nowMs());
+        } catch (e1) {}
+        return null;
+    }
 
     var stats = applyDragonStats(dragon, power, sourceLabel);
     return {
@@ -859,6 +1145,29 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
         defense: stats.defense,
         power: power
     };
+}
+
+function applyPendingDragonBuff(world, player) {
+    if (world == null) return;
+    var raw = "";
+    try {
+        var stored = world.getStoreddata();
+        if (!stored.has(WORLD_PENDING_DRAGON_BUFF)) return;
+        raw = str(stored.get(WORLD_PENDING_DRAGON_BUFF));
+        var dragons = findDragons(world);
+        if (dragons.length <= 0) {
+            /* Wait a bit for fight respawn animation / delayed summon. */
+            var partsWait = raw.split("|");
+            var at = partsWait.length > 2 ? num(partsWait[2], 0) : 0;
+            if (at > 0 && nowMs() - at > 60000) stored.remove(WORLD_PENDING_DRAGON_BUFF);
+            return;
+        }
+        stored.remove(WORLD_PENDING_DRAGON_BUFF);
+        var parts = raw.split("|");
+        var label = parts.length > 0 ? parts[0] : "pending";
+        var powerPlayer = strongestPlayerInEnd(world) || player;
+        applyDragonStats(dragons[0], readPlayerPower(powerPlayer), label);
+    } catch (e) {}
 }
 
 /* ========================= EGG REWARD ========================= */
@@ -1192,6 +1501,9 @@ function tick(event) {
             }
         } catch (eNat) {}
 
+        /* Buff a dragon that appeared after a delayed fight spawn. */
+        try { applyPendingDragonBuff(getEndWorld() || world, player); } catch (ePend) {}
+
         var last = 0;
         try { if (temp.has(TEMP_SCAN)) last = num(temp.get(TEMP_SCAN), 0); } catch (e1) {}
         if (t - last < SCAN_INTERVAL_MS) return;
@@ -1256,7 +1568,8 @@ function kill(event) {
  * Apply stored DMZ-style defense when players hit the dragon or End mobs.
  * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
  * to the post-mitigation amount before it continues.
- * Virtual HP (above vanilla ~1024 cap) absorbs mitigated damage until depleted.
+ * Virtual HP absorbs mitigated damage; vanilla max-health is left alone so
+ * Enderman teleport AI and dragon fight phases keep working.
  */
 function damagedEntity(event) {
     try {
@@ -1273,7 +1586,7 @@ function damagedEntity(event) {
         if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
         var def = readEntityDefense(target);
-        if (!(def > 0) || (VHP_ENABLED === true && !hasVirtualHealth(target))) {
+        if (!(def > 0) || (VHP_ENABLED === true && readVirtualMax(target) <= 0)) {
             try {
                 var world = target.getWorld();
                 if (isDragon) {
@@ -1294,27 +1607,20 @@ function damagedEntity(event) {
         var minFrac = isDragon ? DRAGON_MIN_DAMAGE_FRACTION : END_MOB_MIN_DAMAGE_FRACTION;
         var mitigated = mitigateWithDmzDefense(raw, def, minFrac);
 
-        if (VHP_ENABLED === true && hasVirtualHealth(target)) {
+        if (VHP_ENABLED === true && readVirtualMax(target) > 0) {
             var vhp = readVirtualHp(target);
             var vmax = readVirtualMax(target);
             if (vhp < 0) vhp = vmax;
             var next = vhp - mitigated;
             if (next > 0) {
                 storeVirtualHp(target, next);
-                refillVanillaShell(target);
+                syncVanillaHealthFromVirtual(target, next, vmax, kind);
                 event.damage = 0;
-                if (isDragon) {
-                    try {
-                        var p = isPlayer(event.player) ? readPlayerPower(event.player) : { level: 1 };
-                        updateDragonName(target, p, next, vmax, def);
-                    } catch (eName) {}
-                }
                 return;
             }
-            /* Virtual pool depleted — allow a killing blow through the shell. */
+            /* Virtual pool depleted — allow a killing blow. */
             storeVirtualHp(target, 0);
-            var shellHp = VANILLA_HP_SHELL;
-            try { shellHp = Math.max(1, num(target.getHealth(), VANILLA_HP_SHELL)); } catch (e2) {}
+            var shellHp = Math.max(1, getEntityHealthSafe(target));
             event.damage = Math.max(mitigated, shellHp + 1000);
             return;
         }
