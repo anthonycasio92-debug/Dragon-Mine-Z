@@ -1,3 +1,15 @@
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ *
+ * PAIR WARNING: Keep "TP boost end.js" in a SEPARATE tab.
+ * Both define function trigger() — combining them breaks one of them.
+ */
+
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var System = Java.type("java.lang.System");
 
@@ -338,7 +350,7 @@ function decodeBoostValue(encoded) {
  *
  * DMZ TP effect formula:
  *
- * 1 + ((amplifier + 1) × 0.25)
+ * 1 + ((amplifier + 1) ï¿½ 0.25)
  *
  * Supported examples:
  *

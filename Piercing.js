@@ -3,6 +3,15 @@
 // 1 rank = +10% strike damage
 // Disabled while using Ki Manipulation weapons
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ */
+
 var STRIKE_BONUS_NAME = "dmzbridge_apothic_strike";
 var STRIKE_BONUS_PER_RANK = 0.10;
 var STRIKE_TICK_INTERVAL_MS = 500;

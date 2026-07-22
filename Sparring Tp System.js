@@ -59,6 +59,16 @@
 ============================================================
 */
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ *
+ * PAIR WARNING: Keep "Sparring Command Handler.js" in a SEPARATE tab (trigger/leaderboard helpers collide if merged).
+ */
 /* ========================= JAVA TYPES ========================= */
 
 var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
@@ -68,9 +78,11 @@ var NetworkHandler = Java.type("com.dragonminez.common.network.NetworkHandler");
 var AbstractKiProjectile = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile");
 var GravityLogic = Java.type("com.dragonminez.server.util.GravityLogic");
 var MCPlayerClass = Java.type("net.minecraft.world.entity.player.Player");
-var Bukkit = Java.type("org.bukkit.Bukkit");
 var System = Java.type("java.lang.System");
 var LocalDate = Java.type("java.time.LocalDate");
+/* Optional — do not fail the whole Script tab if Bukkit bridge is missing. */
+var Bukkit = null;
+try { Bukkit = Java.type("org.bukkit.Bukkit"); } catch (eBukkit) { Bukkit = null; }
 
 /* ========================= CONFIGURATION ========================= */
 
@@ -322,8 +334,10 @@ function getPlayerByName(player, name) {
     } catch (e) {}
 
     try {
-        var bukkitPlayer = Bukkit.getPlayerExact(String(name));
-        if (bukkitPlayer == null) return null;
+        if (Bukkit != null) {
+            var bukkitPlayer = Bukkit.getPlayerExact(String(name));
+            if (bukkitPlayer == null) return null;
+        }
 
         /*
          * CustomNPCs wrappers are normally available through the
@@ -521,6 +535,8 @@ function getEffectiveWeight(mcPlayer) {
 
 function getFabledPrestigeLevel(player) {
     try {
+        if (Bukkit == null) return 0;
+
         var plugin = Bukkit.getPluginManager().getPlugin("Fabled");
         if (plugin == null || !plugin.isEnabled()) return 0;
 

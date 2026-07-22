@@ -12,10 +12,22 @@
 // RES is handled with addBonusSplit("RES", ...)
 // because DMZ splits RES into DEF + STM.
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ *
+ * PAIR WARNING: Keep "Attr Fabled Multi bonus.js" in a SEPARATE tab — both define tick() and the same helper names.
+ */
+
 var TICK_INTERVAL = 20; // once per second
 var DEBUG = false;
 
-var BONUS_NAME = "§6Prestrige Bonus";
+/* Unique name so this never fights Attr Fabled Multi bonus.js if both run. */
+var BONUS_NAME = "§6Fabled Attr Bonus";
 
 function tick(event) {
     try {
@@ -135,7 +147,7 @@ function tick(event) {
 
         if (DEBUG && changed) {
             player.message(
-                "�aFabled multiplicative bonus applied: " +
+                "�aFabled multiplicative bonus applied: " +
                 "STR x" + toMultiplier(fStr) +
                 " SKP x" + toMultiplier(fSkp) +
                 " RES x" + toMultiplier(fRes) +
@@ -147,7 +159,7 @@ function tick(event) {
 
     } catch (e) {
         if (event.player != null && DEBUG) {
-            event.player.message("�cFabled -> DMZ bonus stat error: " + e);
+            event.player.message("�cFabled -> DMZ bonus stat error: " + e);
         }
     }
 }
@@ -172,11 +184,9 @@ function safeNumber(value) {
 }
 
 function clearBonus(bonusStats, stat) {
-    try {
-        bonusStats.removeBonus(stat, BONUS_NAME);
-    } catch (e1) {}
-
-    try {
-        bonusStats.clearBonus(stat, BONUS_NAME);
-    } catch (e2) {}
+    var names = [BONUS_NAME, "§6Prestrige Bonus", "§6Prestige Bonus"];
+    for (var i = 0; i < names.length; i++) {
+        try { bonusStats.removeBonus(stat, names[i]); } catch (e1) {}
+        try { bonusStats.clearBonus(stat, names[i]); } catch (e2) {}
+    }
 }

@@ -11,6 +11,14 @@
  * Type: console
  */
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ */
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
 var StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
@@ -144,7 +152,7 @@ function trigger(event) {
             .orElse(null);
 
         if (data == null) {
-            tell(player, "§c[Android] DragonMineZ data could not be loaded.");
+            tell(player, "ï¿½c[Android] DragonMineZ data could not be loaded.");
             return;
         }
 
@@ -162,7 +170,7 @@ function trigger(event) {
         logLine("Ran DragonMineZ handleGero action 1 for " + player.getName());
 
     } catch (err) {
-        tell(player, "§c[Android Trigger Error] §f" + err);
+        tell(player, "ï¿½c[Android Trigger Error] ï¿½f" + err);
         logLine("Error for " + targetName + ": " + err);
     }
 }

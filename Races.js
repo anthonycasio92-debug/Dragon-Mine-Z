@@ -10,6 +10,15 @@
 // - Only changes the class when it does not match the DMZ race.
 // ============================================================
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ */
+
 var CHECK_INTERVAL_MS = 5000;
 var DEBUG = false;
 

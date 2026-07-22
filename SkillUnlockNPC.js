@@ -1,3 +1,14 @@
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ *
+ * PAIR WARNING: Keep "SkillCheckCommand.js" in a SEPARATE tab â€” nearly identical helpers/events; combining overwrites handlers.
+ */
+
 var StatsProvider = Java.type(
     "com.dragonminez.common.stats.StatsProvider"
 );
@@ -59,7 +70,7 @@ var KEY_TRIAL_END =
  * ============================================================
  * COLORS
  *
- * Unicode color codes prevent broken § symbols and random text.
+ * Unicode color codes prevent broken ï¿½ symbols and random text.
  * ============================================================
  */
 

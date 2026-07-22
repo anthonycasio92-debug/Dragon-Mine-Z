@@ -12,9 +12,19 @@
  * ============================================================
  */
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ */
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var System = Java.type("java.lang.System");
-var Bukkit = Java.type("org.bukkit.Bukkit");
+/* Optional — do not fail the whole Script tab if Bukkit bridge is missing. */
+var Bukkit = null;
+try { Bukkit = Java.type("org.bukkit.Bukkit"); } catch (eBukkit) { Bukkit = null; }
 
 /*
  * ============================================================
@@ -197,6 +207,7 @@ function sendToAll(message) {
          * CustomNPCs may return the same online players from each world,
          * which caused one message per loaded world.
          */
+        if (Bukkit == null) throw "no bukkit";
         Bukkit.getServer().broadcastMessage(message);
 
     } catch (bukkitErr) {

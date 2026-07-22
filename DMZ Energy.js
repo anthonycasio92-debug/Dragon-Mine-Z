@@ -1,6 +1,15 @@
 // DMZ Energy <-> Fabled Mana Sync
 // Works across all worlds/dimensions
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ */
+
 var TICK_INTERVAL = 1;
 var DEBUG = false;
 

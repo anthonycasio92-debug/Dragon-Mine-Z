@@ -25,6 +25,16 @@
  106 = debug
 */
 
+/*
+ * CNPC INSTALL RULE:
+ * Put this file in its OWN Script tab / ScriptContainer.
+ * Do NOT add multiple .js files into the same tab's ScriptList.
+ * CustomNPCs concatenates every file in a tab into ONE scope, so
+ * duplicate tick/trigger/init/helpers overwrite each other and one
+ * Java.type/load error disables the entire tab until reload.
+ *
+ * SUITE WARNING: RivalCore / RivalEvents / RivalBattle Manager / RivalBattle Combat Core must EACH be their own Player Script tab. All define init/trigger/login.
+ */
 var RC_VERSION = 3;
 var RC_COLOR = String.fromCharCode(167);
 
