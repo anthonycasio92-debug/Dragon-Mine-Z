@@ -56,7 +56,7 @@ Title TP mult stacks with level scaling on all rival TP (presence, kills, challe
 5. Instinct senses Mutual/Nemesis rivals (arrive, ki, power, form, fusion)
 6. Nemesis recomputed after battles
 7. Hall of Legends remembers the server’s greatest rivalries
-8. Removing Declared/Mutual/Nemesis ends it for **both** players; history is archived and restored if they rival again
+8. Removing Mutual/Nemesis ends it for **both** players (history archived). Declared remove leaves the other with one-way Unknown.
 
 RP does **not** grant raw STR/SKP bonuses.
 

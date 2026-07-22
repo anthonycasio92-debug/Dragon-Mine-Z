@@ -922,21 +922,37 @@ function cmdRemove(player, targetName) {
     }
     var link = pref.rivals[target.uuid];
     var st = linkStatus(link);
-    var wasBond = (st == "declared" || st == "mutual" || st == "nemesis");
+    var wasShared = (st == "mutual" || st == "nemesis");
+    var wasDeclared = (st == "declared");
     /* Unknown is silent — never tip them off that they were rivaled. */
-    var notifyThem = wasBond;
+    var notifyThem = wasShared || wasDeclared;
 
     archiveRivalLink(pref, target.uuid);
     delete pref.rivals[target.uuid];
 
-    if (wasBond) {
-        /* Mutual / Nemesis / Declared: end the rivalry for both players. */
+    if (wasShared) {
+        /* Mutual / Nemesis: end the rivalry for both players. */
         if (target.rivals[pref.uuid] != null) {
             archiveRivalLink(target, pref.uuid);
             delete target.rivals[pref.uuid];
         }
         recomputeNemesis(pref);
         recomputeNemesis(target);
+    } else if (wasDeclared) {
+        /* Declared: you drop it; they keep a one-way Unknown rivalry. */
+        if (target.rivals[pref.uuid] != null) {
+            var kept = target.rivals[pref.uuid];
+            kept.mutual = false;
+            kept.isNemesis = false;
+            kept.declaredByThem = false;
+            kept.inviteSent = false;
+            kept.mutualAccepted = false;
+            kept.mutualSince = 0;
+            /* Keep declaredByMe so their one-way rivalry remains. */
+            if (kept.declaredByMe !== true) kept.declaredByMe = true;
+            refreshLinkStatus(kept);
+            pushHistory(kept, "demoted", pref.name + " ended Declared rivalry");
+        }
     } else {
         /* Unknown / pending invite: only clear your side; scrub invite flags on them. */
         if (target.rivals[pref.uuid] != null) {
@@ -960,14 +976,21 @@ function cmdRemove(player, targetName) {
     saveDb(db);
 
     msg(player, C + "eRemoved rivalry with " + target.name);
-    if (wasBond) {
+    if (wasShared) {
         msg(player, C + "8History saved. Rematch keeps prior record.");
+    } else if (wasDeclared) {
+        msg(player, C + "8History saved. They may still have you as Unknown.");
     }
     if (notifyThem) {
         var online = onlineByName(target.name);
         if (online != null) {
-            msg(online, C + "c" + pref.name + " ended rivalry with you.");
-            msg(online, C + "8History saved if you rival again later.");
+            if (wasShared) {
+                msg(online, C + "c" + pref.name + " ended rivalry with you.");
+                msg(online, C + "8History saved if you rival again later.");
+            } else if (wasDeclared) {
+                msg(online, C + "e" + pref.name + " ended Declared rivalry with you.");
+                msg(online, C + "8You still have them as a one-way Unknown rival.");
+            }
         }
     }
 }
