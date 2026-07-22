@@ -78,7 +78,7 @@ Challenge → Accept → Countdown → Official Battle (1–10 min) → Winner �
 |---|---|
 | Losing an official rival battle marks the battlefield | Done |
 | Named by biome/landmark (not raw coords) | Done |
-| Fighting there: +TP, +RP, underdog aura, challenge bonus | Done |
+| Fighting there: +TP, +RP, underdog aura (all stats), challenge bonus | Done |
 | Claim tiers: I Claimed / II Dominant / III Legendary | Done |
 | Reclaim by beating the champion **on** those grounds | Done |
 | Server announcement on reclaim | Done |

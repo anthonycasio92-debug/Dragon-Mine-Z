@@ -425,8 +425,10 @@ var PG_ON_GROUNDS_RP_BONUS = 12;
 var PG_RECLAIM_TP = 12000;
 var PG_RECLAIM_RP = 45;
 var PG_CHALLENGE_TP_BONUS = 0.40;
-var PG_UNDERDOG_OFFENSE = 1.12;
+var PG_UNDERDOG_STAT_MULT = 1.12; /* all stats while reclaiming grounds */
+var PG_UNDERDOG_OFFENSE = PG_UNDERDOG_STAT_MULT; /* legacy alias */
 var PG_UNDERDOG_BONUS_NAME = "RivalProvingUnderdog";
+var PG_UNDERDOG_STAT_KEYS = ["STR", "SKP", "VIT", "PWR", "ENE"];
 
 function pgFresh() {
     return {
@@ -588,8 +590,17 @@ function pgClearUnderdogBonus(player) {
     try {
         var data = rpGetDMZ(player);
         if (data == null) return;
-        data.getBonusStats().removeBonus("STR", PG_UNDERDOG_BONUS_NAME);
-        data.getBonusStats().removeBonus("SKP", PG_UNDERDOG_BONUS_NAME);
+        var bonus = data.getBonusStats();
+        for (var i = 0; i < PG_UNDERDOG_STAT_KEYS.length; i++) {
+            try { bonus.removeBonus(PG_UNDERDOG_STAT_KEYS[i], PG_UNDERDOG_BONUS_NAME); } catch (e1) {}
+        }
+        try { bonus.removeBonusSplit("RES", PG_UNDERDOG_BONUS_NAME); } catch (e2) {}
+        try {
+            rpNetwork().sendToTrackingEntityAndSelf(
+                new (rpSyncPacket())(player.getMCEntity()),
+                player.getMCEntity()
+            );
+        } catch (e3) {}
     } catch (e) {}
 }
 
@@ -598,16 +609,22 @@ function pgApplyUnderdogBonus(player) {
         var data = rpGetDMZ(player);
         if (data == null) return;
         var bonus = data.getBonusStats();
-        try { bonus.removeBonus("STR", PG_UNDERDOG_BONUS_NAME); } catch (e1) {}
-        try { bonus.removeBonus("SKP", PG_UNDERDOG_BONUS_NAME); } catch (e2) {}
-        var offense = rpHighestOffense(data);
-        bonus.addBonus(offense.key, PG_UNDERDOG_BONUS_NAME, "*", PG_UNDERDOG_OFFENSE);
+        var mult = PG_UNDERDOG_STAT_MULT;
+
+        for (var i = 0; i < PG_UNDERDOG_STAT_KEYS.length; i++) {
+            var key = PG_UNDERDOG_STAT_KEYS[i];
+            try { bonus.removeBonus(key, PG_UNDERDOG_BONUS_NAME); } catch (e1) {}
+            try { bonus.addBonus(key, PG_UNDERDOG_BONUS_NAME, "*", mult); } catch (e2) {}
+        }
+        try { bonus.removeBonusSplit("RES", PG_UNDERDOG_BONUS_NAME); } catch (e3) {}
+        try { bonus.addBonusSplit("RES", PG_UNDERDOG_BONUS_NAME, "*", mult, false); } catch (e4) {}
+
         try {
             rpNetwork().sendToTrackingEntityAndSelf(
                 new (rpSyncPacket())(player.getMCEntity()),
                 player.getMCEntity()
             );
-        } catch (e3) {}
+        } catch (e5) {}
     } catch (e) {}
 }
 
