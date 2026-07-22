@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.0
+ Version: 2.0.2
 
  Changelog:
  - Added complete persistent sparring statistics for command displays.
@@ -28,10 +28,10 @@
  - Base TP increased to 750.
  - Removed minimum TP floor system.
  - Fixed reward messages using the correct SHOW_TP_MESSAGES setting.
- - Replaced fragile section-sign characters with a safe color helper.
+ - Replaced fragile section-sign characters with \\u00A7 color escapes (v2.0.2).
  - Added visible error messages when DMZ data, calculation, or payout fails.
  - Fixed minimum TP handling: calculations stay unchanged and the 750 minimum is applied only when TP is awarded.
- - Cleaned reward messages and restored Minecraft section-sign colors.
+ - Cleaned reward messages and restored Minecraft colors via unicode escapes.
  - Added functional 3-second recovery grace period.
  - Added Perfect Training x2 bonus.
  - Perfect Training requires matching gravity/weight, 200% release,
@@ -75,7 +75,7 @@ var LocalDate = Java.type("java.time.LocalDate");
 /* ========================= CONFIGURATION ========================= */
 
 var DEBUG = false;
-var COLOR_CODE = String.fromCharCode(167);
+var COLOR_CODE = "\u00A7";
 
 /* TP is paid once per active interval. */
 var BASE_TP_PER_INTERVAL = 1500;
@@ -361,7 +361,7 @@ function sendMessage(player, text) {
 
 function debug(player, text) {
     if (!DEBUG) return;
-    sendMessage(player, "§8[Spar Debug] §7" + text);
+    sendMessage(player, "\u00A78[Spar Debug] \u00A77" + text);
 }
 
 /* ========================= DMZ DATA ========================= */
@@ -585,7 +585,7 @@ function awardTrainingPoints(player, playerData, amount) {
     } catch (e) {
         sendMessage(
             player,
-            "§c[Sparring] Failed to award TP: " + e
+            "\u00A7c[Sparring] Failed to award TP: " + e
         );
         return false;
     }
@@ -919,15 +919,15 @@ function startSession(a, b) {
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(
             a,
-            "§6[Sparring] §eTraining session started with §f" +
+            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
             bName +
-            "§e."
+            "\u00A7e."
         );
         sendMessage(
             b,
-            "§6[Sparring] §eTraining session started with §f" +
+            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
             aName +
-            "§e."
+            "\u00A7e."
         );
     }
 
@@ -960,17 +960,17 @@ function endSession(player, partner, reason) {
     if (SHOW_SESSION_MESSAGES && reason != null && reason != "") {
         sendMessage(
             player,
-            "§6[Sparring] §eSession ended: §f" +
+            "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
             reason +
-            "§e."
+            "\u00A7e."
         );
 
         if (partner != null) {
             sendMessage(
                 partner,
-                "§6[Sparring] §eSession ended: §f" +
+                "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
                 reason +
-                "§e."
+                "\u00A7e."
             );
         }
     }
@@ -1837,15 +1837,15 @@ function handleRecoverableFailure(player, partner, reason) {
         if (SHOW_GRACE_WARNING) {
             sendMessage(
                 player,
-                "§6[Sparring] §eRecover within " +
+                "\u00A76[Sparring] \u00A7eRecover within " +
                 Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: §f" + reason + "§e."
+                " seconds: \u00A7f" + reason + "\u00A7e."
             );
             sendMessage(
                 partner,
-                "§6[Sparring] §eRecover within " +
+                "\u00A76[Sparring] \u00A7eRecover within " +
                 Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: §f" + reason + "§e."
+                " seconds: \u00A7f" + reason + "\u00A7e."
             );
         }
 

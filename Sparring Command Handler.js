@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 2.0.0
+ Version: 2.0.2
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js TRIGGER SCRIPT.
@@ -25,7 +25,7 @@
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var LocalDate = Java.type("java.time.LocalDate");
 
-var C = String.fromCharCode(167);
+var C = "\u00A7";
 var TOP_SIZE = 10;
 
 var LB_NAMES_KEY = "spar.leaderboard.names";
