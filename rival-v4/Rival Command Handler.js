@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.9
+ Version: 4.6.10
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -74,6 +74,8 @@ var CH_REQUEST_EXPIRE_MS = 30 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_COUNTDOWN_MS = 5 * 1000;
 var CH_DURATION_MS = 60 * 1000;
+var CH_MIN_MINUTES = 1;
+var CH_MAX_MINUTES = 10;
 var CH_MAX_DISTANCE = 64;
 
 var TIERS = [
@@ -724,7 +726,7 @@ function cmdHelp(player) {
     msg(player, C + "8Mutual: /rival request + accept, or both /rival accept when Declared.");
     uiBlank(player);
     uiSection(player, "Battle");
-    uiCmd(player, "/challenge <player>", "60s official fight");
+    uiCmd(player, "/challenge <player> [1-10]", "official fight (minutes, default 1)");
     uiCmd(player, "/challenge accept|decline|cancel", "");
     uiCmd(player, "/spectaterival <player>", "watch live");
     uiBlank(player);
@@ -1128,9 +1130,35 @@ function cmdList(player) {
     uiFoot(player);
 }
 
-function cmdChallenge(player, targetName) {
+function parseChallengeMinutes(raw) {
+    var s = str(raw).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (s == "") return CH_MIN_MINUTES;
+    s = s.replace(/m(in(utes?)?)?$/, "");
+    var n = Math.floor(Number(s));
+    if (isNaN(n) || !isFinite(n)) return -1;
+    if (n < CH_MIN_MINUTES || n > CH_MAX_MINUTES) return -1;
+    return n;
+}
+
+function challengeDurationLabel(minutes) {
+    var m = Math.max(CH_MIN_MINUTES, num(minutes, CH_MIN_MINUTES));
+    if (m == 1) return "1 minute";
+    return m + " minutes";
+}
+
+function cmdChallenge(player, targetName, durationRaw) {
     var clean = str(targetName).replace(/^\s+|\s+$/g, "");
-    if (clean == "") { msg(player, C + "cUsage: /challenge <player>"); return; }
+    if (clean == "") {
+        msg(player, C + "cUsage: /challenge <player> [1-" + CH_MAX_MINUTES + "]");
+        return;
+    }
+    var minutes = parseChallengeMinutes(durationRaw);
+    if (minutes < 0) {
+        msg(player, C + "cDuration must be " + CH_MIN_MINUTES + "-" + CH_MAX_MINUTES + " minutes.");
+        return;
+    }
+    var durationMs = minutes * 60 * 1000;
+
     var target = onlineByName(clean);
     if (target == null) { msg(player, C + "cPlayer must be online."); return; }
     if (uuidOf(player) == uuidOf(target)) { msg(player, C + "cCannot challenge yourself."); return; }
@@ -1159,14 +1187,19 @@ function cmdChallenge(player, targetName) {
         toUuid: toU,
         toName: nameOf(target),
         createdAt: now(),
-        related: areRelated(db, fromU, toU)
+        related: areRelated(db, fromU, toU),
+        durationMinutes: minutes,
+        durationMs: durationMs
     };
     ch.cooldowns[cdKey] = now();
     saveCh(ch);
     saveDb(db);
 
-    uiBanner(player, "Challenge", C + "aSent to " + C + "e" + nameOf(target));
-    uiBanner(target, "Challenge", C + "e" + nameOf(player) + C + "7 wants a 60s rival battle");
+    var label = challengeDurationLabel(minutes);
+    uiBanner(player, "Challenge", C + "aSent to " + C + "e" + nameOf(target) +
+        C + "8  (" + label + ")");
+    uiBanner(target, "Challenge", C + "e" + nameOf(player) + C + "7 wants a " +
+        C + "f" + label + C + "7 rival battle");
     msg(target, C + "8  /challenge accept" + C + "7   or   " + C + "8/challenge decline");
 }
 
@@ -1186,6 +1219,10 @@ function startCountdown(ch, pending) {
     delete ch.pending[pending.id];
     var sid = String(ch.nextId++);
     var t = now();
+    var minutes = Math.max(CH_MIN_MINUTES, num(pending.durationMinutes, CH_MIN_MINUTES));
+    if (minutes > CH_MAX_MINUTES) minutes = CH_MAX_MINUTES;
+    var durationMs = num(pending.durationMs, minutes * 60 * 1000);
+    if (durationMs < CH_DURATION_MS) durationMs = minutes * 60 * 1000;
     var session = {
         id: sid,
         state: "countdown",
@@ -1197,6 +1234,8 @@ function startCountdown(ch, pending) {
         createdAt: t,
         countdownEndsAt: t + CH_COUNTDOWN_MS,
         battleEndsAt: 0,
+        durationMinutes: minutes,
+        durationMs: durationMs,
         endedAt: 0,
         endReason: "",
         winnerUuid: "",
@@ -1213,8 +1252,9 @@ function startCountdown(ch, pending) {
 
     var a = onlineByName(pending.fromName);
     var b = onlineByName(pending.toName);
-    if (a != null) uiBanner(a, "Challenge", C + "6Accepted! Countdown...");
-    if (b != null) uiBanner(b, "Challenge", C + "6Accepted! Countdown...");
+    var label = challengeDurationLabel(minutes);
+    if (a != null) uiBanner(a, "Challenge", C + "6Accepted! " + C + "f" + label + C + "6  Countdown...");
+    if (b != null) uiBanner(b, "Challenge", C + "6Accepted! " + C + "f" + label + C + "6  Countdown...");
 
     /*
      * Pair-key lock so accept spam / dual handlers cannot
@@ -1225,7 +1265,8 @@ function startCountdown(ch, pending) {
         broadcast(C + "8--------------------------------");
         broadcast(C + "6[Rival Battle] " + C + "e" + pending.fromName +
             C + "7  vs  " + C + "e" + pending.toName);
-        broadcast(C + "8Countdown..." + C + "7  Watch: " + C + "f/spectaterival " + pending.fromName);
+        broadcast(C + "8" + label + C + "7  |  Countdown...  Watch: " +
+            C + "f/spectaterival " + pending.fromName);
         broadcast(C + "8--------------------------------");
     }
 }
@@ -1672,11 +1713,12 @@ function routeRivalSub(player, event) {
 function routeChallengeSub(player, event) {
     var parts = argsFrom(event, 1);
     if (parts.length == 0) {
-        msg(player, C + "cUsage: /challenge <player>");
+        msg(player, C + "cUsage: /challenge <player> [1-" + CH_MAX_MINUTES + "]");
         return;
     }
     var sub = lower(parts[0]);
     var target = parts.length > 1 ? parts[1] : "";
+    var durationArg = parts.length > 2 ? parts[2] : "";
 
     if (sub == "accept") {
         cmdChallengeAccept(player, target);
@@ -1685,15 +1727,15 @@ function routeChallengeSub(player, event) {
     } else if (sub == "cancel" || sub == "forfeit") {
         cmdChallengeCancel(player);
     } else if (sub == "rival") {
-        /* Original concept: /Challenge Rival <player> */
+        /* Original concept: /Challenge Rival <player> [minutes] */
         if (target == "") {
-            msg(player, C + "cUsage: /challenge rival <player>");
+            msg(player, C + "cUsage: /challenge rival <player> [1-" + CH_MAX_MINUTES + "]");
             return;
         }
-        cmdChallenge(player, target);
+        cmdChallenge(player, target, durationArg);
     } else {
-        /* /challenge Steve */
-        cmdChallenge(player, parts[0]);
+        /* /challenge Steve   or   /challenge Steve 5 */
+        cmdChallenge(player, parts[0], parts.length > 1 ? parts[1] : "");
     }
 }
 

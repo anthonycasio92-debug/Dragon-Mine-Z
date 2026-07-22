@@ -50,7 +50,7 @@ Title TP mult stacks with level scaling on all rival TP (presence, kills, challe
 ## Core loops
 
 1. Declare → accept → Mutual (auto-demote oldest if at 2)
-2. Official `/challenge` battles write history + RP (Mutual only)
+2. Official `/challenge` battles (1–10 minutes, default 1) write history + RP (Mutual only)
 3. Defeat marks **Proving Grounds** (biome/landmark name); return fights grant bonus TP/RP + underdog aura
 4. Reclaim by beating the champion on those grounds (server announcement)
 5. Instinct senses Mutual/Nemesis rivals (arrive, ki, power, form, fusion)

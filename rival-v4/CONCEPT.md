@@ -60,7 +60,7 @@ Scales with link RP. Mutual (and Nemesis) only.
 
 ## Official Rival Battles
 
-Challenge → Accept → Countdown → 60s Official Battle → Winner → History → RP
+Challenge → Accept → Countdown → Official Battle (1–10 min) → Winner → History → RP
 
 | Rule | Status |
 |---|---|
@@ -139,8 +139,8 @@ NPC Rival Master prints the command guide; HoL is `/rival hof`.
 /rival declare|accept|decline|remove <player>
 /rival list | stats [player] | top [cat]
 /rival title | journal | season | quests | achievements | hof
-/challenge <player>
-/challenge rival <player>
+/challenge <player> [1-10]
+/challenge rival <player> [1-10]
 /challenge accept | decline | cancel
 /spectaterival <player>
 ```

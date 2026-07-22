@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.9
+ Version: 4.6.10
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1799,7 +1799,7 @@ function rcHelp(player) {
     rcMessage(player, RC_COLOR + "8Mutual: request+accept, or both accept when Declared.");
     rcMessage(player, " ");
     rcMessage(player, RC_COLOR + "6Battle");
-    rcMessage(player, RC_COLOR + "e  /challenge <player>" + RC_COLOR + "8  60s official fight");
+    rcMessage(player, RC_COLOR + "e  /challenge <player> [1-10]" + RC_COLOR + "8  official fight (minutes)");
     rcMessage(player, RC_COLOR + "e  /spectaterival <player>");
     rcMessage(player, " ");
     rcMessage(player, RC_COLOR + "6Progress");
@@ -3136,7 +3136,9 @@ var CH_DB_BACKUP_KEY = "dlr.rivalry.v4.challenges.backup";
 
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
 var CH_COUNTDOWN_MS = 5 * 1000;
-var CH_DURATION_MS = 60 * 1000;
+var CH_DURATION_MS = 60 * 1000; /* default challenge length (1 minute) */
+var CH_MIN_MINUTES = 1;
+var CH_MAX_MINUTES = 10;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
@@ -3286,6 +3288,43 @@ function chFormatMs(ms) {
     seconds = seconds % 60;
     if (minutes <= 0) return seconds + "s";
     return minutes + "m " + seconds + "s";
+}
+
+function chParseChallengeMinutes(raw) {
+    var s = chString(raw).replace(/^\s+|\s+$/g, "").toLowerCase();
+    if (s === "") return CH_MIN_MINUTES;
+    s = s.replace(/m(in(utes?)?)?$/, "");
+    var n = Math.floor(Number(s));
+    if (isNaN(n) || !isFinite(n)) return -1;
+    if (n < CH_MIN_MINUTES || n > CH_MAX_MINUTES) return -1;
+    return n;
+}
+
+function chChallengeDurationLabel(minutes) {
+    var m = Math.max(CH_MIN_MINUTES, chNumber(minutes, CH_MIN_MINUTES));
+    if (m === 1) return "1 minute";
+    return m + " minutes";
+}
+
+/* Default 1 min; Command Handler stores durationMinutes/durationMs on the session. */
+function chSessionDurationMs(session) {
+    if (session == null) return CH_DURATION_MS;
+    var minutes = Math.max(CH_MIN_MINUTES, chNumber(session.durationMinutes, CH_MIN_MINUTES));
+    if (minutes > CH_MAX_MINUTES) minutes = CH_MAX_MINUTES;
+    var ms = chNumber(session.durationMs, minutes * 60 * 1000);
+    if (ms < minutes * 60 * 1000) ms = minutes * 60 * 1000;
+    var maxMs = CH_MAX_MINUTES * 60 * 1000;
+    if (ms > maxMs) ms = maxMs;
+    if (ms < CH_DURATION_MS) ms = CH_DURATION_MS;
+    return ms;
+}
+
+function chSessionElapsedMs(session) {
+    var full = chSessionDurationMs(session);
+    var endsAt = chNumber(session.battleEndsAt, 0);
+    var endedAt = chNumber(session.endedAt, chNow());
+    if (endsAt <= 0) return 0;
+    return Math.max(0, endedAt - (endsAt - full));
 }
 
 /* ========================= STORAGE ========================= */
@@ -3683,12 +3722,19 @@ function chBusy(db, uuid) {
     return false;
 }
 
-function chChallenge(player, targetName) {
+function chChallenge(player, targetName, durationRaw) {
     var clean = chString(targetName).replace(/^\s+|\s+$/g, "");
     if (clean === "") {
-        chMessage(player, CH_COLOR + "cUsage: /challenge rival <player>");
+        chMessage(player, CH_COLOR + "cUsage: /challenge rival <player> [1-" + CH_MAX_MINUTES + "]");
         return;
     }
+    var minutes = chParseChallengeMinutes(durationRaw);
+    if (minutes < 0) {
+        chMessage(player, CH_COLOR + "cDuration must be " + CH_MIN_MINUTES + "-" + CH_MAX_MINUTES + " minutes.");
+        return;
+    }
+    var durationMs = minutes * 60 * 1000;
+    var label = chChallengeDurationLabel(minutes);
 
     var target = chFindOnlineAnyWorld(clean);
     if (target === null) {
@@ -3743,14 +3789,17 @@ function chChallenge(player, targetName) {
         toUuid: toUuid,
         toName: chName(target),
         createdAt: chNow(),
-        related: chAreRelated(core, fromUuid, toUuid)
+        related: chAreRelated(core, fromUuid, toUuid),
+        durationMinutes: minutes,
+        durationMs: durationMs
     };
     db.cooldowns[cooldownKey] = chNow();
     chSaveChallengeDb(player, db);
 
-    chMessage(player, CH_COLOR + "6[Challenge] " + CH_COLOR + "aSent to " + CH_COLOR + "e" + chName(target));
+    chMessage(player, CH_COLOR + "6[Challenge] " + CH_COLOR + "aSent to " + CH_COLOR + "e" + chName(target) +
+        CH_COLOR + "8  (" + label + ")");
     chMessage(target, CH_COLOR + "6[Challenge] " + CH_COLOR + "e" + chName(player) +
-        CH_COLOR + "7 wants a 60s rival battle");
+        CH_COLOR + "7 wants a " + CH_COLOR + "f" + label + CH_COLOR + "7 rival battle");
     chMessage(target, CH_COLOR + "8  /challenge accept" + CH_COLOR + "7   or   " +
         CH_COLOR + "8/challenge decline");
 }
@@ -3790,6 +3839,11 @@ function chStartCountdown(player, db, pending) {
 
     var sessionId = String(db.nextId++);
     var now = chNow();
+    var minutes = Math.max(CH_MIN_MINUTES, chNumber(pending.durationMinutes, CH_MIN_MINUTES));
+    if (minutes > CH_MAX_MINUTES) minutes = CH_MAX_MINUTES;
+    var durationMs = chNumber(pending.durationMs, minutes * 60 * 1000);
+    if (durationMs < minutes * 60 * 1000) durationMs = minutes * 60 * 1000;
+    var label = chChallengeDurationLabel(minutes);
     var session = {
         id: sessionId,
         state: "countdown",
@@ -3801,6 +3855,8 @@ function chStartCountdown(player, db, pending) {
         createdAt: now,
         countdownEndsAt: now + CH_COUNTDOWN_MS,
         battleEndsAt: 0,
+        durationMinutes: minutes,
+        durationMs: durationMs,
         endedAt: 0,
         endReason: "",
         winnerUuid: "",
@@ -3818,15 +3874,17 @@ function chStartCountdown(player, db, pending) {
 
     var a = chFindOnlineByUuid(pending.fromUuid);
     var b = chFindOnlineByUuid(pending.toUuid);
-    if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
-    if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
+    if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! " +
+        CH_COLOR + "f" + label + CH_COLOR + "e  Countdown...");
+    if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! " +
+        CH_COLOR + "f" + label + CH_COLOR + "e  Countdown...");
 
     var pairKey = chString(pending.fromUuid) + ">" + chString(pending.toUuid);
     if (chClaimCountdownAnnounce(pairKey)) {
         chBroadcast(CH_COLOR + "8--------------------------------");
         chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
             CH_COLOR + "7  vs  " + CH_COLOR + "e" + pending.toName);
-        chBroadcast(CH_COLOR + "8Countdown..." + CH_COLOR + "7  Watch: " +
+        chBroadcast(CH_COLOR + "8" + label + CH_COLOR + "7  |  Countdown...  Watch: " +
             CH_COLOR + "f/spectaterival " + pending.fromName);
 
         try {
@@ -3930,18 +3988,24 @@ function chBeginBattle(player, db, session) {
     if (session.announcedFight === true) return;
     if (chHasResolved(player, session.id)) return;
 
+    var durationMs = chSessionDurationMs(session);
+    var minutes = Math.max(CH_MIN_MINUTES, chNumber(session.durationMinutes, Math.round(durationMs / 60000)));
+    if (minutes > CH_MAX_MINUTES) minutes = CH_MAX_MINUTES;
+    session.durationMinutes = minutes;
+    session.durationMs = durationMs;
     session.state = "active";
-    session.battleEndsAt = chNow() + CH_DURATION_MS;
+    session.battleEndsAt = chNow() + durationMs;
     session.lastScoreBroadcastAt = 0;
     session.announcedFight = true;
     chSaveChallengeDb(player, db);
 
+    var label = chChallengeDurationLabel(minutes);
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
     if (a !== null) chMessage(a, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
-        CH_COLOR + "eMost damage in 60 seconds!");
+        CH_COLOR + "eMost damage in " + label + "!");
     if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
-        CH_COLOR + "eMost damage in 60 seconds!");
+        CH_COLOR + "eMost damage in " + label + "!");
 
     var fightKey = "fight." + chString(session.challengerUuid) + ">" + chString(session.opponentUuid);
     if (!chClaimCountdownAnnounce(fightKey)) return;
@@ -3950,7 +4014,7 @@ function chBeginBattle(player, db, session) {
     chBroadcast(CH_COLOR + "c" + CH_COLOR + "l FIGHT! " + CH_COLOR + "r");
     chBroadcast(CH_COLOR + "e" + session.challengerName + CH_COLOR + "7  vs  " +
         CH_COLOR + "e" + session.opponentName);
-    chBroadcast(CH_COLOR + "860s most damage");
+    chBroadcast(CH_COLOR + "8" + label + " most damage");
     try {
         if (session.related === true) {
             var fightCore = chLoadCoreDb(player);
@@ -3984,7 +4048,7 @@ function chBuildReport(session, winnerName, loserName) {
         lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
     }
     lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
-        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        chFormatMs(chSessionElapsedMs(session)) +
         CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
@@ -4012,7 +4076,8 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ? session.opponentUuid
             : session.challengerUuid;
         var otherCombat = session.combat[otherUuid] || chFreshCombat();
-        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+        var fullMs = chSessionDurationMs(session);
+        var duration = chSessionElapsedMs(session);
         var payload = {
             won: won === true,
             seasonRp: chNumber(seasonRp, 0),
@@ -4023,7 +4088,7 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ki: chNumber(combat.ki, 0),
             longestCombo: chNumber(combat.longestCombo, 0),
             biggestHit: chNumber(combat.biggestHit, 0),
-            fullDuration: duration >= (CH_DURATION_MS - 1500),
+            fullDuration: duration >= (fullMs - 1500),
             durationMs: duration,
             knockout: result.knockout === true,
             reason: chString(result.reason),
@@ -4068,7 +4133,7 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
-    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    var battleDuration = chSessionElapsedMs(session);
     function touchDuration(record, wonFlag) {
         if (record === null) return;
         record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
@@ -5230,7 +5295,7 @@ function rprogEnsureQuests(prog, id) {
                 { id: "melee_hits", name: "Land 50 melee hits in challenges", goal: 50, progress: 0, rp: 25 },
                 { id: "ki_damage", name: "Deal 20,000 Ki damage in challenges", goal: 20000, progress: 0, rp: 25 },
                 { id: "three_battles", name: "Fight 3 official battles", goal: 3, progress: 0, rp: 30 },
-                { id: "long_battle", name: "Finish a full 60s battle", goal: 1, progress: 0, rp: 20 }
+                { id: "long_battle", name: "Finish a full-duration battle", goal: 1, progress: 0, rp: 20 }
             ]
         };
     }

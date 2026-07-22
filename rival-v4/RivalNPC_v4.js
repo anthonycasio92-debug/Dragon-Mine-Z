@@ -45,7 +45,7 @@ function showRivalGuide(player) {
     msg(player, C + "8Unknown = you rivaled them silently. Declared = you both did.");
     msg(player, " ");
     msg(player, C + "6Battle");
-    msg(player, C + "e  /challenge <player>" + C + "8  60s official fight");
+    msg(player, C + "e  /challenge <player> [1-10]" + C + "8  official fight (minutes)");
     msg(player, C + "e  /challenge accept|decline|cancel");
     msg(player, C + "e  /spectaterival <player>" + C + "8  watch live");
     msg(player, " ");

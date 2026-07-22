@@ -147,8 +147,8 @@ CustomAlias:
   #   /rival declare|accept|decline|remove <player>
   #   /rival list | stats [player] | top [cat]
   #   /rival title | journal | season | quests | achievements | hof
-  #   /challenge <player>
-  #   /challenge rival <player>
+  #   /challenge <player> [1-10]
+  #   /challenge rival <player> [1-10]
   #   /challenge accept | decline | cancel
   #   /spectaterival <player>
   #
