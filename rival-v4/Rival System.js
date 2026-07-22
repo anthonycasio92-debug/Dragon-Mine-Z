@@ -1392,6 +1392,15 @@ function rcDecline(player, targetName) {
     }
 
     rcRemoveRequestsBetween(database, fromRecord.uuid, playerRecord.uuid);
+    if (playerRecord.rivals[fromRecord.uuid] !== undefined) {
+        var unk = playerRecord.rivals[fromRecord.uuid];
+        unk.declaredByThem = false;
+        if (unk.declaredByMe !== true && unk.mutual !== true) {
+            delete playerRecord.rivals[fromRecord.uuid];
+        } else {
+            rcRefreshLinkStatus(unk);
+        }
+    }
     playerRecord.totals.declarationsDeclined++;
     rcSaveDatabase(player, database);
 
