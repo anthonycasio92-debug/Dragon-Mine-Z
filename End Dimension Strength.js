@@ -1,14 +1,15 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.3
+ Version: 2.5.4
 
- - Stronger End mobs (high HP + DMZ defense, scaled to player power)
+ - Stronger End mobs (scaled HP/DEF, killable in a short hit band)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
  - Never rewrite dragon/enderman max-health attributes (keeps AI working)
  - Dragon spawned via EndDragonFight (not orphan /summon)
  - Dragon HP targets ~200–300 matched hits (derived from mitigation)
+ - End mobs target ~6–12 matched hits (trash, not mini-bosses)
  - Ender Dragon scales with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -110,38 +111,33 @@ var VANILLA_MOB_MAX_HP = {
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — tough, but killable (~20–40 hits for a matched player).
- * Dragon keeps the hard mitigation; mobs use END_MOB_* absorb/cap below.
+ * End mob tiers — short fights, not mini-bosses.
+ * HP is sized from nearby player melee × hit-target × post-mitigation fraction.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 40000,  damage: 40, defense: 15000, label: "Endermite" },
-    phantom:   { tier: 2, hp: 70000,  damage: 70, defense: 25000, label: "Phantom" },
-    enderman:  { tier: 3, hp: 100000, damage: 12, defense: 40000, label: "Enderman" },
-    shulker:   { tier: 4, hp: 160000, damage: 80, defense: 60000, label: "Shulker" }
+    endermite: { tier: 1, hp: 6000,  damage: 40, defense: 1500, hits: 6,  label: "Endermite" },
+    phantom:   { tier: 2, hp: 10000, damage: 70, defense: 3000, hits: 8,  label: "Phantom" },
+    enderman:  { tier: 3, hp: 16000, damage: 12, defense: 5000, hits: 10, label: "Enderman" },
+    shulker:   { tier: 4, hp: 24000, damage: 80, defense: 7000, hits: 12, label: "Shulker" }
 };
-var END_MOB_LEVEL_HP_PER_LEVEL = 800;
-var END_MOB_LEVEL_SCALE_CAP = 4.0;
-var END_MOB_HP_FROM_MELEE = 3.0;
-var END_MOB_HP_FROM_PLAYER_HP = 2.0;
-var END_MOB_DEF_FROM_PLAYER = 1.0;
-var END_MOB_DEF_FROM_MELEE = 0.75;
-var END_MOB_DEF_PER_LEVEL = 200;
-var END_MOB_DEF_SCALE_CAP = 6.0;
-var END_MOB_MIN_DAMAGE_FRACTION = 0.025;
-/* Rough hit-count target used to soft-cap mob virtual HP vs nearby melee. */
-var END_MOB_TARGET_HITS = 30;
-var END_MOB_HP_CAP_FROM_MELEE = 0.20; /* hp <= melee * hits * this (post-mitigation share) */
+var END_MOB_LEVEL_HP_PER_LEVEL = 200;
+var END_MOB_DEF_FROM_PLAYER = 0.25;
+var END_MOB_DEF_FROM_MELEE = 0.20;
+var END_MOB_DEF_PER_LEVEL = 50;
+var END_MOB_DEF_SCALE_CAP = 3.0;
+var END_MOB_MIN_DAMAGE_FRACTION = 0.05;
+var END_MOB_HIT_BAND = 0.25; /* allow ±25% around tier hit target */
 
 /* Dragon mitigation — harder than End mobs, but still finishable. */
 var END_FLAT_ABSORB_FRAC = 0.45;
 var END_REDUCTION_CAP = 0.88;
 var END_DEF_SCALE = 15.0;
 
-/* End-mob mitigation (softer — must remain killable). */
-var END_MOB_FLAT_ABSORB_FRAC = 0.35;
-var END_MOB_REDUCTION_CAP = 0.80;
-var END_MOB_DEF_SCALE = 25.0;
+/* End-mob mitigation (light — trash packs must die quickly). */
+var END_MOB_FLAT_ABSORB_FRAC = 0.25;
+var END_MOB_REDUCTION_CAP = 0.65;
+var END_MOB_DEF_SCALE = 40.0;
 
 /* Egg reward */
 var GIVE_EGG_TO_KILLER = true;
@@ -162,7 +158,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v8";
+var BUFF_TAG = "end_strength_v9";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -782,6 +778,20 @@ function nearbyPlayerPower(entity, world) {
     return best;
 }
 
+function expectedMobThroughFraction() {
+    var absorb = num(END_MOB_FLAT_ABSORB_FRAC, 0.25);
+    if (absorb < 0) absorb = 0;
+    if (absorb > 0.95) absorb = 0.95;
+    var cap = num(END_MOB_REDUCTION_CAP, 0.65);
+    if (cap < 0) cap = 0;
+    if (cap > 0.99) cap = 0.99;
+    var through = (1.0 - absorb) * (1.0 - cap);
+    var minFrac = num(END_MOB_MIN_DAMAGE_FRACTION, 0.05);
+    if (through < minFrac) through = minFrac;
+    if (through < 0.02) through = 0.02;
+    return through;
+}
+
 function calcMobDefense(tier, power) {
     var base = num(tier.defense, 0);
     var tierFactor = num(tier.tier, 1);
@@ -793,8 +803,8 @@ function calcMobDefense(tier, power) {
     var maxDef = base * END_MOB_DEF_SCALE_CAP
         + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER
         + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE;
-    /* Keep DEF below nearby melee so hits always matter. */
-    var meleeCap = num(power.melee, 0) * 0.9 + base;
+    /* Keep DEF well below nearby melee so trash dies in a short burst. */
+    var meleeCap = num(power.melee, 0) * 0.45 + base;
     if (meleeCap > base && maxDef > meleeCap) maxDef = meleeCap;
     if (def > maxDef) def = maxDef;
     return Math.floor(def);
@@ -802,26 +812,24 @@ function calcMobDefense(tier, power) {
 
 function calcMobHp(tier, power) {
     var base = num(tier.hp, 1);
-    var tierFactor = num(tier.tier, 1);
-    var levelScale = 1 + (power.level * END_MOB_LEVEL_HP_PER_LEVEL) / Math.max(1, base);
-    if (levelScale > END_MOB_LEVEL_SCALE_CAP) levelScale = END_MOB_LEVEL_SCALE_CAP;
-    var hp = base * levelScale
-        + num(power.melee, 0) * END_MOB_HP_FROM_MELEE * (tierFactor / 2.0)
-        + num(power.maxHp, 0) * END_MOB_HP_FROM_PLAYER_HP;
-    var floorFromMelee = num(power.melee, 0) * END_MOB_HP_FROM_MELEE;
-    if (hp < floorFromMelee) hp = floorFromMelee;
-    if (hp < base) hp = base;
-
-    /*
-     * Soft-cap so a matched player clears the mob in roughly END_MOB_TARGET_HITS
-     * assuming ~END_MOB_HP_CAP_FROM_MELEE of raw melee lands after mitigation.
-     */
+    var targetHits = Math.max(3, num(tier.hits, 10));
     var melee = num(power.melee, 0);
+    var through = expectedMobThroughFraction();
+    var bonus = num(power.level, 1) * END_MOB_LEVEL_HP_PER_LEVEL * (num(tier.tier, 1) / 2.0);
+
+    var hp;
     if (melee > 0) {
-        var cap = melee * END_MOB_TARGET_HITS * END_MOB_HP_CAP_FROM_MELEE;
-        if (cap < base) cap = base;
-        if (hp > cap) hp = cap;
+        var targetHp = melee * targetHits * through;
+        var minHp = melee * targetHits * (1.0 - END_MOB_HIT_BAND) * through;
+        var maxHp = melee * targetHits * (1.0 + END_MOB_HIT_BAND) * through;
+        hp = targetHp + bonus * 0.15;
+        if (hp < minHp) hp = minHp;
+        if (hp > maxHp) hp = maxHp;
+    } else {
+        hp = base + bonus;
     }
+
+    if (hp < base) hp = base;
     return Math.floor(hp);
 }
 
