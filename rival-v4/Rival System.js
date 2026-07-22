@@ -1520,6 +1520,9 @@ function rcRemove(player, targetName) {
 
     var link = playerRecord.rivals[targetRecord.uuid];
     var wasMutual = link.mutual === true;
+    var st = rcLinkStatus(link);
+    /* Unknown is silent — never tip them off that they were rivaled. */
+    var notifyThem = (st === "declared" || st === "mutual" || st === "nemesis");
     delete playerRecord.rivals[targetRecord.uuid];
 
     if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
@@ -1551,9 +1554,11 @@ function rcRemove(player, targetName) {
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "eRemoved rivalry with " + targetRecord.name + ".");
-    var online = rcFindOnlinePlayerAnyWorld(targetRecord.name);
-    if (online !== null) {
-        rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
+    if (notifyThem) {
+        var online = rcFindOnlinePlayerAnyWorld(targetRecord.name);
+        if (online !== null) {
+            rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
+        }
     }
 }
 
