@@ -1,0 +1,18 @@
+#
+# End Dimension Strength - CMI alias
+# Requires End Dimension Strength.js in Global Player (tick, kill, trigger).
+#
+# /enddragon  -> summons a stat-scaled Ender Dragon (trigger 50)
+#
+
+CustomAlias:
+  enddragon:
+    Cmds:
+    - asFakeOp! noppes script trigger 50 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  spawndragon:
+    Cmds:
+    - asFakeOp! noppes script trigger 50 [playerName]
+    AddTabs: true
+    ExactMatch: true
