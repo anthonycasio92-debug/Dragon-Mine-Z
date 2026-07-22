@@ -1,14 +1,14 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.2
+ Version: 2.5.3
 
  - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
  - Never rewrite dragon/enderman max-health attributes (keeps AI working)
  - Dragon spawned via EndDragonFight (not orphan /summon)
- - Dragon + End mobs tuned for matched hit-count fights (not immortal)
+ - Dragon HP targets ~200–300 matched hits (derived from mitigation)
  - Ender Dragon scales with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -56,19 +56,20 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /*
- * Dragon virtual HP/DEF — boss-length fight (~80–120 matched hits),
- * not immortal. Soft-capped to summoner / strongest End player melee.
+ * Dragon virtual HP/DEF — sized for ~200–300 matched melee hits.
+ * HP = playerMelee * targetHits * expectedPostMitigationFraction
+ * so the fight length stays stable as player power grows.
  */
-var DRAGON_BASE_HP = 250000;
-var DRAGON_HP_PER_LEVEL = 2500;
-var DRAGON_HP_PER_BP = 0.25;
-var DRAGON_HP_FROM_MELEE = 8.0;
-var DRAGON_HP_FROM_PLAYER_HP = 5.0;
-var DRAGON_HP_CAP = 15000000;
+var DRAGON_BASE_HP = 400000;
+var DRAGON_HP_PER_LEVEL = 1500;
+var DRAGON_HP_PER_BP = 0.15;
+var DRAGON_HP_FROM_PLAYER_HP = 2.0;
+var DRAGON_HP_CAP = 40000000;
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
-var DRAGON_TARGET_HITS = 100;
-var DRAGON_HP_CAP_FROM_MELEE = 0.12; /* hp <= melee * hits * this */
+var DRAGON_MIN_HITS = 200;
+var DRAGON_TARGET_HITS = 250;
+var DRAGON_MAX_HITS = 300;
 
 /*
  * Virtual DMZ defense (StatsData only exists on players).
@@ -161,7 +162,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v7";
+var BUFF_TAG = "end_strength_v8";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -288,24 +289,46 @@ function strongestPlayerInEnd(world) {
     return best;
 }
 
-function calcDragonHp(power) {
-    var hp = DRAGON_BASE_HP
-        + power.level * DRAGON_HP_PER_LEVEL
-        + power.bp * DRAGON_HP_PER_BP
-        + num(power.melee, 0) * DRAGON_HP_FROM_MELEE
-        + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
-    if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
+/*
+ * Expected fraction of raw melee that lands on the dragon when DEF is
+ * high enough to hit the reduction cap (the usual End-fight case).
+ * Used to size virtual HP for a stable hit-count target.
+ */
+function expectedDragonThroughFraction() {
+    var absorb = num(END_FLAT_ABSORB_FRAC, 0.45);
+    if (absorb < 0) absorb = 0;
+    if (absorb > 0.95) absorb = 0.95;
+    var cap = num(END_REDUCTION_CAP, 0.88);
+    if (cap < 0) cap = 0;
+    if (cap > 0.99) cap = 0.99;
+    var through = (1.0 - absorb) * (1.0 - cap);
+    var minFrac = num(DRAGON_MIN_DAMAGE_FRACTION, 0.015);
+    if (through < minFrac) through = minFrac;
+    if (through < 0.01) through = 0.01;
+    return through;
+}
 
-    /* Soft-cap: ~DRAGON_TARGET_HITS for a matched melee player. */
+function calcDragonHp(power) {
     var melee = num(power.melee, 0);
+    var through = expectedDragonThroughFraction();
+    var bonus = power.level * DRAGON_HP_PER_LEVEL
+        + power.bp * DRAGON_HP_PER_BP
+        + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
+
+    var hp;
     if (melee > 0) {
-        var cap = melee * DRAGON_TARGET_HITS * DRAGON_HP_CAP_FROM_MELEE;
-        if (cap < DRAGON_BASE_HP) cap = DRAGON_BASE_HP;
-        if (hp > cap) hp = cap;
-        var floorFromMelee = melee * DRAGON_HP_FROM_MELEE;
-        if (hp < floorFromMelee && floorFromMelee <= cap) hp = floorFromMelee;
+        /* Primary: ~250 matched hits; clamp into the 200–300 band. */
+        var targetHp = melee * DRAGON_TARGET_HITS * through;
+        var minHp = melee * DRAGON_MIN_HITS * through;
+        var maxHp = melee * DRAGON_MAX_HITS * through;
+        hp = targetHp + bonus * 0.25;
+        if (hp < minHp) hp = minHp;
+        if (hp > maxHp) hp = maxHp;
+    } else {
+        hp = DRAGON_BASE_HP + bonus;
     }
 
+    if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
     if (hp > DRAGON_HP_CAP) hp = DRAGON_HP_CAP;
     return Math.floor(hp);
 }
