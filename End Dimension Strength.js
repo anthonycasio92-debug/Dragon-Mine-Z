@@ -1,17 +1,14 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.5
+ Version: 2.6.0
 
- - Stronger End mobs (scaled HP/DEF, killable in a short hit band)
- - Live virtual-HP nameplates (bar + remaining HP) while damaged
- - Ender Dragon + End mobs use DMZ defense mitigation
- - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
- - Never rewrite dragon/enderman max-health attributes (keeps AI working)
+ - End mobs/dragon use REAL vanilla max_health (DMZ uncaps generic.max_health)
+ - DMZ StatsData is player-only — mobs cannot use DMZ HP capability
+ - DEF mitigation still applied on hit; damage actually chips the health bar
  - Dragon spawned via EndDragonFight (not orphan /summon)
  - Dragon HP targets ~200–300 matched hits (derived from mitigation)
- - End mobs target ~10–22 matched hits with visible HP readout
- - Ender Dragon scales with player melee/DEF and re-scales while alive
+ - End mobs target ~10–22 matched hits
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -91,29 +88,24 @@ var DRAGON_MIN_DAMAGE_FRACTION = 0.015;
 var DRAGON_RESCALE_MS = 8000;
 
 /*
- * Vanilla Attributes.MAX_HEALTH hard-caps near 1024. End content uses a
- * virtual HP pool in persistent NBT. Do NOT force a 1024 shell on living
- * mobs/dragon — rewriting max-health breaks Enderman teleport AI and the
- * dragon's EndDragonFight phase machine.
+ * REAL vanilla health — DMZ GenericAttributes raises minecraft:generic.max_health
+ * to Float.MAX, so multi-million HP works on LivingEntities.
+ * StatsData / DMZ HP capability attaches to players ONLY, so End mobs/dragon
+ * cannot use DMZ health; they use Attributes.MAX_HEALTH instead.
+ * Virtual HP nameplates are disabled.
  */
-var VANILLA_HP_SHELL = 1024; /* detection threshold only */
-var VHP_NBT = "end_strength_vhp";
-var VMAX_NBT = "end_strength_vmax";
-var VHP_ENABLED = true;
-var PRESERVE_VANILLA_MAX_HP = true;
-var VANILLA_MOB_MAX_HP = {
-    endermite: 8,
-    phantom: 20,
-    enderman: 40,
-    shulker: 30,
-    dragon: 200
-};
+var USE_REAL_VANILLA_HEALTH = true;
+var VHP_ENABLED = false;
+var SHOW_VIRTUAL_HP_NAME = false;
+var END_STRENGTH_HEALTH_MOD_UUID = "e5d57e10-6c3a-4f2b-9a11-end57ren9th1";
+var END_STRENGTH_HEALTH_MOD_NAME = "End Strength Health";
+
 /* Enderman melee attribute — keep modest so pathing/teleport AI stays sane. */
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — short fights with visible virtual HP nameplates.
- * HP is sized from nearby player melee × hit-target × post-mitigation fraction.
+ * End mob tiers — short fights; HP is real vanilla max_health.
+ * Sized from nearby player melee × hit-target × post-mitigation fraction.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
@@ -129,10 +121,6 @@ var END_MOB_DEF_PER_LEVEL = 50;
 var END_MOB_DEF_SCALE_CAP = 3.0;
 var END_MOB_MIN_DAMAGE_FRACTION = 0.05;
 var END_MOB_HIT_BAND = 0.25; /* allow ±25% around tier hit target */
-
-/* Show remaining virtual HP on nametags while fighting. */
-var SHOW_VIRTUAL_HP_NAME = true;
-var HP_BAR_WIDTH = 10;
 
 /* Dragon mitigation — harder than End mobs, but still finishable. */
 var END_FLAT_ABSORB_FRAC = 0.45;
@@ -163,7 +151,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v10";
+var BUFF_TAG = "end_strength_v11";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -587,39 +575,100 @@ function getEntityHealthSafe(entity) {
     return 0;
 }
 
-function restoreKindVanillaMaxHp(entity, kind) {
-    var defHp = VANILLA_MOB_MAX_HP[kind];
-    if (!(defHp > 0)) return;
-    var cur = getEntityMaxHealthSafe(entity);
-    /* Only repair inflated shells from older script versions. */
-    if (cur > defHp + 1) {
-        setEntityMaxHealthSafe(entity, defHp);
-        setEntityHealthSafe(entity, defHp);
-    }
+/*
+ * DMZ GenericAttributes already raises generic.max_health to Float.MAX.
+ * Re-assert via mixin accessor / reflection in case load order differs.
+ */
+function ensureMaxHealthAttributeUncapped() {
+    try {
+        var ForgeRegistries = Java.type("net.minecraftforge.registries.ForgeRegistries");
+        var ResourceLocation = Java.type("net.minecraft.resources.ResourceLocation");
+        var attr = ForgeRegistries.ATTRIBUTES.getValue(ResourceLocation.parse("minecraft:generic.max_health"));
+        if (attr == null) {
+            try { attr = ForgeRegistries.ATTRIBUTES.getValue(new ResourceLocation("minecraft", "generic.max_health")); } catch (e0) {}
+        }
+        if (attr == null) return false;
+        var RangedAttributeMixin = Java.type("com.dragonminez.mixin.common.RangedAttributeMixin");
+        if (RangedAttributeMixin != null && RangedAttributeMixin.class.isInstance(attr)) {
+            RangedAttributeMixin.class.cast(attr).setMaxValue(3.4028234663852886E38);
+            return true;
+        }
+    } catch (e1) {}
+    try {
+        var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
+        var attr2 = Attributes.MAX_HEALTH;
+        var f = null;
+        try { f = attr2.getClass().getDeclaredField("maxValue"); } catch (e2) {
+            try { f = attr2.getClass().getDeclaredField("f_22308_"); } catch (e3) {}
+        }
+        if (f != null) {
+            f.setAccessible(true);
+            f.setDouble(attr2, 3.4028234663852886E38);
+            return true;
+        }
+    } catch (e4) {}
+    return false;
+}
+
+function getMaxHealthAttributeInstance(entity) {
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return null;
+        var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
+        try { return mc.getAttribute(Attributes.MAX_HEALTH); } catch (e1) {
+            try { return mc.m_21051_(Attributes.f_22276_); } catch (e2) {}
+        }
+    } catch (e3) {}
+    return null;
+}
+
+function applyRealMaxHealth(entity, targetHp) {
+    targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
+    ensureMaxHealthAttributeUncapped();
+
+    /* Prefer AttributeModifier (same pattern DMZ uses for player HP). */
+    try {
+        var attr = getMaxHealthAttributeInstance(entity);
+        if (attr != null) {
+            var UUID = Java.type("java.util.UUID");
+            var AttributeModifier = Java.type("net.minecraft.world.entity.ai.attributes.AttributeModifier");
+            var Operation = Java.type("net.minecraft.world.entity.ai.attributes.AttributeModifier$Operation");
+            var uuid = UUID.fromString(END_STRENGTH_HEALTH_MOD_UUID);
+            try { attr.removeModifier(uuid); } catch (e1) {
+                try { attr.m_22127_(uuid); } catch (e2) {}
+            }
+            /* Keep a sane vanilla base, put End HP on the modifier. */
+            try { attr.setBaseValue(20.0); } catch (e3) {}
+            var bonus = Math.max(0, targetHp - 20.0);
+            var mod = new AttributeModifier(uuid, END_STRENGTH_HEALTH_MOD_NAME, bonus, Operation.ADDITION);
+            try { attr.addPermanentModifier(mod); } catch (e4) {
+                try { attr.m_22125_(mod); } catch (e5) {
+                    try { attr.addTransientModifier(mod); } catch (e6) {}
+                }
+            }
+            setEntityHealthSafe(entity, targetHp);
+            var applied = getEntityMaxHealthSafe(entity);
+            if (applied + 1 >= targetHp) return true;
+        }
+    } catch (eMod) {}
+
+    /* Fallback: set base value directly. */
+    if (!setEntityMaxHealthSafe(entity, targetHp)) return false;
+    setEntityHealthSafe(entity, targetHp);
+    return getEntityMaxHealthSafe(entity) + 1 >= targetHp;
 }
 
 /*
- * Virtual HP only — never inflate Attributes.MAX_HEALTH.
- * Inflating max HP to 1024 breaks Enderman AI and dragon fight phases.
+ * Set real vanilla max_health. DMZ uncaps the attribute, so large values work
+ * and the normal health / dragon boss bar updates as damage lands.
  */
 function setAbsoluteHealth(entity, targetHp, kind) {
     targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
-    if (kind != null) restoreKindVanillaMaxHp(entity, kind);
-
-    if (VHP_ENABLED === true && (PRESERVE_VANILLA_MAX_HP === true || targetHp > VANILLA_HP_SHELL)) {
-        applyVirtualHealth(entity, targetHp, targetHp, kind);
-        return true;
+    if (USE_REAL_VANILLA_HEALTH === true || VHP_ENABLED !== true) {
+        return applyRealMaxHealth(entity, targetHp);
     }
-
-    if (!setEntityMaxHealthSafe(entity, targetHp)) return false;
-    setEntityHealthSafe(entity, targetHp);
-    var applied = getEntityMaxHealthSafe(entity);
-    if (VHP_ENABLED === true && applied + 1 < targetHp) {
-        applyVirtualHealth(entity, targetHp, targetHp, kind);
-        return true;
-    }
-    clearVirtualHealth(entity);
-    return true;
+    /* Legacy virtual path kept disabled by default. */
+    return applyRealMaxHealth(entity, targetHp);
 }
 
 function putNbtNumber(entity, key, value) {
@@ -664,67 +713,6 @@ function readNbtNumber(entity, key) {
     return -1;
 }
 
-function clearVirtualHealth(entity) {
-    try {
-        var temp = entity.getTempdata();
-        if (temp != null) {
-            try { temp.remove(VHP_NBT); } catch (e1) {}
-            try { temp.remove(VMAX_NBT); } catch (e2) {}
-        }
-    } catch (e3) {}
-    try {
-        var mc = entity.getMCEntity();
-        if (mc == null) return;
-        var nbt = mc.getPersistentData();
-        try { nbt.remove(VHP_NBT); } catch (e4) {
-            try { nbt.m_128473_(VHP_NBT); } catch (e5) {}
-        }
-        try { nbt.remove(VMAX_NBT); } catch (e6) {
-            try { nbt.m_128473_(VMAX_NBT); } catch (e7) {}
-        }
-    } catch (e8) {}
-}
-
-function readVirtualHp(entity) { return readNbtNumber(entity, VHP_NBT); }
-function readVirtualMax(entity) { return readNbtNumber(entity, VMAX_NBT); }
-
-function storeVirtualHp(entity, hp) { putNbtNumber(entity, VHP_NBT, hp); }
-function storeVirtualMax(entity, maxHp) { putNbtNumber(entity, VMAX_NBT, maxHp); }
-
-function syncVanillaHealthFromVirtual(entity, vhp, vmax, kind) {
-    if (PRESERVE_VANILLA_MAX_HP !== true) return;
-    var maxH = getEntityMaxHealthSafe(entity);
-    if (kind != null && VANILLA_MOB_MAX_HP[kind] > 0) {
-        /* Keep natural max; repair only if previously inflated. */
-        var natural = VANILLA_MOB_MAX_HP[kind];
-        if (maxH > natural + 1) {
-            setEntityMaxHealthSafe(entity, natural);
-            maxH = natural;
-        }
-    }
-    if (!(maxH > 0) || !(vmax > 0)) return;
-    if (vhp <= 0) return;
-    var ratio = vhp / vmax;
-    if (ratio > 1) ratio = 1;
-    if (ratio < 0) ratio = 0;
-    var display = Math.max(1, Math.min(maxH, Math.ceil(maxH * ratio)));
-    setEntityHealthSafe(entity, display);
-}
-
-function applyVirtualHealth(entity, currentHp, maxHp, kind) {
-    maxHp = Math.max(1, Math.floor(num(maxHp, 1)));
-    currentHp = Math.max(0, Math.floor(num(currentHp, maxHp)));
-    if (currentHp > maxHp) currentHp = maxHp;
-    storeVirtualMax(entity, maxHp);
-    storeVirtualHp(entity, currentHp);
-    if (kind != null) restoreKindVanillaMaxHp(entity, kind);
-    syncVanillaHealthFromVirtual(entity, currentHp, maxHp, kind);
-}
-
-function hasVirtualHealth(entity) {
-    return readVirtualMax(entity) > 0;
-}
-
 function formatHpLabel(hp) {
     hp = Math.max(0, Math.floor(num(hp, 0)));
     if (hp >= 1000000) return (Math.floor(hp / 100000) / 10) + "M";
@@ -732,62 +720,12 @@ function formatHpLabel(hp) {
     return "" + hp;
 }
 
-function formatHpBar(pct, width) {
-    width = Math.max(4, Math.floor(num(width, HP_BAR_WIDTH)));
-    pct = Math.max(0, Math.min(100, Math.floor(num(pct, 0))));
-    var filled = Math.floor((pct / 100.0) * width);
-    var fillColor = COLOR + "a";
-    if (pct <= 25) fillColor = COLOR + "c";
-    else if (pct <= 50) fillColor = COLOR + "e";
-    var bar = "";
-    for (var i = 0; i < width; i++) {
-        bar += (i < filled) ? (fillColor + "|") : (COLOR + "8|");
-    }
-    return bar;
-}
-
-function setNameAlwaysVisible(entity) {
-    try { entity.setShowName(1); return; } catch (e1) {}
-    try { entity.setNameVisible(true); return; } catch (e2) {}
+function updateDragonName(entity, power, hp, def) {
     try {
-        var mc = entity.getMCEntity();
-        if (mc == null) return;
-        try { mc.setCustomNameVisible(true); return; } catch (e3) {}
-        try { mc.m_20340_(true); } catch (e4) {}
-    } catch (e5) {}
-}
-
-function updateEndEntityName(entity, kind, vhp, vmax, def, level) {
-    if (SHOW_VIRTUAL_HP_NAME !== true || entity == null) return;
-    vmax = Math.max(1, Math.floor(num(vmax, 1)));
-    vhp = Math.max(0, Math.floor(num(vhp, 0)));
-    if (vhp > vmax) vhp = vmax;
-    var pct = Math.max(0, Math.min(100, Math.floor((vhp / vmax) * 100)));
-    var pctColor = COLOR + "a";
-    if (pct <= 25) pctColor = COLOR + "c";
-    else if (pct <= 50) pctColor = COLOR + "e";
-    var label = "End Mob";
-    var nameColor = COLOR + "d";
-    if (kind === "dragon") {
-        label = "Ender Dragon";
-        nameColor = COLOR + "c";
-    } else if (END_MOB_TIERS[kind] != null) {
-        label = END_MOB_TIERS[kind].label;
-    }
-    var lv = Math.max(1, Math.floor(num(level, 1)));
-    var text = nameColor + label + COLOR + "7 [" +
-        formatHpBar(pct, HP_BAR_WIDTH) + COLOR + "7] " +
-        pctColor + formatHpLabel(vhp) + COLOR + "8/" + formatHpLabel(vmax) +
-        COLOR + "7 (" + pctColor + pct + "%" + COLOR + "7)";
-    if (kind === "dragon") {
-        text += COLOR + "8 Lv" + lv + " DEF " + formatHpLabel(def);
-    }
-    try { entity.setName(text); } catch (e1) {}
-    setNameAlwaysVisible(entity);
-}
-
-function updateDragonName(entity, power, vhp, vmax, def) {
-    updateEndEntityName(entity, "dragon", vhp, vmax, def, power != null ? power.level : 1);
+        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" +
+            (power != null ? power.level : 1) + " / " + formatHpLabel(hp) +
+            " HP / DEF " + formatHpLabel(def) + "]");
+    } catch (e) {}
 }
 
 function setAttackDamage(entity, targetDmg) {
@@ -894,20 +832,11 @@ function buffMob(entity, world) {
     if (tier == null) return false;
 
     /*
-     * Buff once per entity. Do NOT re-apply every scan just because virtual
-     * HP NBT looked missing — that heal/reset loop breaks Enderman AI.
+     * Buff once per entity. Do NOT re-apply every scan — that heal/reset
+     * loop breaks Enderman AI.
      */
     var needsBuff = !alreadyBuffed(entity) || !(readEntityDefense(entity) > 0);
-    if (!needsBuff) {
-        /* One-time repair: restore natural max HP if an older build inflated it. */
-        restoreKindVanillaMaxHp(entity, kind);
-        if (VHP_ENABLED === true && readVirtualMax(entity) <= 0) {
-            var powerFix = nearbyPlayerPower(entity, world);
-            var hpFix = calcMobHp(tier, powerFix);
-            applyVirtualHealth(entity, hpFix, hpFix, kind);
-        }
-        return false;
-    }
+    if (!needsBuff) return false;
 
     var power = nearbyPlayerPower(entity, world);
     var hp = calcMobHp(tier, power);
@@ -920,40 +849,43 @@ function buffMob(entity, world) {
     if (kind !== "enderman") setAttackDamage(entity, dmg);
     else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
-    updateEndEntityName(entity, kind, hp, hp, def, power.level);
     return true;
 }
 
 function applyDragonStats(entity, power, sourceLabel) {
     var hp = calcDragonHp(power);
     var def = calcDragonDefense(power);
-    var prevMax = readVirtualMax(entity);
-    var prevHp = readVirtualHp(entity);
-    var keepRatio = false;
+    var prevMax = getEntityMaxHealthSafe(entity);
+    var prevHp = getEntityHealthSafe(entity);
     var newCurrent = hp;
 
     /* Mid-fight rescale: keep remaining % when raising the pool. */
-    if (prevMax > 0 && prevHp >= 0 && (sourceLabel === "rescale" || sourceLabel === "onhit")) {
-        keepRatio = true;
+    if (prevMax > 20 && prevHp > 0 && (sourceLabel === "rescale" || sourceLabel === "onhit") && alreadyBuffed(entity)) {
         var ratio = prevHp / prevMax;
         if (!(ratio >= 0)) ratio = 1;
         if (ratio > 1) ratio = 1;
-        newCurrent = Math.max(1, Math.floor(hp * ratio));
-        /* Only grow the fight — never shrink the remaining pool mid-combat. */
         if (hp > prevMax) {
+            newCurrent = Math.max(1, Math.floor(hp * ratio));
             newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
+        } else if (hp < prevMax * 0.8) {
+            /* Balance nerf / rebuff — apply new max, keep ratio. */
+            newCurrent = Math.max(1, Math.floor(hp * ratio));
         } else {
             newCurrent = prevHp;
             hp = prevMax;
         }
         if (newCurrent > hp) newCurrent = hp;
+        ensureMaxHealthAttributeUncapped();
+        applyRealMaxHealth(entity, hp);
+        setEntityHealthSafe(entity, newCurrent);
+    } else {
+        setAbsoluteHealth(entity, hp, "dragon");
+        newCurrent = hp;
     }
 
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
-    /* Never rewrite dragon max-health / attack attributes — breaks phase AI. */
-    applyVirtualHealth(entity, newCurrent, hp, "dragon");
     storeEntityDefense(entity, def);
-    updateDragonName(entity, power, newCurrent, hp, def);
+    updateDragonName(entity, power, hp, def);
     return { hp: hp, current: newCurrent, damage: 0, defense: def };
 }
 
@@ -974,22 +906,15 @@ function maybeRescaleDragon(entity, world, player) {
     var power = readPlayerPower(powerPlayer);
     var desiredHp = calcDragonHp(power);
     var desiredDef = calcDragonDefense(power);
-    var curMax = readVirtualMax(entity);
+    var curMax = getEntityMaxHealthSafe(entity);
     var curDef = readEntityDefense(entity);
 
     var needs = !alreadyBuffed(entity)
         || !(curDef > 0)
-        || (VHP_ENABLED === true && readVirtualMax(entity) <= 0)
         || desiredHp > curMax + 1000
         || desiredDef > curDef + 1000
         || (curMax > 0 && curMax > desiredHp * 1.25 + 1000);
-    if (!needs) {
-        /* Keep boss-bar health proportional; do not touch max-health. */
-        if (hasVirtualHealth(entity) && readVirtualHp(entity) > 0) {
-            syncVanillaHealthFromVirtual(entity, readVirtualHp(entity), readVirtualMax(entity), "dragon");
-        }
-        return false;
-    }
+    if (!needs) return false;
     var label = "scan";
     if (alreadyBuffed(entity) && !(curMax > desiredHp * 1.25 + 1000)) label = "rescale";
     applyDragonStats(entity, power, label);
@@ -1697,9 +1622,8 @@ function kill(event) {
 /*
  * Apply stored DMZ-style defense when players hit the dragon or End mobs.
  * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
- * to the post-mitigation amount before it continues.
- * Virtual HP absorbs mitigated damage; vanilla max-health is left alone so
- * Enderman teleport AI and dragon fight phases keep working.
+ * to the post-mitigation amount. With real vanilla HP (DMZ-uncapped), that
+ * mitigated value actually chips the health / boss bar.
  */
 function damagedEntity(event) {
     try {
@@ -1716,7 +1640,7 @@ function damagedEntity(event) {
         if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
         var def = readEntityDefense(target);
-        if (!(def > 0) || (VHP_ENABLED === true && readVirtualMax(target) <= 0)) {
+        if (!(def > 0)) {
             try {
                 var world = target.getWorld();
                 if (isDragon) {
@@ -1739,36 +1663,9 @@ function damagedEntity(event) {
             ? { flatAbsorb: END_FLAT_ABSORB_FRAC, reductionCap: END_REDUCTION_CAP, defScale: END_DEF_SCALE, useConfigBoost: true }
             : { flatAbsorb: END_MOB_FLAT_ABSORB_FRAC, reductionCap: END_MOB_REDUCTION_CAP, defScale: END_MOB_DEF_SCALE, useConfigBoost: false };
         var mitigated = mitigateWithDmzDefense(raw, def, minFrac, mitOpts);
+        if (!(mitigated > 0)) mitigated = raw * minFrac;
 
-        if (VHP_ENABLED === true && readVirtualMax(target) > 0) {
-            var vhp = readVirtualHp(target);
-            var vmax = readVirtualMax(target);
-            if (!(vhp >= 0)) vhp = vmax;
-            /* Always chip at least a meaningful fraction of raw into the pool. */
-            if (!(mitigated > 0)) mitigated = raw * minFrac;
-            var next = vhp - mitigated;
-            if (next > 0) {
-                storeVirtualHp(target, next);
-                /* Re-assert stored value so a failed NBT write can't soft-lock immortality. */
-                var check = readVirtualHp(target);
-                if (check > next + 1) storeVirtualHp(target, next);
-                syncVanillaHealthFromVirtual(target, next, vmax, kind);
-                updateEndEntityName(target, kind, next, vmax, def,
-                    isPlayer(event.player) ? readPlayerPower(event.player).level : 1);
-                /*
-                 * Tiny non-zero hurt keeps vanilla damage feedback/animation,
-                 * while the real durability lives in the virtual pool.
-                 */
-                event.damage = 0.001;
-                return;
-            }
-            /* Virtual pool depleted — allow a killing blow. */
-            storeVirtualHp(target, 0);
-            var shellHp = Math.max(1, getEntityHealthSafe(target));
-            event.damage = Math.max(mitigated, shellHp + 1000);
-            return;
-        }
-
+        /* Real HP path: let mitigated damage reduce vanilla health / boss bar. */
         event.damage = mitigated;
     } catch (error) {
         try { print("[EndStrength] damagedEntity: " + error); } catch (e) {}
