@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.7
+ Version: 4.6.8
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -282,7 +282,8 @@ function freshPlayer(u, n) {
             biggestHit: 0, highestCombo: 0, challengesPlayed: 0, presenceMs: 0,
             killsNearRival: 0, surpassAwards: 0, fastestWinMs: 0, longestBattleMs: 0
         },
-        totals: { declarationsSent: 0, declarationsAccepted: 0, declarationsDeclined: 0, rivalsRemoved: 0 }
+        totals: { declarationsSent: 0, declarationsAccepted: 0, declarationsDeclined: 0, rivalsRemoved: 0 },
+        pastRivals: {}
     };
 }
 
@@ -296,6 +297,7 @@ function ensurePlayer(db, player) {
     rec.nameLower = lower(n);
     rec.lastSeenAt = now();
     if (rec.rivals == null) rec.rivals = {};
+    if (rec.pastRivals == null) rec.pastRivals = {};
     if (rec.career == null) rec.career = freshPlayer(u, n).career;
     if (rec.totals == null) rec.totals = freshPlayer(u, n).totals;
     return rec;
@@ -339,22 +341,109 @@ function refreshLinkStatus(link) {
     return link.status;
 }
 
+function cloneLink(link) {
+    try {
+        return JSON.parse(JSON.stringify(link));
+    } catch (e) {
+        return null;
+    }
+}
+
+/* Save rivalry history so a future rematch keeps wins/RP/grounds/etc. */
+function archiveRivalLink(owner, rivalUuid) {
+    if (owner == null || rivalUuid == null || rivalUuid == "") return;
+    if (owner.pastRivals == null) owner.pastRivals = {};
+    var link = owner.rivals[rivalUuid];
+    if (link == null) return;
+    var snap = cloneLink(link);
+    if (snap == null) return;
+    snap.mutual = false;
+    snap.isNemesis = false;
+    snap.declaredByMe = false;
+    snap.declaredByThem = false;
+    snap.inviteSent = false;
+    snap.mutualAccepted = false;
+    snap.mutualSince = 0;
+    snap.status = "archived";
+    snap.archivedAt = now();
+    if (!(snap.history instanceof Array)) snap.history = [];
+    snap.history.push({ time: now(), type: "archived", note: "Rivalry removed" });
+    while (snap.history.length > 30) snap.history.shift();
+    owner.pastRivals[rivalUuid] = snap;
+}
+
+function restorePastRival(owner, target) {
+    if (owner == null || target == null) return null;
+    if (owner.pastRivals == null) return null;
+    var past = owner.pastRivals[target.uuid];
+    if (past == null) return null;
+    var link = cloneLink(past);
+    if (link == null) return null;
+    link.uuid = target.uuid;
+    link.name = target.name;
+    link.nameLower = lower(target.name);
+    link.mutual = false;
+    link.isNemesis = false;
+    link.declaredByMe = false;
+    link.declaredByThem = false;
+    link.inviteSent = false;
+    link.mutualAccepted = false;
+    link.mutualSince = 0;
+    link.updatedAt = now();
+    if (!(link.history instanceof Array)) link.history = [];
+    link.history.push({ time: now(), type: "restored", note: "Previous rivalry history restored" });
+    while (link.history.length > 30) link.history.shift();
+    owner.rivals[target.uuid] = link;
+    delete owner.pastRivals[target.uuid];
+    refreshLinkStatus(link);
+    return link;
+}
+
+function recalcCareerRp(rec) {
+    if (rec == null) return 0;
+    if (rec.career == null) rec.career = {};
+    var total = 0;
+    for (var u in rec.rivals) {
+        if (!rec.rivals.hasOwnProperty(u)) continue;
+        total += Math.max(0, num(rec.rivals[u].points, 0));
+    }
+    rec.career.rivalPointsTotal = total;
+    return total;
+}
+
+function updateLb(db, rec) {
+    if (db == null || rec == null) return;
+    if (db.leaderboard == null) db.leaderboard = {};
+    db.leaderboard[rec.uuid] = {
+        uuid: rec.uuid,
+        name: rec.name,
+        rp: num(rec.career.rivalPointsTotal, 0),
+        wins: num(rec.career.officialWins, 0),
+        streak: num(rec.career.bestStreak, 0),
+        updatedAt: now()
+    };
+}
+
 function ensureLink(owner, target) {
     if (owner.rivals[target.uuid] == null) {
-        var t = now();
-        owner.rivals[target.uuid] = {
-            uuid: target.uuid, name: target.name, nameLower: lower(target.name),
-            mutual: false, declaredByMe: false, declaredByThem: false, inviteSent: false,
-            isNemesis: false, status: "none",
-            points: 0, wins: 0, losses: 0, draws: 0, battles: 0,
-            currentStreak: 0, bestStreak: 0,
-            damageDealt: 0, damageTaken: 0, timeFoughtMs: 0,
-            presenceMs: 0, createdAt: t, firstMetAt: t, firstBattleAt: 0,
-            updatedAt: t, mutualSince: 0, lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
-        };
+        var restored = restorePastRival(owner, target);
+        if (restored == null) {
+            var t = now();
+            owner.rivals[target.uuid] = {
+                uuid: target.uuid, name: target.name, nameLower: lower(target.name),
+                mutual: false, declaredByMe: false, declaredByThem: false, inviteSent: false,
+                isNemesis: false, status: "none",
+                points: 0, wins: 0, losses: 0, draws: 0, battles: 0,
+                currentStreak: 0, bestStreak: 0,
+                damageDealt: 0, damageTaken: 0, timeFoughtMs: 0,
+                presenceMs: 0, createdAt: t, firstMetAt: t, firstBattleAt: 0,
+                updatedAt: t, mutualSince: 0, lastBattleAt: 0, lastSeenTogetherAt: 0, history: []
+            };
+        }
     }
     var link = owner.rivals[target.uuid];
     link.name = target.name;
+    link.nameLower = lower(target.name);
     link.updatedAt = now();
     if (link.isNemesis !== true) link.isNemesis = false;
     refreshLinkStatus(link);
@@ -832,38 +921,54 @@ function cmdRemove(player, targetName) {
         msg(player, C + "cYou do not have that rival."); return;
     }
     var link = pref.rivals[target.uuid];
-    var wasMutual = link.mutual === true;
     var st = linkStatus(link);
+    var wasBond = (st == "declared" || st == "mutual" || st == "nemesis");
     /* Unknown is silent — never tip them off that they were rivaled. */
-    var notifyThem = (st == "declared" || st == "mutual" || st == "nemesis");
+    var notifyThem = wasBond;
+
+    archiveRivalLink(pref, target.uuid);
     delete pref.rivals[target.uuid];
-    if (target.rivals[pref.uuid] != null) {
-        var their = target.rivals[pref.uuid];
-        if (wasMutual) {
-            their.mutual = false;
-            their.declaredByThem = false;
-            their.inviteSent = false;
-            if (their.declaredByMe !== true) delete target.rivals[pref.uuid];
-        } else {
-            their.declaredByThem = false;
-            their.inviteSent = false;
-            if (their.declaredByMe !== true) delete target.rivals[pref.uuid];
-        }
-    }
-    removeRequests(db, pref.uuid, target.uuid);
-    pref.totals.rivalsRemoved++;
-    if (wasMutual) {
+
+    if (wasBond) {
+        /* Mutual / Nemesis / Declared: end the rivalry for both players. */
         if (target.rivals[pref.uuid] != null) {
-            target.rivals[pref.uuid].isNemesis = false;
-            recomputeNemesis(target);
+            archiveRivalLink(target, pref.uuid);
+            delete target.rivals[pref.uuid];
         }
         recomputeNemesis(pref);
+        recomputeNemesis(target);
+    } else {
+        /* Unknown / pending invite: only clear your side; scrub invite flags on them. */
+        if (target.rivals[pref.uuid] != null) {
+            var their = target.rivals[pref.uuid];
+            their.declaredByThem = false;
+            their.inviteSent = false;
+            if (their.declaredByMe !== true && their.mutual !== true) {
+                delete target.rivals[pref.uuid];
+            } else {
+                refreshLinkStatus(their);
+            }
+        }
     }
+
+    removeRequests(db, pref.uuid, target.uuid);
+    pref.totals.rivalsRemoved++;
+    recalcCareerRp(pref);
+    recalcCareerRp(target);
+    updateLb(db, pref);
+    updateLb(db, target);
     saveDb(db);
+
     msg(player, C + "eRemoved rivalry with " + target.name);
+    if (wasBond) {
+        msg(player, C + "8History saved. Rematch keeps prior record.");
+    }
     if (notifyThem) {
         var online = onlineByName(target.name);
-        if (online != null) msg(online, C + "c" + pref.name + " ended rivalry with you.");
+        if (online != null) {
+            msg(online, C + "c" + pref.name + " ended rivalry with you.");
+            msg(online, C + "8History saved if you rival again later.");
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.7
+ Version: 4.6.8
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -321,7 +321,8 @@ function rcFreshPlayerRecord(uuid, name) {
             declarationsAccepted: 0,
             declarationsDeclined: 0,
             rivalsRemoved: 0
-        }
+        },
+        pastRivals: {}
     };
 }
 
@@ -798,6 +799,7 @@ function rcEnsurePlayer(database, player) {
     record.nameLower = rcLower(name);
     record.lastSeenAt = rcNow();
     if (record.rivals === null || typeof record.rivals !== "object") record.rivals = {};
+    if (record.pastRivals === null || typeof record.pastRivals !== "object") record.pastRivals = {};
     record.career = rcNormalizeCareer(record.career);
     if (record.totals === null || typeof record.totals !== "object") {
         record.totals = {
@@ -1010,11 +1012,69 @@ function rcEnsureMutualRoom(database, record, excludeUuid) {
     }
 }
 
+function rcCloneLink(link) {
+    try {
+        return JSON.parse(JSON.stringify(link));
+    } catch (e) {
+        return null;
+    }
+}
+
+function rcArchiveRivalLink(ownerRecord, rivalUuid) {
+    if (ownerRecord === null || rivalUuid === null || rivalUuid === "") return;
+    if (ownerRecord.pastRivals === null || typeof ownerRecord.pastRivals !== "object") {
+        ownerRecord.pastRivals = {};
+    }
+    var link = ownerRecord.rivals[rivalUuid];
+    if (link === null || link === undefined) return;
+    var snap = rcCloneLink(link);
+    if (snap === null) return;
+    snap.mutual = false;
+    snap.isNemesis = false;
+    snap.declaredByMe = false;
+    snap.declaredByThem = false;
+    snap.inviteSent = false;
+    snap.mutualAccepted = false;
+    snap.mutualSince = 0;
+    snap.status = "archived";
+    snap.archivedAt = rcNow();
+    if (!(snap.history instanceof Array)) snap.history = [];
+    snap.history.push({ time: rcNow(), type: "archived", note: "Rivalry removed" });
+    while (snap.history.length > RC_HISTORY_LIMIT) snap.history.shift();
+    ownerRecord.pastRivals[rivalUuid] = snap;
+}
+
+function rcRestorePastRival(ownerRecord, targetRecord) {
+    if (ownerRecord === null || targetRecord === null) return null;
+    if (ownerRecord.pastRivals === null || typeof ownerRecord.pastRivals !== "object") return null;
+    var past = ownerRecord.pastRivals[targetRecord.uuid];
+    if (past === null || past === undefined) return null;
+    var link = rcCloneLink(past);
+    if (link === null) return null;
+    link = rcNormalizeRivalLink(link, targetRecord.uuid, targetRecord.name);
+    link.mutual = false;
+    link.isNemesis = false;
+    link.declaredByMe = false;
+    link.declaredByThem = false;
+    link.inviteSent = false;
+    link.mutualAccepted = false;
+    link.mutualSince = 0;
+    link.updatedAt = rcNow();
+    rcPushHistory(link, "restored", "Previous rivalry history restored");
+    ownerRecord.rivals[targetRecord.uuid] = link;
+    delete ownerRecord.pastRivals[targetRecord.uuid];
+    rcRefreshLinkStatus(link);
+    return link;
+}
+
 function rcGetOrCreateRival(ownerRecord, targetRecord) {
     var rival = ownerRecord.rivals[targetRecord.uuid];
     if (rival === null || rival === undefined) {
-        rival = rcNormalizeRivalLink({}, targetRecord.uuid, targetRecord.name);
-        ownerRecord.rivals[targetRecord.uuid] = rival;
+        rival = rcRestorePastRival(ownerRecord, targetRecord);
+        if (rival === null) {
+            rival = rcNormalizeRivalLink({}, targetRecord.uuid, targetRecord.name);
+            ownerRecord.rivals[targetRecord.uuid] = rival;
+        }
     }
     rival.name = targetRecord.name;
     rival.nameLower = rcLower(targetRecord.name);
@@ -1519,29 +1579,28 @@ function rcRemove(player, targetName) {
     }
 
     var link = playerRecord.rivals[targetRecord.uuid];
-    var wasMutual = link.mutual === true;
     var st = rcLinkStatus(link);
-    /* Unknown is silent — never tip them off that they were rivaled. */
-    var notifyThem = (st === "declared" || st === "mutual" || st === "nemesis");
+    var wasBond = (st === "declared" || st === "mutual" || st === "nemesis");
+    var notifyThem = wasBond;
+
+    rcArchiveRivalLink(playerRecord, targetRecord.uuid);
     delete playerRecord.rivals[targetRecord.uuid];
 
-    if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
+    if (wasBond) {
+        if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
+            rcArchiveRivalLink(targetRecord, playerRecord.uuid);
+            delete targetRecord.rivals[playerRecord.uuid];
+        }
+        rcRecomputeNemesis(playerRecord);
+        rcRecomputeNemesis(targetRecord);
+    } else if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
         var theirLink = targetRecord.rivals[playerRecord.uuid];
-        if (wasMutual) {
-            theirLink.mutual = false;
-            theirLink.declaredByThem = false;
-            theirLink.inviteSent = false;
-            theirLink.declaredByMe = theirLink.declaredByMe === true;
-            rcPushHistory(theirLink, "broken", "Mutual rivalry ended by " + playerRecord.name);
-            if (theirLink.declaredByMe !== true) {
-                delete targetRecord.rivals[playerRecord.uuid];
-            }
+        theirLink.declaredByThem = false;
+        theirLink.inviteSent = false;
+        if (theirLink.declaredByMe !== true && theirLink.mutual !== true) {
+            delete targetRecord.rivals[playerRecord.uuid];
         } else {
-            theirLink.declaredByThem = false;
-            theirLink.inviteSent = false;
-            if (theirLink.declaredByMe !== true) {
-                delete targetRecord.rivals[playerRecord.uuid];
-            }
+            rcRefreshLinkStatus(theirLink);
         }
     }
 
@@ -1554,10 +1613,14 @@ function rcRemove(player, targetName) {
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "eRemoved rivalry with " + targetRecord.name + ".");
+    if (wasBond) {
+        rcMessage(player, RC_COLOR + "8History saved. Rematch keeps prior record.");
+    }
     if (notifyThem) {
         var online = rcFindOnlinePlayerAnyWorld(targetRecord.name);
         if (online !== null) {
             rcMessage(online, RC_COLOR + "c" + playerRecord.name + " ended their rivalry with you.");
+            rcMessage(online, RC_COLOR + "8History saved if you rival again later.");
         }
     }
 }
