@@ -142,6 +142,8 @@ CustomAlias:
   #
   # Primary syntax (matches in-game /rival help):
   #   /rival <player>
+  #   /rival <player>                         # silent declare
+  #   /rival request|invite <player>          # visible invite
   #   /rival declare|accept|decline|remove <player>
   #   /rival list | stats [player] | top [cat]
   #   /rival title | journal | season | quests | achievements | hof
@@ -173,6 +175,11 @@ CustomAlias:
   rivaldeclare:
     Cmds:
     - asFakeOp! noppes script trigger 200 [playerName] declare $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalrequest:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] request $1-
     AddTabs: true
     ExactMatch: false
   rivalaccept:

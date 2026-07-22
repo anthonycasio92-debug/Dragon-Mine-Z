@@ -37,7 +37,8 @@ function showRivalGuide(player) {
     msg(player, C + "8Rewards  " + C + "7RP from battles" + C + "8  |  " + C + "7TP still active");
     msg(player, " ");
     msg(player, C + "6Rivalry");
-    msg(player, C + "e  /rival <player>" + C + "8  declare");
+    msg(player, C + "e  /rival <player>" + C + "8  silent declare");
+    msg(player, C + "e  /rival request <player>" + C + "8  visible invite");
     msg(player, C + "e  /rival accept|decline|remove <player>");
     msg(player, C + "e  /rival list" + C + "8  rivals + proving grounds");
     msg(player, " ");

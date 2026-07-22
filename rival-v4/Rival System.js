@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.3
+ Version: 4.6.4
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -61,8 +61,8 @@ var RC_COLOR = "\u00A7";
 
 /*
  Rival relationship statuses (per-link) - original concept:
-  unknown  - they declared you (incoming); unlimited
-  declared - you declared them (one-sided); unlimited
+  unknown  - they sent a visible request (incoming); unlimited
+  declared - you silently declared them (one-sided; they may not know); unlimited
   mutual   - both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
   nemesis  - your single greatest mutual rival (history-chosen, only ONE)
 
@@ -1181,7 +1181,7 @@ function rcDeclare(player, targetName) {
     }
 
     if (current !== null && current !== undefined && current.declaredByMe === true && current.mutual !== true) {
-        rcMessage(player, RC_COLOR + "eYou already declared " + targetRecord.name + ". Waiting for them.");
+        rcMessage(player, RC_COLOR + "eAlready a Declared rival: " + targetRecord.name);
         return;
     }
 
@@ -1194,8 +1194,12 @@ function rcDeclare(player, targetName) {
     }
 
     var reverseRequest = rcGetRequest(database, targetUuid, playerUuid);
-    if (reverseRequest !== null) {
-        rcFormMutual(database, playerRecord, targetRecord, "Crossed declarations became mutual.");
+    var theirLink = targetRecord.rivals[playerUuid];
+    var theyDeclaredMe = theirLink !== null && theirLink !== undefined &&
+        theirLink.declaredByMe === true && theirLink.mutual !== true;
+    if (reverseRequest !== null || theyDeclaredMe) {
+        rcFormMutual(database, playerRecord, targetRecord,
+            reverseRequest !== null ? "Accepted their request." : "Crossed silent declarations.");
         rcRemoveRequestsBetween(database, playerUuid, targetUuid);
         database.cooldowns[cooldownKey] = rcNow();
         playerRecord.totals.declarationsAccepted++;
@@ -1209,21 +1213,101 @@ function rcDeclare(player, targetName) {
         return;
     }
 
-    /* Declared + Unknown rivals are unlimited. */
+    /* Silent: only your Declared link. No Unknown on their list, no notify. */
+    var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
+    playerRival.declaredByMe = true;
+    playerRival.mutual = false;
+    rcRefreshLinkStatus(playerRival);
+    rcPushHistory(playerRival, "declare", "Silent declaration.");
+
+    database.cooldowns[cooldownKey] = rcNow();
+    playerRecord.totals.declarationsSent++;
+    rcSaveDatabase(player, database);
+
+    rcMessage(player, RC_COLOR + "aDeclared Rival: " + RC_COLOR + "e" + targetRecord.name);
+    rcMessage(player, RC_COLOR + "8Silent  " + RC_COLOR + "7they are not notified");
+    rcMessage(player, RC_COLOR + "8Invite them with  " + RC_COLOR + "f/rival request " + targetRecord.name);
+}
+
+/* Visible Mutual invite. Target sees Unknown until accept/decline. */
+function rcRequest(player, targetName) {
+    var cleanName = rcString(targetName).replace(/^\s+|\s+$/g, "");
+    if (cleanName === "") {
+        rcMessage(player, RC_COLOR + "cUsage: /rival request <player>");
+        return;
+    }
+
+    var target = rcFindOnlinePlayerAnyWorld(cleanName);
+    if (target === null) {
+        rcMessage(player, RC_COLOR + "cThat player must be online.");
+        return;
+    }
+
+    var playerUuid = rcUuid(player);
+    var targetUuid = rcUuid(target);
+    if (playerUuid === targetUuid) {
+        rcMessage(player, RC_COLOR + "cYou cannot request yourself.");
+        return;
+    }
+
+    var database = rcLoadDatabase(player);
+    rcCleanupExpiredRequests(database);
+
+    var playerRecord = rcEnsurePlayer(database, player);
+    var targetRecord = rcEnsurePlayer(database, target);
+
+    var current = playerRecord.rivals[targetUuid];
+    if (current !== null && current !== undefined && current.mutual === true) {
+        var curStatus = rcLinkStatus(current);
+        rcMessage(player, RC_COLOR + "e" + targetRecord.name + " is already your " +
+            (curStatus === "nemesis" ? "Nemesis" : "mutual rival") + ".");
+        return;
+    }
+
+    if (rcGetRequest(database, playerUuid, targetUuid) !== null) {
+        rcMessage(player, RC_COLOR + "eRequest already pending for " + targetRecord.name);
+        return;
+    }
+
+    var cooldownKey = rcRequestKey(playerUuid, targetUuid);
+    var lastDeclaration = rcNumber(database.cooldowns[cooldownKey], 0);
+    var remaining = RC_DECLARE_COOLDOWN_MS - (rcNow() - lastDeclaration);
+    if (remaining > 0) {
+        rcMessage(player, RC_COLOR + "cWait " + Math.ceil(remaining / 1000) + "s.");
+        return;
+    }
+
+    var reverseRequest = rcGetRequest(database, targetUuid, playerUuid);
+    var theirLink = targetRecord.rivals[playerUuid];
+    var theyDeclaredMe = theirLink !== null && theirLink !== undefined &&
+        theirLink.declaredByMe === true && theirLink.mutual !== true;
+    if (reverseRequest !== null || theyDeclaredMe) {
+        rcFormMutual(database, playerRecord, targetRecord,
+            reverseRequest !== null ? "Crossed requests." : "They already declared you.");
+        rcRemoveRequestsBetween(database, playerUuid, targetUuid);
+        database.cooldowns[cooldownKey] = rcNow();
+        playerRecord.totals.declarationsAccepted++;
+        targetRecord.totals.declarationsAccepted++;
+        rcSaveDatabase(player, database);
+
+        rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + targetRecord.name);
+        rcMessage(player, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
+        rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
+        rcMessage(target, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
+        return;
+    }
 
     var playerRival = rcGetOrCreateRival(playerRecord, targetRecord);
     playerRival.declaredByMe = true;
-    playerRival.declaredByThem = playerRival.declaredByThem === true;
     playerRival.mutual = false;
     rcRefreshLinkStatus(playerRival);
-    rcPushHistory(playerRival, "declare", "Declared rivalry.");
+    rcPushHistory(playerRival, "request", "Sent rivalry request.");
 
     var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
     targetRival.declaredByThem = true;
-    targetRival.declaredByMe = targetRival.declaredByMe === true;
     targetRival.mutual = false;
     rcRefreshLinkStatus(targetRival);
-    rcPushHistory(targetRival, "declared_by", "Was declared as a rival.");
+    rcPushHistory(targetRival, "requested_by", "Received rivalry request.");
 
     database.requests[rcRequestKey(playerUuid, targetUuid)] = {
         fromUuid: playerUuid,
@@ -1234,14 +1318,11 @@ function rcDeclare(player, targetName) {
     };
     database.cooldowns[cooldownKey] = rcNow();
     playerRecord.totals.declarationsSent++;
-
     rcSaveDatabase(player, database);
 
-    rcMessage(player, RC_COLOR + "aDeclared Rival: " + RC_COLOR + "e" + targetRecord.name);
-    rcMessage(player, RC_COLOR + "7They see you as an Unknown rival until they accept.");
-    rcMessage(player, RC_COLOR + "7Accept path: " + RC_COLOR + "f/rival accept " + playerRecord.name);
-
-    rcMessage(target, RC_COLOR + "6" + playerRecord.name + RC_COLOR + "e declared you!");
+    rcMessage(player, RC_COLOR + "aRequested Rival: " + RC_COLOR + "e" + targetRecord.name);
+    rcMessage(player, RC_COLOR + "7They see you as Unknown until they accept.");
+    rcMessage(target, RC_COLOR + "6" + playerRecord.name + RC_COLOR + "e requested rivalry!");
     rcMessage(target, RC_COLOR + "7Status: " + RC_COLOR + "7Unknown Rival");
     rcMessage(target, RC_COLOR + "7Accept: " + RC_COLOR + "f/rival accept " + playerRecord.name);
     rcMessage(target, RC_COLOR + "7Decline: " + RC_COLOR + "f/rival decline " + playerRecord.name);
@@ -1462,7 +1543,8 @@ function rcHelp(player) {
         RC_COLOR + "7Nemesis from history");
     rcMessage(player, " ");
     rcMessage(player, RC_COLOR + "6Rivalry");
-    rcMessage(player, RC_COLOR + "e  /rival <player>" + RC_COLOR + "8  declare");
+    rcMessage(player, RC_COLOR + "e  /rival <player>" + RC_COLOR + "8  silent declare");
+    rcMessage(player, RC_COLOR + "e  /rival request <player>" + RC_COLOR + "8  visible invite");
     rcMessage(player, RC_COLOR + "e  /rival accept|decline|remove <player>");
     rcMessage(player, RC_COLOR + "e  /rival list" + RC_COLOR + "8  rivals + proving grounds");
     rcMessage(player, RC_COLOR + "e  /rival stats [player]");

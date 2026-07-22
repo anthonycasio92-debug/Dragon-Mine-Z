@@ -21,10 +21,12 @@ Gameplay stays in `Rival System.js` (Global Player).
 
 | Status | Meaning | Limit |
 |---|---|---|
-| Unknown | They declared you | Unlimited |
-| Declared | You declared them | Unlimited |
+| Unknown | They sent a visible request | Unlimited |
+| Declared | You silently declared them | Unlimited |
 | Mutual | Both accepted | **Max 2** (3rd demotes oldest) |
 | Nemesis | Greatest mutual by history | **Only 1** (auto) |
+
+`/rival <player>` is silent. `/rival request <player>` notifies and creates Unknown.
 
 ## Career RP titles (total RP — separate from Nemesis status)
 
