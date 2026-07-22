@@ -1,9 +1,11 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.6.1
+ Version: 2.6.2
 
  - End mobs/dragon use REAL vanilla max_health (DMZ uncaps generic.max_health)
+ - Hard per-hit damage caps lock fight length vs other combat systems
+ - Sets DMZ battlePower explicitly so inflated HP doesn't break other scaling
  - DMZ StatsData is player-only — mobs cannot use DMZ HP capability
  - DEF mitigation still applied on hit; damage actually chips the health bar
  - Dragon always scales to the strongest player currently in The End
@@ -102,6 +104,15 @@ var VHP_ENABLED = false;
 var SHOW_VIRTUAL_HP_NAME = false;
 var END_STRENGTH_HEALTH_MOD_UUID = "e5d57e10-6c3a-4f2b-9a11-e0d57e1197b1";
 var END_STRENGTH_HEALTH_MOD_NAME = "End Strength Health";
+var END_STRENGTH_MAX_NBT = "end_strength_real_max";
+var END_STRENGTH_HITS_NBT = "end_strength_hit_target";
+
+/*
+ * Cap each hit to maxHealth / hitTarget so ki/skills/other systems cannot
+ * delete an End mob or dragon in a handful of oversized packets.
+ */
+var END_DAMAGE_HIT_CAP_ENABLED = true;
+var END_DAMAGE_HIT_CAP_MULT = 1.0; /* 1.0 => ~exact hit-target length */
 
 /* Enderman melee attribute — keep modest so pathing/teleport AI stays sane. */
 var ENDERMAN_ATTACK_DAMAGE = 12;
@@ -154,7 +165,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v11";
+var BUFF_TAG = "end_strength_v12";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -685,6 +696,7 @@ function applyRealMaxHealth(entity, targetHp) {
                 }
             }
             setEntityHealthSafe(entity, targetHp);
+            putNbtNumber(entity, END_STRENGTH_MAX_NBT, targetHp);
             var applied = getEntityMaxHealthSafe(entity);
             if (applied + 1 >= targetHp) return true;
         }
@@ -693,7 +705,95 @@ function applyRealMaxHealth(entity, targetHp) {
     /* Fallback: set base value directly. */
     if (!setEntityMaxHealthSafe(entity, targetHp)) return false;
     setEntityHealthSafe(entity, targetHp);
+    putNbtNumber(entity, END_STRENGTH_MAX_NBT, targetHp);
     return getEntityMaxHealthSafe(entity) + 1 >= targetHp;
+}
+
+/*
+ * DMZ LivingEntityMixin derives battlePower from maxHealth when unset.
+ * Inflated End HP would make BP insane and break other systems — pin it.
+ */
+function setEntityBattlePower(entity, battlePower) {
+    battlePower = Math.max(5, Math.floor(num(battlePower, 5)));
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return false;
+        try {
+            var IBattlePower = Java.type("com.dragonminez.common.init.entities.IBattlePower");
+            if (IBattlePower.class.isInstance(mc)) {
+                IBattlePower.class.cast(mc).setBattlePower(battlePower);
+                return true;
+            }
+        } catch (e1) {}
+        try { mc.setBattlePower(battlePower); return true; } catch (e2) {}
+        try {
+            var f = mc.getClass().getDeclaredField("battlePower");
+            f.setAccessible(true);
+            f.setInt(mc, battlePower);
+            return true;
+        } catch (e3) {}
+    } catch (e4) {}
+    return false;
+}
+
+function calcEndBattlePower(kind, power, hp) {
+    var melee = num(power != null ? power.melee : 0, 0);
+    var level = num(power != null ? power.level : 1, 1);
+    var bp = num(power != null ? power.bp : 0, 0);
+    var score = Math.floor(melee * 0.15 + level * 500 + bp * 0.05 + Math.min(hp, 500000) * 0.001);
+    if (kind === "dragon") score = Math.floor(score * 1.5);
+    if (score < 1000) score = 1000;
+    if (score > 50000000) score = 50000000;
+    return score;
+}
+
+function storeHitTarget(entity, hits) {
+    putNbtNumber(entity, END_STRENGTH_HITS_NBT, Math.max(1, Math.floor(num(hits, 1))));
+}
+
+function readHitTarget(entity, kind) {
+    var stored = readNbtNumber(entity, END_STRENGTH_HITS_NBT);
+    if (stored > 0) return stored;
+    if (kind === "dragon") return DRAGON_TARGET_HITS;
+    if (kind != null && END_MOB_TIERS[kind] != null) return Math.max(3, num(END_MOB_TIERS[kind].hits, 10));
+    return 10;
+}
+
+/*
+ * Hard ceiling so oversized packets from ki/skills/other combat systems
+ * cannot delete End content faster than the designed hit count.
+ */
+function capDamageForHitCount(entity, kind, damage) {
+    if (END_DAMAGE_HIT_CAP_ENABLED !== true) return damage;
+    damage = Math.max(0, num(damage, 0));
+    if (!(damage > 0)) return 0;
+    var maxH = getEntityMaxHealthSafe(entity);
+    var storedMax = readNbtNumber(entity, END_STRENGTH_MAX_NBT);
+    if (storedMax > maxH) maxH = storedMax;
+    if (!(maxH > 0)) return damage;
+    var hits = readHitTarget(entity, kind);
+    var cap = (maxH / hits) * END_DAMAGE_HIT_CAP_MULT;
+    if (!(cap > 0)) cap = maxH / 100;
+    if (damage > cap) damage = cap;
+    return damage;
+}
+
+function repairEndHealthIfStripped(entity, kind) {
+    if (!alreadyBuffed(entity)) return false;
+    var intended = readNbtNumber(entity, END_STRENGTH_MAX_NBT);
+    if (!(intended > 0)) return false;
+    var cur = getEntityMaxHealthSafe(entity);
+    if (cur + 1 >= intended * 0.9) return false;
+    var ratio = 1;
+    if (cur > 0) {
+        var hpNow = getEntityHealthSafe(entity);
+        ratio = hpNow / cur;
+        if (!(ratio >= 0)) ratio = 1;
+        if (ratio > 1) ratio = 1;
+    }
+    applyRealMaxHealth(entity, intended);
+    setEntityHealthSafe(entity, Math.max(1, Math.floor(intended * ratio)));
+    return true;
 }
 
 /*
@@ -885,6 +985,8 @@ function buffMob(entity, world) {
 
     markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp + ":def" + def);
     setAbsoluteHealth(entity, hp, kind);
+    storeHitTarget(entity, num(tier.hits, 10));
+    setEntityBattlePower(entity, calcEndBattlePower(kind, power, hp));
     if (kind !== "enderman") setAttackDamage(entity, dmg);
     else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
@@ -1247,7 +1349,11 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
     var existing = findDragons(world);
     if (existing.length > 0) return null;
 
-    var power = readPlayerPower(powerPlayer);
+    /* Always size from the strongest player currently in The End. */
+    var best = strongestPowerInEnd(world, powerPlayer);
+    var power = best.power;
+    var scalePlayer = best.player != null ? best.player : powerPlayer;
+
     var dragon = spawnDragonEntity(world, x, y, z);
     if (dragon == null) {
         /* Fight/command summon may lag one tick */
@@ -1258,7 +1364,7 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
         try {
             var stored = world.getStoreddata();
             stored.put(WORLD_PENDING_DRAGON_BUFF, sourceLabel + "|" +
-                (powerPlayer != null ? str(powerPlayer.getName()) : "") + "|" + nowMs());
+                (scalePlayer != null ? str(scalePlayer.getName()) : "") + "|" + nowMs());
         } catch (e1) {}
         return null;
     }
@@ -1553,13 +1659,13 @@ function cmdSpawnDragon(player) {
     msg(player, COLOR + "6[The End] " + COLOR + "eSpawned Ender Dragon with " +
         COLOR + "c" + result.hp + COLOR + "e HP / " +
         COLOR + "b" + result.defense + COLOR + "e DEF " +
-        COLOR + "8(Lv" + result.power.level + " / player DEF " +
-        Math.floor(result.power.defense) + ")");
+        COLOR + "8(scaled to " + result.power.name + " / Lv" + result.power.level + ")");
     broadcastOnce(world, "end.strength.cmdAnnounce." + nowMs(),
         COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
         COLOR + "7 summoned an Ender Dragon! " +
         COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
-        Math.floor(result.defense / 1000) + "k DEF)");
+        Math.floor(result.defense / 1000) + "k DEF, scaled to " +
+        result.power.name + ")");
 }
 
 function findOnlinePlayer(name) {
@@ -1710,14 +1816,18 @@ function damagedEntity(event) {
         if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
         var def = readEntityDefense(target);
+        if (isDragon) {
+            /* Keep scaling to whichever End player is currently strongest. */
+            try { maybeRescaleDragon(target, getEndWorld() || target.getWorld(), event.player); } catch (eScale) {}
+            def = readEntityDefense(target);
+        }
         if (!(def > 0)) {
             try {
                 var world = target.getWorld();
                 if (isDragon) {
-                    var powerPlayer = strongestPlayerInEnd(world);
-                    if (powerPlayer == null && isPlayer(event.player)) powerPlayer = event.player;
-                    if (powerPlayer != null) {
-                        applyDragonStats(target, readPlayerPower(powerPlayer), "onhit");
+                    var best = strongestPowerInEnd(world, isPlayer(event.player) ? event.player : null);
+                    if (best.player != null || best.power != null) {
+                        applyDragonStats(target, best.power, "onhit");
                         def = readEntityDefense(target);
                     }
                 } else {
