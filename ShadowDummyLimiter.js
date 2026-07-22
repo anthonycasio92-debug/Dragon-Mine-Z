@@ -26,6 +26,13 @@ var System = Java.type(
     "java.lang.System"
 );
 
+/*
+ * Use unicode escapes for Minecraft colors.
+ * Literal section-sign characters often break in scripts.
+ */
+var C = "\u00A7";
+var C_RESET = "\u00A7r";
+
 
 /*
  * ============================================================
@@ -420,7 +427,7 @@ function revertKillCountIfNeeded(player, mcPlayer, playerData, status) {
             syncPlayerStats(mcPlayer);
             if (DEBUG) {
                 player.message(
-                    "§8[Shadow Dummy Debug] Reverted blocked kill credit (" +
+                    "\u00A78[Shadow Dummy Debug] Reverted blocked kill credit (" +
                     current + " -> " + snapshot + ")."
                 );
             }
@@ -481,20 +488,20 @@ function denyShadowDummySummon(
 
         sendLimitedMessage(
             player,
-            "§5[Shadow Dummy] §cYou can only summon one Shadow Dummy every 30 seconds. §eTime remaining: §f" +
+            "\u00A75[Shadow Dummy] \u00A7cYou can only summon one Shadow Dummy every 30 seconds. \u00A7eTime remaining: \u00A7f" +
             formatRemainingTime(remainingMs) +
-            "§e.",
+            "\u00A7e.",
             now
         );
 
         if (DEBUG) {
             player.message(
-                "§8[Shadow Dummy Debug] Blocked summon removed."
+                "\u00A78[Shadow Dummy Debug] Blocked summon removed."
             );
         }
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Error] Could not remove the blocked dummy: " +
+            "\u00A7c[Shadow Dummy Error] Could not remove the blocked dummy: " +
             err
         );
     }
@@ -635,13 +642,13 @@ function configureShadowDummy(
         clearPendingDeny(player);
 
         player.message(
-            "§5[Shadow Dummy] §dShadow Dummy summoned."
+            "\u00A75[Shadow Dummy] \u00A7dShadow Dummy summoned."
         );
         player.message(
-            "§7Its maximum health and copied power are fixed at §f50%§7 of your normal stats."
+            "\u00A77Its maximum health and copied power are fixed at \u00A7f50%\u00A77 of your normal stats."
         );
         player.message(
-            "§7You may summon another Shadow Dummy in §f30 seconds§7."
+            "\u00A77You may summon another Shadow Dummy in \u00A7f30 seconds\u00A77."
         );
 
         if (DEBUG) {
@@ -653,7 +660,7 @@ function configureShadowDummy(
             } catch (healthDebugErr) {}
 
             player.message(
-                "§8[Shadow Dummy Debug] Owner max health: " +
+                "\u00A78[Shadow Dummy Debug] Owner max health: " +
                 ownerMaxHealth +
                 " | Dummy max health: " +
                 dummyMaxHealth +
@@ -674,7 +681,7 @@ function configureShadowDummy(
 
         clearActiveDummyTempState(player);
         player.message(
-            "§c[Shadow Dummy Error] Could not configure the dummy: " +
+            "\u00A7c[Shadow Dummy Error] Could not configure the dummy: " +
             err
         );
         return false;
@@ -747,7 +754,7 @@ function processNewShadowDummy(
             if (DEBUG) {
                 sendLimitedMessage(
                     player,
-                    "§8[Shadow Dummy Debug] Waiting for the dummy entity.",
+                    "\u00A78[Shadow Dummy Debug] Waiting for the dummy entity.",
                     now
                 );
             }
@@ -775,7 +782,7 @@ function processNewShadowDummy(
         );
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Error] Processing failed: " +
+            "\u00A7c[Shadow Dummy Error] Processing failed: " +
             err
         );
     }
@@ -979,7 +986,7 @@ function tick(event) {
         );
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Tick Error] " +
+            "\u00A7c[Shadow Dummy Tick Error] " +
             err
         );
     }
@@ -1084,7 +1091,7 @@ function handleBlockedDummyKill(event) {
 
             sendLimitedMessage(
                 player,
-                "§5[Shadow Dummy] §cBlocked Shadow Dummy kills do not count.",
+                "\u00A75[Shadow Dummy] \u00A7cBlocked Shadow Dummy kills do not count.",
                 System.currentTimeMillis()
             );
         }
