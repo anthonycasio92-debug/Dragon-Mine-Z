@@ -1,16 +1,19 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.6.2
+ Version: 2.6.3
 
  - End mobs/dragon use REAL vanilla max_health (DMZ uncaps generic.max_health)
+ - TP-SAFE HP CAPS: DMZ kill TP = maxHealth * tpHealthRatio (default 0.25)
+   before global/potion/class TP boosts — multi-million HP → billions of TP.
+   Real max_health is therefore hard-capped; fight length comes from per-hit caps.
  - Hard per-hit damage caps lock fight length vs other combat systems
  - Sets DMZ battlePower explicitly so inflated HP doesn't break other scaling
  - DMZ StatsData is player-only — mobs cannot use DMZ HP capability
  - DEF mitigation still applied on hit; damage actually chips the health bar
  - Dragon always scales to the strongest player currently in The End
  - Dragon spawned via EndDragonFight (not orphan /summon)
- - Dragon HP targets ~200–300 matched hits (derived from mitigation)
+ - Dragon fights target ~200–300 matched hits (via damage caps, not huge HP)
  - End mobs target ~10–22 matched hits
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
@@ -58,15 +61,18 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /*
- * Dragon virtual HP/DEF — sized for ~200–300 matched melee hits.
- * HP = playerMelee * targetHits * expectedPostMitigationFraction
- * so the fight length stays stable as player power grows.
+ * Dragon HP/DEF — TP-safe real max_health + hit-count fight length.
+ *
+ * DMZ awards kill TP from entity.getMaxHealth() * tpHealthRatio (default 0.25),
+ * then multiplies by TpSource.KILL boosts (global TP boost, potions, etc.).
+ * Keep real HP in the tens of thousands so kill TP stays sane.
+ * Fight length (~200–300 hits) is enforced by END_DAMAGE_HIT_CAP_*, not HP size.
  */
-var DRAGON_BASE_HP = 400000;
-var DRAGON_HP_PER_LEVEL = 1500;
-var DRAGON_HP_PER_BP = 0.15;
-var DRAGON_HP_FROM_PLAYER_HP = 2.0;
-var DRAGON_HP_CAP = 40000000;
+var DRAGON_BASE_HP = 35000;
+var DRAGON_HP_PER_LEVEL = 40;
+var DRAGON_HP_PER_BP = 0.00002;
+var DRAGON_HP_FROM_PLAYER_HP = 0.02;
+var DRAGON_HP_CAP = 80000; /* hard TP-safe ceiling (kill TP ≈ HP * 0.25) */
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
 var DRAGON_MIN_HITS = 200;
@@ -118,17 +124,19 @@ var END_DAMAGE_HIT_CAP_MULT = 1.0; /* 1.0 => ~exact hit-target length */
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — short fights; HP is real vanilla max_health.
- * Sized from nearby player melee × hit-target × post-mitigation fraction.
+ * End mob tiers — short fights; HP is TP-safe real vanilla max_health.
+ * Do NOT scale mob HP with player melee (that created millions of HP → TP bombs).
+ * Hit-count length is enforced by per-hit damage caps.
  */
 var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 10000, damage: 40, defense: 2000, hits: 10, label: "Endermite" },
-    phantom:   { tier: 2, hp: 16000, damage: 70, defense: 4000, hits: 14, label: "Phantom" },
-    enderman:  { tier: 3, hp: 28000, damage: 12, defense: 7000, hits: 18, label: "Enderman" },
-    shulker:   { tier: 4, hp: 40000, damage: 80, defense: 9000, hits: 22, label: "Shulker" }
+    endermite: { tier: 1, hp: 2500,  damage: 40, defense: 2000, hits: 10, label: "Endermite", hpCap: 4000 },
+    phantom:   { tier: 2, hp: 4000,  damage: 70, defense: 4000, hits: 14, label: "Phantom",   hpCap: 6500 },
+    enderman:  { tier: 3, hp: 6000,  damage: 12, defense: 7000, hits: 18, label: "Enderman",  hpCap: 9000 },
+    shulker:   { tier: 4, hp: 8000,  damage: 80, defense: 9000, hits: 22, label: "Shulker",   hpCap: 12000 }
 };
-var END_MOB_LEVEL_HP_PER_LEVEL = 200;
+var END_MOB_LEVEL_HP_PER_LEVEL = 8;
+var END_MOB_HP_GLOBAL_CAP = 12000; /* absolute TP-safe ceiling for any End mob */
 var END_MOB_DEF_FROM_PLAYER = 0.25;
 var END_MOB_DEF_FROM_MELEE = 0.20;
 var END_MOB_DEF_PER_LEVEL = 50;
@@ -165,7 +173,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v12";
+var BUFF_TAG = "end_strength_v13"; /* v13 = TP-safe HP caps (kill TP uses maxHealth) */
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -337,29 +345,36 @@ function expectedDragonThroughFraction() {
     return through;
 }
 
+/*
+ * Real max_health only — kept TP-safe.
+ * Matched-hit fight length is handled by capDamageForHitCount(), not by
+ * inflating HP to melee * hits * through (that broke kill TP into billions).
+ */
 function calcDragonHp(power) {
-    var melee = num(power.melee, 0);
-    var through = expectedDragonThroughFraction();
-    var bonus = power.level * DRAGON_HP_PER_LEVEL
-        + power.bp * DRAGON_HP_PER_BP
+    var bonus = num(power.level, 1) * DRAGON_HP_PER_LEVEL
+        + num(power.bp, 0) * DRAGON_HP_PER_BP
         + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
-
-    var hp;
-    if (melee > 0) {
-        /* Primary: ~250 matched hits; clamp into the 200–300 band. */
-        var targetHp = melee * DRAGON_TARGET_HITS * through;
-        var minHp = melee * DRAGON_MIN_HITS * through;
-        var maxHp = melee * DRAGON_MAX_HITS * through;
-        hp = targetHp + bonus * 0.25;
-        if (hp < minHp) hp = minHp;
-        if (hp > maxHp) hp = maxHp;
-    } else {
-        hp = DRAGON_BASE_HP + bonus;
-    }
-
+    var hp = DRAGON_BASE_HP + bonus;
     if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
     if (hp > DRAGON_HP_CAP) hp = DRAGON_HP_CAP;
     return Math.floor(hp);
+}
+
+function tpSafeHpCap(kind) {
+    if (kind === "dragon") return DRAGON_HP_CAP;
+    if (kind != null && END_MOB_TIERS[kind] != null) {
+        var tierCap = num(END_MOB_TIERS[kind].hpCap, END_MOB_HP_GLOBAL_CAP);
+        if (tierCap > END_MOB_HP_GLOBAL_CAP) tierCap = END_MOB_HP_GLOBAL_CAP;
+        return tierCap;
+    }
+    return END_MOB_HP_GLOBAL_CAP;
+}
+
+function clampTpSafeHp(kind, hp) {
+    hp = Math.max(1, Math.floor(num(hp, 1)));
+    var cap = tpSafeHpCap(kind);
+    if (hp > cap) hp = cap;
+    return hp;
 }
 
 function calcDragonDamage(power) {
@@ -672,7 +687,9 @@ function getMaxHealthAttributeInstance(entity) {
 }
 
 function applyRealMaxHealth(entity, targetHp) {
+    /* Final safety: never write a TP-breaking max_health value. */
     targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
+    if (targetHp > DRAGON_HP_CAP) targetHp = DRAGON_HP_CAP;
     ensureMaxHealthAttributeUncapped();
 
     /* Prefer AttributeModifier (same pattern DMZ uses for player HP). */
@@ -737,13 +754,18 @@ function setEntityBattlePower(entity, battlePower) {
 }
 
 function calcEndBattlePower(kind, power, hp) {
+    /*
+     * Pin BP low/sane. DMZ LivingEntityMixin can derive BP from maxHealth when
+     * unset; other scripts may also key off entity BP. Never echo multi-million HP.
+     */
     var melee = num(power != null ? power.melee : 0, 0);
     var level = num(power != null ? power.level : 1, 1);
-    var bp = num(power != null ? power.bp : 0, 0);
-    var score = Math.floor(melee * 0.15 + level * 500 + bp * 0.05 + Math.min(hp, 500000) * 0.001);
-    if (kind === "dragon") score = Math.floor(score * 1.5);
+    var playerBp = num(power != null ? power.bp : 0, 0);
+    var safeHp = clampTpSafeHp(kind, hp);
+    var score = Math.floor(melee * 0.05 + level * 250 + Math.min(playerBp, 5000000) * 0.02 + safeHp * 0.05);
+    if (kind === "dragon") score = Math.floor(score * 1.25 + 5000);
     if (score < 1000) score = 1000;
-    if (score > 50000000) score = 50000000;
+    if (score > 2500000) score = 2500000;
     return score;
 }
 
@@ -782,8 +804,13 @@ function repairEndHealthIfStripped(entity, kind) {
     if (!alreadyBuffed(entity)) return false;
     var intended = readNbtNumber(entity, END_STRENGTH_MAX_NBT);
     if (!(intended > 0)) return false;
+    intended = clampTpSafeHp(kind, intended);
+    /* Rewrite NBT if an older build stored a TP-breaking max. */
+    putNbtNumber(entity, END_STRENGTH_MAX_NBT, intended);
     var cur = getEntityMaxHealthSafe(entity);
-    if (cur + 1 >= intended * 0.9) return false;
+    var needsShrink = cur > tpSafeHpCap(kind) + 1;
+    var needsRepair = cur + 1 < intended * 0.9;
+    if (!needsShrink && !needsRepair) return false;
     var ratio = 1;
     if (cur > 0) {
         var hpNow = getEntityHealthSafe(entity);
@@ -793,6 +820,9 @@ function repairEndHealthIfStripped(entity, kind) {
     }
     applyRealMaxHealth(entity, intended);
     setEntityHealthSafe(entity, Math.max(1, Math.floor(intended * ratio)));
+    setEntityBattlePower(entity, calcEndBattlePower(kind, {
+        level: 1, defense: 0, bp: 0, melee: 0, maxHp: 20, name: "?"
+    }, intended));
     return true;
 }
 
@@ -801,7 +831,7 @@ function repairEndHealthIfStripped(entity, kind) {
  * and the normal health / dragon boss bar updates as damage lands.
  */
 function setAbsoluteHealth(entity, targetHp, kind) {
-    targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
+    targetHp = clampTpSafeHp(kind, targetHp);
     if (USE_REAL_VANILLA_HEALTH === true || VHP_ENABLED !== true) {
         return applyRealMaxHealth(entity, targetHp);
     }
@@ -942,25 +972,14 @@ function calcMobDefense(tier, power) {
 }
 
 function calcMobHp(tier, power) {
+    /* TP-safe pool only; hit-count length comes from damage caps. */
     var base = num(tier.hp, 1);
-    var targetHits = Math.max(3, num(tier.hits, 10));
-    var melee = num(power.melee, 0);
-    var through = expectedMobThroughFraction();
     var bonus = num(power.level, 1) * END_MOB_LEVEL_HP_PER_LEVEL * (num(tier.tier, 1) / 2.0);
-
-    var hp;
-    if (melee > 0) {
-        var targetHp = melee * targetHits * through;
-        var minHp = melee * targetHits * (1.0 - END_MOB_HIT_BAND) * through;
-        var maxHp = melee * targetHits * (1.0 + END_MOB_HIT_BAND) * through;
-        hp = targetHp + bonus * 0.15;
-        if (hp < minHp) hp = minHp;
-        if (hp > maxHp) hp = maxHp;
-    } else {
-        hp = base + bonus;
-    }
-
+    var hp = base + bonus;
     if (hp < base) hp = base;
+    var cap = num(tier.hpCap, END_MOB_HP_GLOBAL_CAP);
+    if (cap > END_MOB_HP_GLOBAL_CAP) cap = END_MOB_HP_GLOBAL_CAP;
+    if (hp > cap) hp = cap;
     return Math.floor(hp);
 }
 
@@ -994,19 +1013,23 @@ function buffMob(entity, world) {
 }
 
 function applyDragonStats(entity, power, sourceLabel) {
-    var hp = calcDragonHp(power);
+    var hp = clampTpSafeHp("dragon", calcDragonHp(power));
     var def = calcDragonDefense(power);
     var prevMax = getEntityMaxHealthSafe(entity);
     var prevHp = getEntityHealthSafe(entity);
     var newCurrent = hp;
     var score = powerScore(power);
+    var overTpSafe = prevMax > DRAGON_HP_CAP + 1;
 
     /* Mid-fight rescale to a stronger End player: grow HP, keep remaining %. */
     if (prevMax > 20 && prevHp > 0 && (sourceLabel === "rescale" || sourceLabel === "onhit" || sourceLabel === "strongest") && alreadyBuffed(entity)) {
         var ratio = prevHp / prevMax;
         if (!(ratio >= 0)) ratio = 1;
         if (ratio > 1) ratio = 1;
-        if (hp >= prevMax) {
+        if (overTpSafe) {
+            /* Old multi-million HP must shrink immediately — it breaks kill TP. */
+            newCurrent = Math.max(1, Math.floor(hp * ratio));
+        } else if (hp >= prevMax) {
             newCurrent = Math.max(1, Math.floor(hp * ratio));
             if (hp > prevMax) newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
         } else {
@@ -1025,6 +1048,8 @@ function applyDragonStats(entity, power, sourceLabel) {
 
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
     storeEntityDefense(entity, def);
+    storeHitTarget(entity, DRAGON_TARGET_HITS);
+    setEntityBattlePower(entity, calcEndBattlePower("dragon", power, hp));
     try {
         var temp = entity.getTempdata();
         if (temp != null) {
@@ -1076,6 +1101,7 @@ function maybeRescaleDragon(entity, world, player) {
     var needs = !alreadyBuffed(entity)
         || !(curDef > 0)
         || desiredHp > curMax + 500
+        || curMax > DRAGON_HP_CAP + 1 /* shrink legacy multi-million HP */
         || desiredDef > curDef + 500
         || strongerArrived;
 
@@ -1762,8 +1788,10 @@ function tick(event) {
                 var ent = list[i];
                 var kind = classifyEndEntity(ent);
                 if (kind === "dragon") {
+                    repairEndHealthIfStripped(ent, "dragon");
                     maybeRescaleDragon(ent, world, player);
                 } else if (kind != null) {
+                    repairEndHealthIfStripped(ent, kind);
                     buffMob(ent, world);
                 }
             } catch (e5) {}
@@ -1845,7 +1873,10 @@ function damagedEntity(event) {
         var mitigated = mitigateWithDmzDefense(raw, def, minFrac, mitOpts);
         if (!(mitigated > 0)) mitigated = raw * minFrac;
 
-        /* Real HP path: let mitigated damage reduce vanilla health / boss bar. */
+        /* Lock fight length even when other systems send enormous packets. */
+        mitigated = capDamageForHitCount(target, kind, mitigated);
+
+        /* Real HP path: let capped mitigated damage reduce vanilla health / boss bar. */
         event.damage = mitigated;
     } catch (error) {
         try { print("[EndStrength] damagedEntity: " + error); } catch (e) {}
