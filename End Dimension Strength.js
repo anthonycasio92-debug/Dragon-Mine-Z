@@ -1,15 +1,15 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.5.1
+ Version: 2.5.2
 
  - Stronger End mobs (high HP + DMZ defense, scaled to player power)
  - Ender Dragon + End mobs use DMZ defense mitigation
  - Virtual HP pool (vanilla MAX_HEALTH caps ~1024; real End HP is NBT)
  - Never rewrite dragon/enderman max-health attributes (keeps AI working)
  - Dragon spawned via EndDragonFight (not orphan /summon)
- - End mobs use softer mitigation than the dragon (killable, not immortal)
- - Ender Dragon scales hard with player melee/DEF and re-scales while alive
+ - Dragon + End mobs tuned for matched hit-count fights (not immortal)
+ - Ender Dragon scales with player melee/DEF and re-scales while alive
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -56,31 +56,33 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /*
- * Dragon target HP/DEF (stored as virtual pool — see VANILLA_HP_SHELL).
- * Melee is the primary scaler so high-DMZ players don't melt it in a few hits.
+ * Dragon virtual HP/DEF — boss-length fight (~80–120 matched hits),
+ * not immortal. Soft-capped to summoner / strongest End player melee.
  */
-var DRAGON_BASE_HP = 1000000;
-var DRAGON_HP_PER_LEVEL = 8000;
-var DRAGON_HP_PER_BP = 0.75;
-var DRAGON_HP_FROM_MELEE = 40.0;
-var DRAGON_HP_FROM_PLAYER_HP = 25.0;
-var DRAGON_HP_CAP = 50000000;
+var DRAGON_BASE_HP = 250000;
+var DRAGON_HP_PER_LEVEL = 2500;
+var DRAGON_HP_PER_BP = 0.25;
+var DRAGON_HP_FROM_MELEE = 8.0;
+var DRAGON_HP_FROM_PLAYER_HP = 5.0;
+var DRAGON_HP_CAP = 15000000;
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
+var DRAGON_TARGET_HITS = 100;
+var DRAGON_HP_CAP_FROM_MELEE = 0.12; /* hp <= melee * hits * this */
 
 /*
  * Virtual DMZ defense (StatsData only exists on players).
- * DEF must track player melee or DMZ hits still 3–4 shot everything.
+ * DEF stays below nearby melee so hits always chip the pool.
  */
 var DRAGON_DEF_ENABLED = true;
-var DRAGON_DEF_BASE = 400000;
-var DRAGON_DEF_FROM_PLAYER = 6.0;
-var DRAGON_DEF_FROM_MELEE = 4.0;
-var DRAGON_DEF_PER_LEVEL = 3000;
-var DRAGON_DEF_PER_BP = 0.3;
-var DRAGON_DEF_CAP = 40000000;
+var DRAGON_DEF_BASE = 80000;
+var DRAGON_DEF_FROM_PLAYER = 1.5;
+var DRAGON_DEF_FROM_MELEE = 1.0;
+var DRAGON_DEF_PER_LEVEL = 500;
+var DRAGON_DEF_PER_BP = 0.1;
+var DRAGON_DEF_CAP = 5000000;
 var DRAGON_DEF_NBT = "end_strength_entity_def";
-var DRAGON_MIN_DAMAGE_FRACTION = 0.003;
+var DRAGON_MIN_DAMAGE_FRACTION = 0.015;
 
 /* Re-scale living dragons upward if a stronger End player is present. */
 var DRAGON_RESCALE_MS = 8000;
@@ -130,10 +132,10 @@ var END_MOB_MIN_DAMAGE_FRACTION = 0.025;
 var END_MOB_TARGET_HITS = 30;
 var END_MOB_HP_CAP_FROM_MELEE = 0.20; /* hp <= melee * hits * this (post-mitigation share) */
 
-/* Dragon-tier mitigation (hard). */
-var END_FLAT_ABSORB_FRAC = 0.60;
-var END_REDUCTION_CAP = 0.97;
-var END_DEF_SCALE = 6.0;
+/* Dragon mitigation — harder than End mobs, but still finishable. */
+var END_FLAT_ABSORB_FRAC = 0.45;
+var END_REDUCTION_CAP = 0.88;
+var END_DEF_SCALE = 15.0;
 
 /* End-mob mitigation (softer — must remain killable). */
 var END_MOB_FLAT_ABSORB_FRAC = 0.35;
@@ -159,7 +161,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v6";
+var BUFF_TAG = "end_strength_v7";
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -292,9 +294,18 @@ function calcDragonHp(power) {
         + power.bp * DRAGON_HP_PER_BP
         + num(power.melee, 0) * DRAGON_HP_FROM_MELEE
         + num(power.maxHp, 0) * DRAGON_HP_FROM_PLAYER_HP;
-    var floorFromMelee = num(power.melee, 0) * DRAGON_HP_FROM_MELEE * 1.5;
-    if (hp < floorFromMelee) hp = floorFromMelee;
     if (hp < DRAGON_BASE_HP) hp = DRAGON_BASE_HP;
+
+    /* Soft-cap: ~DRAGON_TARGET_HITS for a matched melee player. */
+    var melee = num(power.melee, 0);
+    if (melee > 0) {
+        var cap = melee * DRAGON_TARGET_HITS * DRAGON_HP_CAP_FROM_MELEE;
+        if (cap < DRAGON_BASE_HP) cap = DRAGON_BASE_HP;
+        if (hp > cap) hp = cap;
+        var floorFromMelee = melee * DRAGON_HP_FROM_MELEE;
+        if (hp < floorFromMelee && floorFromMelee <= cap) hp = floorFromMelee;
+    }
+
     if (hp > DRAGON_HP_CAP) hp = DRAGON_HP_CAP;
     return Math.floor(hp);
 }
@@ -312,6 +323,10 @@ function calcDragonDefense(power) {
         + power.level * DRAGON_DEF_PER_LEVEL
         + power.bp * DRAGON_DEF_PER_BP;
     if (def < DRAGON_DEF_BASE) def = DRAGON_DEF_BASE;
+
+    /* Keep DEF under nearby melee so every hit still chips virtual HP. */
+    var meleeCap = num(power.melee, 0) * 0.85 + DRAGON_DEF_BASE;
+    if (meleeCap > DRAGON_DEF_BASE && def > meleeCap) def = meleeCap;
     if (def > DRAGON_DEF_CAP) def = DRAGON_DEF_CAP;
     return Math.floor(def);
 }
@@ -751,12 +766,13 @@ function calcMobDefense(tier, power) {
         + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER * (tierFactor / 2.0)
         + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE * (tierFactor / 2.0)
         + num(power.level, 1) * END_MOB_DEF_PER_LEVEL * tierFactor;
-    var floorFromMelee = num(power.melee, 0) * END_MOB_DEF_FROM_MELEE;
-    if (def < floorFromMelee) def = floorFromMelee;
     if (def < base) def = base;
     var maxDef = base * END_MOB_DEF_SCALE_CAP
         + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER
-        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE * 2;
+        + num(power.melee, 0) * END_MOB_DEF_FROM_MELEE;
+    /* Keep DEF below nearby melee so hits always matter. */
+    var meleeCap = num(power.melee, 0) * 0.9 + base;
+    if (meleeCap > base && maxDef > meleeCap) maxDef = meleeCap;
     if (def > maxDef) def = maxDef;
     return Math.floor(def);
 }
@@ -881,7 +897,8 @@ function maybeRescaleDragon(entity, world, player) {
         || !(curDef > 0)
         || (VHP_ENABLED === true && readVirtualMax(entity) <= 0)
         || desiredHp > curMax + 1000
-        || desiredDef > curDef + 1000;
+        || desiredDef > curDef + 1000
+        || (curMax > 0 && curMax > desiredHp * 1.25 + 1000);
     if (!needs) {
         /* Keep boss-bar health proportional; do not touch max-health. */
         if (hasVirtualHealth(entity) && readVirtualHp(entity) > 0) {
@@ -889,7 +906,9 @@ function maybeRescaleDragon(entity, world, player) {
         }
         return false;
     }
-    applyDragonStats(entity, power, alreadyBuffed(entity) ? "rescale" : "scan");
+    var label = "scan";
+    if (alreadyBuffed(entity) && !(curMax > desiredHp * 1.25 + 1000)) label = "rescale";
+    applyDragonStats(entity, power, label);
     return true;
 }
 
