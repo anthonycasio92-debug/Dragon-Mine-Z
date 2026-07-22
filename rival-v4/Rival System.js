@@ -1619,9 +1619,9 @@ var RP_PRESENCE_TP_NEMESIS = 360;
  */
 var RP_PRESENCE_MAX_AWARDS_PER_INTERVAL = 1;
 
-/* Kill TP near rival */
-var RP_KILL_TP_BASE = 400;
-var RP_KILL_TP_PER_TIER = 120;
+/* Kill TP near rival (50% of original rates - mob farms) */
+var RP_KILL_TP_BASE = 200;
+var RP_KILL_TP_PER_TIER = 60;
 var RP_KILL_TP_MUTUAL_MULT = 1.45;
 var RP_SHOW_KILL_TP = true;
 
@@ -1702,7 +1702,7 @@ var RP_UNDERDOG_WIN_RP = 45;
 
 /* Anti-gank: weaker declarers (<= 40% of your released BP) */
 var RP_ANTIGANK_RATIO = 0.40;
-var RP_ANTIGANK_WITNESS_KILL_TP = 350;   // strong player kill TP bonus while watched
+var RP_ANTIGANK_WITNESS_KILL_TP = 175;   // strong player kill TP bonus while watched (50% of prior)
 var RP_ANTIGANK_WITNESS_RP = 5;         // weak rival RP for witnessing kills
 var RP_ANTIGANK_HIT_TP = 140;           // weak rival TP when strong takes damage
 var RP_ANTIGANK_HIT_RP = 3;
