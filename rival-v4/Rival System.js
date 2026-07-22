@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.1
+ Version: 4.6.2
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1613,6 +1613,11 @@ var RP_PRESENCE_TP_ENABLED = true;
 var RP_PRESENCE_TP_ONE_SIDED = 180;
 var RP_PRESENCE_TP_MUTUAL = 280;
 var RP_PRESENCE_TP_NEMESIS = 360;
+/*
+ * Cap presence drip awards per interval so teleporting a crowd
+ * of rivals onto one player cannot stack many TP grants at once.
+ */
+var RP_PRESENCE_MAX_AWARDS_PER_INTERVAL = 1;
 
 /* Kill TP near rival */
 var RP_KILL_TP_BASE = 400;
@@ -2210,6 +2215,10 @@ function rpProcessPlayer(player) {
     var nearCount = 0;
     var dirty = false;
     var wantsPgUnderdog = false;
+    var presenceAwardsThisTick = 0;
+    var globalPresenceKey = "rival.v4.presenceRp.global";
+    var lastGlobalPresence = rpTempNumber(temp, globalPresenceKey, 0);
+    var presenceWindowOpen = (now - lastGlobalPresence) >= RP_PRESENCE_RP_INTERVAL_MS;
 
     for (var rivalUuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
@@ -2295,14 +2304,21 @@ function rpProcessPlayer(player) {
             dirty = true;
             rpTempPut(temp, presenceKey, now);
 
-            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
+            var canPresenceAward = presenceWindowOpen === true &&
+                presenceAwardsThisTick < RP_PRESENCE_MAX_AWARDS_PER_INTERVAL;
+
+            if (canPresenceAward && RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
                 var pStatus = rcLinkStatus(link);
                 var presenceTp = RP_PRESENCE_TP_ONE_SIDED;
                 if (pStatus === "mutual") presenceTp = RP_PRESENCE_TP_MUTUAL;
                 if (pStatus === "nemesis") presenceTp = RP_PRESENCE_TP_NEMESIS;
-                rpAwardTP(player, data, presenceTp, "Near " + pStatus + " " + link.name, "drip");
+                if (rpAwardTP(player, data, presenceTp, "Near " + pStatus + " " + link.name, "drip")) {
+                    presenceAwardsThisTick++;
+                    rpTempPut(temp, globalPresenceKey, now);
+                    presenceWindowOpen = false;
+                }
             }
-            if (RP_PRESENCE_RP_ENABLED === true) {
+            if (canPresenceAward && RP_PRESENCE_RP_ENABLED === true) {
                 var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
                 if (rcLinkStatus(link) === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
                 if (rcLinkStatus(link) === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
@@ -2791,12 +2807,17 @@ function chNumber(value, fallback) {
 function chBroadcast(text) {
     if (CH_BROADCAST_ENABLED !== true) return;
     try {
+        var seen = {};
         var worlds = chApi().Instance().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             try {
                 var players = worlds[i].getAllPlayers();
                 for (var p = 0; p < players.length; p++) {
-                    chMessage(players[p], text);
+                    var pl = players[p];
+                    var id = chUuid(pl);
+                    if (id === "" || seen[id] === true) continue;
+                    seen[id] = true;
+                    chMessage(pl, text);
                 }
             } catch (ignored) {}
         }
@@ -2950,6 +2971,39 @@ function chSaveChallengeDb(player, database) {
     var json = JSON.stringify(database);
     if (stored.has(CH_DB_KEY)) stored.put(CH_DB_BACKUP_KEY, chString(stored.get(CH_DB_KEY)));
     stored.put(CH_DB_KEY, json);
+}
+
+/*
+ * Single-flight resolve lock for a challenge session.
+ * Prevents dual player ticks / kill+died from awarding TP and
+ * broadcasting the win many times for one battle.
+ */
+function chResolveLockKey(sessionId) {
+    return "dlr.rivalry.v4.challenge.resolved." + chString(sessionId);
+}
+
+function chTryClaimResolve(player, sessionId) {
+    try {
+        var world = chDataWorld(player);
+        if (world === null) return false;
+        var stored = world.getStoreddata();
+        var key = chResolveLockKey(sessionId);
+        if (stored.has(key)) return false;
+        stored.put(key, "" + chNow());
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function chHasResolved(player, sessionId) {
+    try {
+        var world = chDataWorld(player);
+        if (world === null) return false;
+        return world.getStoreddata().has(chResolveLockKey(sessionId));
+    } catch (err) {
+        return false;
+    }
 }
 
 function chLoadCoreDb(player) {
@@ -3458,6 +3512,9 @@ function chCancel(player) {
 
 function chBeginBattle(player, db, session) {
     if (session.state !== "countdown") return;
+    if (session.announcedFight === true) return;
+    if (chHasResolved(player, session.id)) return;
+
     session.state = "active";
     session.battleEndsAt = chNow() + CH_DURATION_MS;
     session.lastScoreBroadcastAt = 0;
@@ -3844,9 +3901,33 @@ function chApplyRewards(player, session, result) {
 }
 
 function chEndSession(player, db, session, result) {
-    if (session.state === "ended") return;
+    if (session === null || session === undefined) return;
+    if (session.state === "ended" || session.rewardsApplied === true) return;
+
+    var sessionId = chString(session.id);
+    if (sessionId === "") return;
+
+    /*
+     * Re-load from world storage so kill+died / dual ticks cannot
+     * both resolve from stale in-memory copies.
+     */
+    try {
+        var freshDb = chLoadChallengeDb(player);
+        var fresh = freshDb.sessions[sessionId];
+        if (fresh === null || fresh === undefined) return;
+        if (fresh.state === "ended" || fresh.rewardsApplied === true) return;
+        if (chHasResolved(player, sessionId)) return;
+        session = fresh;
+        db = freshDb;
+    } catch (reloadErr) {
+        chLog("Resolve reload failed: " + reloadErr);
+        return;
+    }
+
+    if (!chTryClaimResolve(player, sessionId)) return;
 
     session.state = "ended";
+    session.rewardsApplied = true;
     session.endedAt = chNow();
     session.endReason = result.reason;
     session.winnerUuid = chString(result.winnerUuid);
@@ -3854,9 +3935,14 @@ function chEndSession(player, db, session, result) {
 
     delete db.playerSessions[session.challengerUuid];
     delete db.playerSessions[session.opponentUuid];
+    db.sessions[sessionId] = session;
     chSaveChallengeDb(player, db);
 
-    chApplyRewards(player, session, result);
+    try {
+        chApplyRewards(player, session, result);
+    } catch (rewardErr) {
+        chLog("Apply rewards failed: " + rewardErr);
+    }
 
     var winnerName = "";
     var loserName = "";
@@ -3871,7 +3957,6 @@ function chEndSession(player, db, session, result) {
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
 
-    /* Show full report to the whole server */
     if (CH_BROADCAST_REPORT === true) {
         chBroadcastLines(report);
         if (result.reason === "draw") {
@@ -3898,7 +3983,7 @@ function chEndSession(player, db, session, result) {
         }
     }
 
-    delete db.sessions[session.id];
+    delete db.sessions[sessionId];
     chSaveChallengeDb(player, db);
 }
 
@@ -3999,7 +4084,37 @@ function rivalChTick(event) {
         var session = chGetSession(db, chUuid(player));
         if (session === null) return;
 
+        /* Ignore already-resolved leftovers */
+        if (session.state === "ended" || session.rewardsApplied === true ||
+            chHasResolved(player, session.id)) {
+            delete db.playerSessions[chUuid(player)];
+            if (db.sessions[String(session.id)]) delete db.sessions[String(session.id)];
+            chSaveChallengeDb(player, db);
+            return;
+        }
+
         if (session.state === "countdown") {
+            /*
+             * Only the challenger advances countdown -> fight so both
+             * players cannot double-begin / double-broadcast FIGHT.
+             */
+            if (chUuid(player) !== session.challengerUuid) {
+                var remainingOther = session.countdownEndsAt - now;
+                if (remainingOther > 0) {
+                    var secOther = Math.ceil(remainingOther / 1000);
+                    var markOther = "rival.v4.challenge.cd." + session.id;
+                    var lastOther = 0;
+                    try {
+                        if (temp.has(markOther)) lastOther = chNumber(temp.get(markOther), 0);
+                    } catch (ignoredCd) {}
+                    if (secOther !== lastOther && secOther <= 5) {
+                        try { temp.put(markOther, chString(secOther)); } catch (ignoredCd2) {}
+                        chMessage(player, CH_COLOR + "e" + secOther + "...");
+                    }
+                }
+                return;
+            }
+
             var remaining = session.countdownEndsAt - now;
             if (remaining <= 0) {
                 chBeginBattle(player, db, session);
@@ -4022,8 +4137,24 @@ function rivalChTick(event) {
             var a = chFindOnlineByUuid(session.challengerUuid);
             var b = chFindOnlineByUuid(session.opponentUuid);
             if (a === null || b === null) {
+                /*
+                 * Prefer the still-online fighter as resolver.
+                 * Claim lock still prevents a double payout.
+                 */
+                var canResolveDc = false;
+                if (a === null && b !== null) {
+                    canResolveDc = chUuid(player) === session.opponentUuid;
+                } else if (b === null && a !== null) {
+                    canResolveDc = chUuid(player) === session.challengerUuid;
+                } else {
+                    canResolveDc = true;
+                }
+                if (!canResolveDc) return;
+
                 var offlineUuid = a === null ? session.challengerUuid : session.opponentUuid;
-                var winnerUuid = offlineUuid === session.challengerUuid ? session.opponentUuid : session.challengerUuid;
+                var winnerUuid = offlineUuid === session.challengerUuid
+                    ? session.opponentUuid
+                    : session.challengerUuid;
                 chEndSession(player, db, session, {
                     reason: "disconnect",
                     winnerUuid: winnerUuid,
@@ -4034,11 +4165,15 @@ function rivalChTick(event) {
             }
 
             if (chDistance(a, b) > CH_MAX_DISTANCE * 2) {
-                chMessage(a, CH_COLOR + "cToo far apart! Return within range!");
-                chMessage(b, CH_COLOR + "cToo far apart! Return within range!");
+                if (chUuid(player) === session.challengerUuid) {
+                    chMessage(a, CH_COLOR + "cToo far apart! Return within range!");
+                    chMessage(b, CH_COLOR + "cToo far apart! Return within range!");
+                }
             }
 
             if (now >= session.battleEndsAt) {
+                /* Challenger-only time resolve - stops dual-tick TP spam */
+                if (chUuid(player) !== session.challengerUuid) return;
                 chResolveByDamage(player, db, session, "time");
                 return;
             }
@@ -4052,7 +4187,6 @@ function rivalChTick(event) {
                 }
             }
 
-            /* Live scoreboard for the whole server (challenger tick only). */
             if (CH_BROADCAST_ENABLED === true && chUuid(player) === session.challengerUuid) {
                 var lastScore = chNumber(session.lastScoreBroadcastAt, 0);
                 if (lastScore <= 0 || now - lastScore >= CH_BROADCAST_SCORE_MS) {
@@ -4123,6 +4257,7 @@ function rivalChKill(event) {
         var db = chLoadChallengeDb(killer);
         var session = chGetSession(db, chUuid(killer));
         if (session === null || session.state !== "active") return;
+        if (session.rewardsApplied === true || chHasResolved(killer, session.id)) return;
 
         var killUuid = chUuid(killer);
         var vicUuid = chUuid(victim);
@@ -4150,11 +4285,11 @@ function rivalChDied(event) {
         var db = chLoadChallengeDb(victim);
         var session = chGetSession(db, chUuid(victim));
         if (session === null || session.state !== "active") return;
+        if (session.rewardsApplied === true || chHasResolved(victim, session.id)) return;
 
         var source = null;
         try { source = event.source; } catch (ignored) {}
         if (!chIsPlayer(source)) {
-            /* Treat mysterious death as loss for victim vs the other participant */
             var winnerUuid = chUuid(victim) === session.challengerUuid
                 ? session.opponentUuid
                 : session.challengerUuid;
