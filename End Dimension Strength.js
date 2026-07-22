@@ -1,11 +1,12 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.6.0
+ Version: 2.6.1
 
  - End mobs/dragon use REAL vanilla max_health (DMZ uncaps generic.max_health)
  - DMZ StatsData is player-only — mobs cannot use DMZ HP capability
  - DEF mitigation still applied on hit; damage actually chips the health bar
+ - Dragon always scales to the strongest player currently in The End
  - Dragon spawned via EndDragonFight (not orphan /summon)
  - Dragon HP targets ~200–300 matched hits (derived from mitigation)
  - End mobs target ~10–22 matched hits
@@ -84,8 +85,10 @@ var DRAGON_DEF_CAP = 5000000;
 var DRAGON_DEF_NBT = "end_strength_entity_def";
 var DRAGON_MIN_DAMAGE_FRACTION = 0.015;
 
-/* Re-scale living dragons upward if a stronger End player is present. */
-var DRAGON_RESCALE_MS = 8000;
+/* Re-scale living dragons to the strongest End-dimension player. */
+var DRAGON_ALWAYS_SCALE_TO_STRONGEST = true;
+var DRAGON_RESCALE_MS = 3000;
+var DRAGON_SCALE_SCORE_EPSILON = 0.01;
 
 /*
  * REAL vanilla health — DMZ GenericAttributes raises minecraft:generic.max_health
@@ -97,7 +100,7 @@ var DRAGON_RESCALE_MS = 8000;
 var USE_REAL_VANILLA_HEALTH = true;
 var VHP_ENABLED = false;
 var SHOW_VIRTUAL_HP_NAME = false;
-var END_STRENGTH_HEALTH_MOD_UUID = "e5d57e10-6c3a-4f2b-9a11-end57ren9th1";
+var END_STRENGTH_HEALTH_MOD_UUID = "e5d57e10-6c3a-4f2b-9a11-e0d57e1197b1";
 var END_STRENGTH_HEALTH_MOD_NAME = "End Strength Health";
 
 /* Enderman melee attribute — keep modest so pathing/teleport AI stays sane. */
@@ -157,6 +160,8 @@ var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
 var TEMP_NATURAL = "end.strength.naturalCheck";
 var TEMP_DRAGON_RESCALE = "end.strength.dragonRescale";
+var TEMP_DRAGON_SCALE_SCORE = "end.strength.dragonScaleScore";
+var TEMP_DRAGON_SCALE_NAME = "end.strength.dragonScaleName";
 var WORLD_EGG_LOCK = "end.strength.eggClaimed.";
 var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
 var WORLD_NATURAL_LOCK = "end.strength.naturalLock";
@@ -260,15 +265,30 @@ function readPlayerPower(player) {
     return out;
 }
 
+function powerScore(power) {
+    if (power == null) return -1;
+    return num(power.melee, 0) * 100
+        + num(power.bp, 0)
+        + num(power.level, 1) * 1000
+        + num(power.maxHp, 0)
+        + num(power.defense, 0);
+}
+
 function strongestPlayerInEnd(world) {
     var best = null;
     var bestScore = -1;
+    if (world == null) world = getEndWorld();
+    if (world == null) return null;
     try {
         var players = world.getAllPlayers();
         for (var i = 0; i < players.length; i++) {
             if (!isPlayer(players[i])) continue;
+            /* Prefer players actually in The End. */
+            try {
+                if (!isInTheEnd(players[i].getWorld())) continue;
+            } catch (e0) {}
             var p = readPlayerPower(players[i]);
-            var score = p.level * 1000 + p.bp + p.melee * 10 + p.maxHp;
+            var score = powerScore(p);
             if (score > bestScore) {
                 bestScore = score;
                 best = players[i];
@@ -276,6 +296,15 @@ function strongestPlayerInEnd(world) {
         }
     } catch (e) {}
     return best;
+}
+
+function strongestPowerInEnd(world, fallbackPlayer) {
+    var player = strongestPlayerInEnd(world);
+    if (player == null) player = fallbackPlayer;
+    return {
+        player: player,
+        power: readPlayerPower(player)
+    };
 }
 
 /*
@@ -583,30 +612,39 @@ function ensureMaxHealthAttributeUncapped() {
     try {
         var ForgeRegistries = Java.type("net.minecraftforge.registries.ForgeRegistries");
         var ResourceLocation = Java.type("net.minecraft.resources.ResourceLocation");
-        var attr = ForgeRegistries.ATTRIBUTES.getValue(ResourceLocation.parse("minecraft:generic.max_health"));
-        if (attr == null) {
-            try { attr = ForgeRegistries.ATTRIBUTES.getValue(new ResourceLocation("minecraft", "generic.max_health")); } catch (e0) {}
+        var attr = null;
+        try { attr = ForgeRegistries.ATTRIBUTES.getValue(ResourceLocation.parse("minecraft:generic.max_health")); } catch (e0) {
+            try { attr = ForgeRegistries.ATTRIBUTES.getValue(new ResourceLocation("minecraft", "generic.max_health")); } catch (e1) {}
         }
-        if (attr == null) return false;
-        var RangedAttributeMixin = Java.type("com.dragonminez.mixin.common.RangedAttributeMixin");
-        if (RangedAttributeMixin != null && RangedAttributeMixin.class.isInstance(attr)) {
-            RangedAttributeMixin.class.cast(attr).setMaxValue(3.4028234663852886E38);
-            return true;
+        if (attr != null) {
+            try {
+                var mixin = Java.type("com.dragonminez.mixin.common.RangedAttributeMixin");
+                mixin.setMaxValue.call(attr, 3.4028234663852886E38);
+                return true;
+            } catch (e2) {}
+            try {
+                var methods = attr.getClass().getMethods();
+                for (var i = 0; i < methods.length; i++) {
+                    if (str(methods[i].getName()) === "setMaxValue") {
+                        methods[i].invoke(attr, Java.type("java.lang.Double").valueOf(3.4028234663852886E38));
+                        return true;
+                    }
+                }
+            } catch (e3) {}
         }
-    } catch (e1) {}
+    } catch (e4) {}
     try {
         var Attributes = Java.type("net.minecraft.world.entity.ai.attributes.Attributes");
         var attr2 = Attributes.MAX_HEALTH;
-        var f = null;
-        try { f = attr2.getClass().getDeclaredField("maxValue"); } catch (e2) {
-            try { f = attr2.getClass().getDeclaredField("f_22308_"); } catch (e3) {}
+        var fields = attr2.getClass().getDeclaredFields();
+        for (var f = 0; f < fields.length; f++) {
+            var name = str(fields[f].getName()).toLowerCase();
+            if (name.indexOf("max") >= 0 && (name.indexOf("value") >= 0 || name === "f_22308_")) {
+                fields[f].setAccessible(true);
+                try { fields[f].setDouble(attr2, 3.4028234663852886E38); return true; } catch (e5) {}
+            }
         }
-        if (f != null) {
-            f.setAccessible(true);
-            f.setDouble(attr2, 3.4028234663852886E38);
-            return true;
-        }
-    } catch (e4) {}
+    } catch (e6) {}
     return false;
 }
 
@@ -722,9 +760,10 @@ function formatHpLabel(hp) {
 
 function updateDragonName(entity, power, hp, def) {
     try {
+        var who = (power != null && power.name) ? str(power.name) : "?";
         entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" +
             (power != null ? power.level : 1) + " / " + formatHpLabel(hp) +
-            " HP / DEF " + formatHpLabel(def) + "]");
+            " HP / DEF " + formatHpLabel(def) + COLOR + "7 vs " + who + COLOR + "8]");
     } catch (e) {}
 }
 
@@ -858,19 +897,18 @@ function applyDragonStats(entity, power, sourceLabel) {
     var prevMax = getEntityMaxHealthSafe(entity);
     var prevHp = getEntityHealthSafe(entity);
     var newCurrent = hp;
+    var score = powerScore(power);
 
-    /* Mid-fight rescale: keep remaining % when raising the pool. */
-    if (prevMax > 20 && prevHp > 0 && (sourceLabel === "rescale" || sourceLabel === "onhit") && alreadyBuffed(entity)) {
+    /* Mid-fight rescale to a stronger End player: grow HP, keep remaining %. */
+    if (prevMax > 20 && prevHp > 0 && (sourceLabel === "rescale" || sourceLabel === "onhit" || sourceLabel === "strongest") && alreadyBuffed(entity)) {
         var ratio = prevHp / prevMax;
         if (!(ratio >= 0)) ratio = 1;
         if (ratio > 1) ratio = 1;
-        if (hp > prevMax) {
+        if (hp >= prevMax) {
             newCurrent = Math.max(1, Math.floor(hp * ratio));
-            newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
-        } else if (hp < prevMax * 0.8) {
-            /* Balance nerf / rebuff — apply new max, keep ratio. */
-            newCurrent = Math.max(1, Math.floor(hp * ratio));
+            if (hp > prevMax) newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
         } else {
+            /* Do not shrink mid-fight if the strongest player is weaker than peak. */
             newCurrent = prevHp;
             hp = prevMax;
         }
@@ -885,12 +923,27 @@ function applyDragonStats(entity, power, sourceLabel) {
 
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
     storeEntityDefense(entity, def);
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null) {
+            temp.put(TEMP_DRAGON_SCALE_SCORE, "" + score);
+            temp.put(TEMP_DRAGON_SCALE_NAME, power != null ? str(power.name) : "?");
+        }
+    } catch (e1) {}
     updateDragonName(entity, power, hp, def);
-    return { hp: hp, current: newCurrent, damage: 0, defense: def };
+    return { hp: hp, current: newCurrent, damage: 0, defense: def, power: power };
 }
 
+/*
+ * Keep every living dragon matched to the strongest player in The End.
+ * HP only grows to the new strongest (never shrinks mid-fight); DEF always tracks.
+ */
 function maybeRescaleDragon(entity, world, player) {
-    if (entity == null || world == null) return false;
+    if (entity == null) return false;
+    if (world == null) world = getEndWorld();
+    if (world == null) return false;
+    if (DRAGON_ALWAYS_SCALE_TO_STRONGEST !== true) return false;
+
     var now = nowMs();
     try {
         var temp = entity.getTempdata();
@@ -901,22 +954,39 @@ function maybeRescaleDragon(entity, world, player) {
         if (temp != null) temp.put(TEMP_DRAGON_RESCALE, "" + now);
     } catch (e1) {}
 
-    var powerPlayer = strongestPlayerInEnd(world) || player;
-    if (powerPlayer == null) return false;
-    var power = readPlayerPower(powerPlayer);
+    var best = strongestPowerInEnd(world, player);
+    if (best.player == null && best.power == null) return false;
+    var power = best.power;
     var desiredHp = calcDragonHp(power);
     var desiredDef = calcDragonDefense(power);
+    var desiredScore = powerScore(power);
     var curMax = getEntityMaxHealthSafe(entity);
     var curDef = readEntityDefense(entity);
+    var lastScore = -1;
+    try {
+        var t2 = entity.getTempdata();
+        if (t2 != null && t2.has(TEMP_DRAGON_SCALE_SCORE)) {
+            lastScore = num(t2.get(TEMP_DRAGON_SCALE_SCORE), -1);
+        }
+    } catch (e2) {}
 
+    var strongerArrived = desiredScore > lastScore * (1.0 + DRAGON_SCALE_SCORE_EPSILON) + 1;
     var needs = !alreadyBuffed(entity)
         || !(curDef > 0)
-        || desiredHp > curMax + 1000
-        || desiredDef > curDef + 1000
-        || (curMax > 0 && curMax > desiredHp * 1.25 + 1000);
-    if (!needs) return false;
-    var label = "scan";
-    if (alreadyBuffed(entity) && !(curMax > desiredHp * 1.25 + 1000)) label = "rescale";
+        || desiredHp > curMax + 500
+        || desiredDef > curDef + 500
+        || strongerArrived;
+
+    if (!needs) {
+        /* Still keep DEF locked to strongest even on tiny drifts. */
+        if (Math.abs(desiredDef - curDef) > 100) {
+            storeEntityDefense(entity, desiredDef);
+            updateDragonName(entity, power, curMax, desiredDef);
+        }
+        return false;
+    }
+
+    var label = alreadyBuffed(entity) ? "strongest" : "scan";
     applyDragonStats(entity, power, label);
     return true;
 }
