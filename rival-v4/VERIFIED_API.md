@@ -126,9 +126,31 @@ StatsProvider.get(StatsCapability.INSTANCE, entity) -> LazyOptional<StatsData>
 - `getBattlePowerExact(): double`
 - `getCurrentStatValue(String)`  // uppercases; keys STR/SKP/RES/VIT/PWR/ENE
 - `getMeleeDamage()`, `getStrikeDamage()`, `getKiDamage()`
+- `getDefense()`, `getMaxDefense()`
+- `calculatePostMitigationDamage(double raw, boolean guardBroken, double defensePen): double`
+  - Converts LivingHurt RAW DMZ attack damage into actual HP damage taken
+  - Same formula DMZ uses on `LivingDamageEvent` (`CombatEvent.overrideVanillaArmorReduction`)
 - `getFormMultiplier(String)`, `getStackFormMultiplier(String)`
 - `getStatScaling(String)`
 - `getResources()`, `getBonusStats()`, `getStats()`, `getStatus()`, `getSkills()`
+
+### Challenge damage scoring (important)
+
+CustomNPCs `PlayerEvent.DamagedEvent` / `DamagedEntityEvent` fire from **`LivingHurtEvent`**.
+DMZ `@HIGH` sets that amount to RAW attack damage (`getMeleeDamage` / ki / strike).
+DMZ also posts `DMZEvent.DamageDealtEvent` with that RAW value.
+
+Actual HP loss is applied later on **`LivingDamageEvent`** via
+`StatsData.calculatePostMitigationDamage`, then `dmz_block_multiplier` (and optional Ki Protection).
+
+Rival challenges must convert with `calculatePostMitigationDamage` — never score raw `event.damage`.
+Do not assign `event.damage` in scripts; CNPC writes it back to `LivingHurtEvent.setAmount`.
+
+Scratch NBT on the victim (written during DMZ LivingHurt):
+
+- `dmz_raw_damage`
+- `dmz_defense_pen`
+- `dmz_block_multiplier`
 
 `Stats` (from `getStats()`):
 

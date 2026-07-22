@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.11
+ Version: 4.6.12
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -3553,6 +3553,106 @@ function chGetDMZ(player) {
     }
 }
 
+/*
+ * Read a double from the MC entity persistent NBT (Forge CompoundTag).
+ * DMZ stores combat scratch values here during LivingHurt / LivingDamage:
+ *   dmz_raw_damage, dmz_defense_pen, dmz_block_multiplier
+ */
+function chNbtGetDouble(player, key, fallback) {
+    try {
+        var mc = player.getMCEntity();
+        if (mc === null) return fallback;
+        var nbt = null;
+        try { nbt = mc.getPersistentData(); } catch (e1) { nbt = null; }
+        if (nbt === null) return fallback;
+        var has = false;
+        try { has = nbt.contains(key) === true; } catch (e2) {
+            try { has = nbt.m_128441_(key) === true; } catch (e3) { has = false; }
+        }
+        if (!has) return fallback;
+        var v = NaN;
+        try { v = Number(nbt.getDouble(key)); } catch (e4) {
+            try { v = Number(nbt.m_128459_(key)); } catch (e5) { v = NaN; }
+        }
+        if (isNaN(v) || !isFinite(v)) return fallback;
+        return v;
+    } catch (ignored) {
+        return fallback;
+    }
+}
+
+function chPlayerHealth(player) {
+    try {
+        var hp = Number(player.getHealth());
+        if (!isNaN(hp) && isFinite(hp)) return hp;
+    } catch (ignored) {}
+    try {
+        var mc = player.getMCEntity();
+        if (mc !== null) {
+            var hp2 = Number(mc.getHealth());
+            if (!isNaN(hp2) && isFinite(hp2)) return hp2;
+        }
+    } catch (ignored2) {}
+    return -1;
+}
+
+/*
+ * Convert DMZ LivingHurt raw damage into actual HP damage taken.
+ *
+ * Verified from dragonminez-2.1.3 CombatEvent:
+ * - CustomNPCs `damaged` hooks LivingHurtEvent (pre-armor).
+ * - DMZ @HIGH sets LivingHurt amount to getMeleeDamage/getKiDamage/etc (RAW).
+ * - DMZ DamageDealtEvent also posts that RAW amount.
+ * - Real HP loss is applied later on LivingDamageEvent via
+ *   StatsData.calculatePostMitigationDamage(raw, guardBroken, defensePen)
+ *   then * dmz_block_multiplier (and optional Ki Protection).
+ *
+ * Do NOT mutate event.damage — CNPC writes it back onto LivingHurt.setAmount,
+ * which would break DMZ's later LivingDamage mitigation path.
+ */
+function chDmzDamageTaken(victim, rawFromEvent) {
+    var raw = Math.max(0, chNumber(rawFromEvent, 0));
+    var nbtRaw = chNbtGetDouble(victim, "dmz_raw_damage", -1);
+    if (nbtRaw > 0) raw = nbtRaw;
+    if (!(raw > 0)) return 0;
+
+    var data = chGetDMZ(victim);
+    if (data === null) return raw;
+
+    var pen = chNbtGetDouble(victim, "dmz_defense_pen", 0);
+    if (pen < 0) pen = 0;
+    if (pen > 1) pen = 1;
+
+    var guardBroken = false;
+    try {
+        var status = data.getStatus();
+        var resources = data.getResources();
+        guardBroken = status.isStunEffect() === true &&
+            Number(resources.getCurrentPoise()) <= 0;
+    } catch (ignoredGuard) {
+        guardBroken = false;
+    }
+
+    var taken = raw;
+    try {
+        taken = Number(data.calculatePostMitigationDamage(raw, guardBroken, pen));
+    } catch (mitErr) {
+        chLog("calculatePostMitigationDamage failed: " + mitErr);
+        taken = raw;
+    }
+    if (isNaN(taken) || !isFinite(taken) || taken < 0) taken = 0;
+
+    var blockMult = chNbtGetDouble(victim, "dmz_block_multiplier", 1);
+    if (!(blockMult > 0) || !isFinite(blockMult)) blockMult = 1;
+    taken = taken * blockMult;
+
+    /* Cannot lose more HP than currently remaining. */
+    var hp = chPlayerHealth(victim);
+    if (hp >= 0 && taken > hp) taken = hp;
+
+    return taken;
+}
+
 function chAwardTP(player, amount, reason) {
     try {
         var data = chGetDMZ(player);
@@ -4751,13 +4851,17 @@ function rivalChDamaged(event) {
         if (atkUuid === vicUuid) return;
 
         /*
-         * event.damage on the victim damaged hook is the damage being applied
-         * to this player (damage taken), not the attacker's DMZ attack stat.
+         * event.damage here is DMZ RAW attack damage from LivingHurt
+         * (getMeleeDamage / getKiDamage / getStrikeDamage), NOT HP lost.
+         * Convert with StatsData.calculatePostMitigationDamage.
          */
-        var amount = Number(event.damage);
-        if (isNaN(amount) || !isFinite(amount) || amount <= 0) return;
+        var raw = Number(event.damage);
+        if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
 
-        chRecordHit(session, atkUuid, vicUuid, amount, chIsKiDamage(event));
+        var taken = chDmzDamageTaken(victim, raw);
+        if (!(taken > 0)) return;
+
+        chRecordHit(session, atkUuid, vicUuid, taken, chIsKiDamage(event));
         chSaveChallengeDb(victim, db);
     } catch (error) {
         chLog("damaged failed: " + error);

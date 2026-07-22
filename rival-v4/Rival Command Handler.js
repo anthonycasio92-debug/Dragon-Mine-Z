@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.11
+ Version: 4.6.12
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
