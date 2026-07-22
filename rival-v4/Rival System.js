@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.2
+ Version: 4.6.3
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -3375,6 +3375,24 @@ function chFindPendingFor(db, playerUuid, optionalFromName) {
     return null;
 }
 
+function chClaimCountdownAnnounce(pairKey) {
+    try {
+        var world = chDataWorld(null);
+        if (world === null) return true;
+        var stored = world.getStoreddata();
+        var key = "dlr.rivalry.v4.challenge.announce." + chString(pairKey);
+        var last = 0;
+        try {
+            if (stored.has(key)) last = chNumber(stored.get(key), 0);
+        } catch (e1) {}
+        if (chNow() - last < 8000) return false;
+        stored.put(key, "" + chNow());
+        return true;
+    } catch (e) {
+        return true;
+    }
+}
+
 function chStartCountdown(player, db, pending) {
     delete db.pending[pending.id];
 
@@ -3395,6 +3413,7 @@ function chStartCountdown(player, db, pending) {
         endReason: "",
         winnerUuid: "",
         loserUuid: "",
+        announcedCountdown: true,
         combat: {}
     };
     session.combat[pending.fromUuid] = chFreshCombat();
@@ -3409,34 +3428,38 @@ function chStartCountdown(player, db, pending) {
     var b = chFindOnlineByUuid(pending.toUuid);
     if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
     if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
-    chBroadcast(CH_COLOR + "8--------------------------------");
-    chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
-        CH_COLOR + "7  vs  " + CH_COLOR + "e" + pending.toName);
-    chBroadcast(CH_COLOR + "8Countdown..." + CH_COLOR + "7  Watch: " +
-        CH_COLOR + "f/spectaterival " + pending.fromName);
 
-    try {
-        if (pending.related === true) {
-            var coreDb = chLoadCoreDb(player);
-            if (coreDb !== null) {
-                var fromRec = coreDb.players[pending.fromUuid];
-                var toRec = coreDb.players[pending.toUuid];
-                if (fromRec !== null && fromRec !== undefined && toRec !== null && toRec !== undefined) {
-                    var pgLink = fromRec.rivals[pending.toUuid];
-                    if (pgLink !== null && pgLink !== undefined) {
-                        var pgCtx = pgNormalize(pgLink.provingGrounds);
-                        if (a !== null) pgChallengeFlavor(a, pending.toName, pgCtx, pending.fromUuid);
-                        if (b !== null) pgChallengeFlavor(b, pending.fromName, pgCtx, pending.toUuid);
-                        if (pgCtx.active === true &&
-                            ((a !== null && pgOnGrounds(a, pgCtx)) || (b !== null && pgOnGrounds(b, pgCtx)))) {
-                            chBroadcast(CH_COLOR + "6Grounds  " + CH_COLOR + "e" + pgShortPlace(pgCtx));
+    var pairKey = chString(pending.fromUuid) + ">" + chString(pending.toUuid);
+    if (chClaimCountdownAnnounce(pairKey)) {
+        chBroadcast(CH_COLOR + "8--------------------------------");
+        chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
+            CH_COLOR + "7  vs  " + CH_COLOR + "e" + pending.toName);
+        chBroadcast(CH_COLOR + "8Countdown..." + CH_COLOR + "7  Watch: " +
+            CH_COLOR + "f/spectaterival " + pending.fromName);
+
+        try {
+            if (pending.related === true) {
+                var coreDb = chLoadCoreDb(player);
+                if (coreDb !== null) {
+                    var fromRec = coreDb.players[pending.fromUuid];
+                    var toRec = coreDb.players[pending.toUuid];
+                    if (fromRec !== null && fromRec !== undefined && toRec !== null && toRec !== undefined) {
+                        var pgLink = fromRec.rivals[pending.toUuid];
+                        if (pgLink !== null && pgLink !== undefined) {
+                            var pgCtx = pgNormalize(pgLink.provingGrounds);
+                            if (a !== null) pgChallengeFlavor(a, pending.toName, pgCtx, pending.fromUuid);
+                            if (b !== null) pgChallengeFlavor(b, pending.fromName, pgCtx, pending.toUuid);
+                            if (pgCtx.active === true &&
+                                ((a !== null && pgOnGrounds(a, pgCtx)) || (b !== null && pgOnGrounds(b, pgCtx)))) {
+                                chBroadcast(CH_COLOR + "6Grounds  " + CH_COLOR + "e" + pgShortPlace(pgCtx));
+                            }
                         }
                     }
                 }
             }
-        }
-    } catch (pgErr) {}
-    chBroadcast(CH_COLOR + "8--------------------------------");
+        } catch (pgErr) {}
+        chBroadcast(CH_COLOR + "8--------------------------------");
+    }
 }
 
 function chAccept(player, fromName) {
@@ -3527,6 +3550,9 @@ function chBeginBattle(player, db, session) {
         CH_COLOR + "eMost damage in 60 seconds!");
     if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
         CH_COLOR + "eMost damage in 60 seconds!");
+
+    var fightKey = "fight." + chString(session.challengerUuid) + ">" + chString(session.opponentUuid);
+    if (!chClaimCountdownAnnounce(fightKey)) return;
 
     chBroadcast(CH_COLOR + "8--------------------------------");
     chBroadcast(CH_COLOR + "c" + CH_COLOR + "l FIGHT! " + CH_COLOR + "r");

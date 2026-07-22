@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.1
+ Version: 4.6.3
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -173,15 +173,64 @@ function onlineByName(name) {
 }
 
 function broadcast(text) {
+    /*
+     * Deduplicate by player UUID. On multi-world servers,
+     * getAllPlayers() per world can re-list the same players
+     * and spam identical countdown / battle lines.
+     */
     try {
+        var seen = {};
+        var sent = 0;
+
+        try {
+            var online = Bukkit.getOnlinePlayers();
+            var it = online.iterator();
+            while (it.hasNext()) {
+                var bp = it.next();
+                var name = "";
+                try { name = String(bp.getName()); } catch (eName) { continue; }
+                var p = onlineByName(name);
+                if (p == null) continue;
+                var id = uuidOf(p);
+                if (id == "" || seen[id] === true) continue;
+                seen[id] = true;
+                msg(p, text);
+                sent++;
+            }
+            if (sent > 0) return;
+        } catch (bukkitErr) {}
+
         var worlds = api().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             try {
                 var players = worlds[i].getAllPlayers();
-                for (var p = 0; p < players.length; p++) msg(players[p], text);
+                for (var p = 0; p < players.length; p++) {
+                    var pl = players[p];
+                    var pid = uuidOf(pl);
+                    if (pid == "" || seen[pid] === true) continue;
+                    seen[pid] = true;
+                    msg(pl, text);
+                }
             } catch (e) {}
         }
     } catch (e2) {}
+}
+
+function claimChallengeAnnounce(key) {
+    try {
+        var store = worldStore();
+        if (store == null) return true;
+        var full = "dlr.rivalry.v4.challenge.announce." + str(key);
+        var last = 0;
+        try {
+            if (store.has(full)) last = num(store.get(full), 0);
+        } catch (e1) {}
+        if (now() - last < 8000) return false;
+        store.put(full, String(now()));
+        return true;
+    } catch (e) {
+        return true;
+    }
 }
 
 function freshDb() {
@@ -779,6 +828,7 @@ function startCountdown(ch, pending) {
         endReason: "",
         winnerUuid: "",
         loserUuid: "",
+        announcedCountdown: true,
         combat: {}
     };
     session.combat[pending.fromUuid] = freshCombat();
@@ -792,17 +842,33 @@ function startCountdown(ch, pending) {
     var b = onlineByName(pending.toName);
     if (a != null) uiBanner(a, "Challenge", C + "6Accepted! Countdown...");
     if (b != null) uiBanner(b, "Challenge", C + "6Accepted! Countdown...");
-    broadcast(C + "8--------------------------------");
-    broadcast(C + "6[Rival Battle] " + C + "e" + pending.fromName +
-        C + "7  vs  " + C + "e" + pending.toName);
-    broadcast(C + "8Countdown..." + C + "7  Watch: " + C + "f/spectaterival " + pending.fromName);
-    broadcast(C + "8--------------------------------");
+
+    /*
+     * Pair-key lock so accept spam / dual handlers cannot
+     * flood the server with identical countdown lines.
+     */
+    var announceKey = pending.fromUuid + ">" + pending.toUuid;
+    if (claimChallengeAnnounce(announceKey)) {
+        broadcast(C + "8--------------------------------");
+        broadcast(C + "6[Rival Battle] " + C + "e" + pending.fromName +
+            C + "7  vs  " + C + "e" + pending.toName);
+        broadcast(C + "8Countdown..." + C + "7  Watch: " + C + "f/spectaterival " + pending.fromName);
+        broadcast(C + "8--------------------------------");
+    }
 }
 
 function cmdChallengeAccept(player, fromName) {
     var ch = loadCh();
     var pending = findPendingFor(ch, uuidOf(player), fromName);
     if (pending == null) { msg(player, C + "cNo pending challenge."); return; }
+
+    /* Prevent double-accept from multi-fire CMI/triggers */
+    var acceptKey = "accept." + pending.fromUuid + ">" + pending.toUuid;
+    if (!claimChallengeAnnounce(acceptKey)) {
+        msg(player, C + "7Challenge already accepted.");
+        return;
+    }
+
     var challenger = onlineByName(pending.fromName);
     if (challenger == null) {
         delete ch.pending[pending.id];
