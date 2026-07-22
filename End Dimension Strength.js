@@ -1,11 +1,11 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.1.0
+ Version: 2.2.0
 
  - Stronger End mobs (tiered absolute HP around ~50k)
+ - Ender Dragon + End mobs use DMZ defense mitigation
  - Ender Dragon starts at 200,000 HP and scales with player stats
- - Dragon uses DMZ defense mitigation (virtual DEF from player getDefense)
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -72,22 +72,27 @@ var DRAGON_DEF_FROM_PLAYER = 3.0;     /* player getDefense() * this */
 var DRAGON_DEF_PER_LEVEL = 750;
 var DRAGON_DEF_PER_BP = 0.08;
 var DRAGON_DEF_CAP = 2500000;
-var DRAGON_DEF_NBT = "end_strength_dragon_def";
+var DRAGON_DEF_NBT = "end_strength_entity_def";
 var DRAGON_MIN_DAMAGE_FRACTION = 0.02; /* always allow at least 2% of a hit through */
 
 /*
- * End mob tiers (absolute HP targets).
+ * End mob tiers (absolute HP / damage / defense targets).
  * Lower tier = weaker, higher = stronger.
- * Nearby player level can further scale these.
+ * Nearby player stats further scale HP and DEF.
  */
+var END_MOB_DEF_ENABLED = true;
 var END_MOB_TIERS = {
-    endermite: { tier: 1, hp: 20000, damage: 18, label: "Endermite" },
-    phantom:   { tier: 2, hp: 35000, damage: 28, label: "Phantom" },
-    enderman:  { tier: 3, hp: 50000, damage: 40, label: "Enderman" },
-    shulker:   { tier: 4, hp: 65000, damage: 32, label: "Shulker" }
+    endermite: { tier: 1, hp: 20000, damage: 18, defense: 8000,  label: "Endermite" },
+    phantom:   { tier: 2, hp: 35000, damage: 28, defense: 15000, label: "Phantom" },
+    enderman:  { tier: 3, hp: 50000, damage: 40, defense: 25000, label: "Enderman" },
+    shulker:   { tier: 4, hp: 65000, damage: 32, defense: 35000, label: "Shulker" }
 };
 var END_MOB_LEVEL_HP_PER_LEVEL = 250; /* extra HP per nearby player level */
 var END_MOB_LEVEL_SCALE_CAP = 2.5;    /* max total scale from player level */
+var END_MOB_DEF_FROM_PLAYER = 1.25;   /* nearby player getDefense() contribution */
+var END_MOB_DEF_PER_LEVEL = 200;
+var END_MOB_DEF_SCALE_CAP = 3.0;
+var END_MOB_MIN_DAMAGE_FRACTION = 0.03;
 
 /* Egg reward */
 var GIVE_EGG_TO_KILLER = true;
@@ -263,13 +268,16 @@ function calcDragonDefense(power) {
 /*
  * Port of DMZ StatsData.calculatePostMitigationDamage core math
  * (flat absorb + defense / (scale + defense) percent reduction).
- * Used because the dragon cannot hold a real StatsData capability.
+ * Used because End entities cannot hold a real StatsData capability.
  */
-function mitigateWithDmzDefense(rawDamage, defense) {
+function mitigateWithDmzDefense(rawDamage, defense, minFraction) {
     var raw = Math.max(0, num(rawDamage, 0));
     var def = Math.max(0, num(defense, 0));
+    var minFrac = num(minFraction, DRAGON_MIN_DAMAGE_FRACTION);
+    if (minFrac < 0) minFrac = 0;
+    if (minFrac > 0.5) minFrac = 0.5;
     if (!(raw > 0)) return 0;
-    if (!(def > 0) || DRAGON_DEF_ENABLED !== true) return raw;
+    if (!(def > 0)) return raw;
 
     var flatMaxFrac = 0.35;
     var defScale = 12.0;
@@ -300,13 +308,13 @@ function mitigateWithDmzDefense(rawDamage, defense) {
     if (ratio < 0) ratio = 0;
 
     var taken = remaining * (1.0 - ratio);
-    var minTaken = raw * DRAGON_MIN_DAMAGE_FRACTION;
+    var minTaken = raw * minFrac;
     if (taken < minTaken) taken = minTaken;
     if (!isFinite(taken) || taken < 0) taken = minTaken;
     return taken;
 }
 
-function storeDragonDefense(entity, defense) {
+function storeEntityDefense(entity, defense) {
     defense = Math.max(0, Math.floor(num(defense, 0)));
     try {
         var temp = entity.getTempdata();
@@ -323,7 +331,7 @@ function storeDragonDefense(entity, defense) {
     } catch (e4) {}
 }
 
-function readDragonDefense(entity) {
+function readEntityDefense(entity) {
     try {
         var temp = entity.getTempdata();
         if (temp != null && temp.has(DRAGON_DEF_NBT)) {
@@ -463,8 +471,9 @@ function setAttackDamage(entity, targetDmg) {
     }
 }
 
-function nearbyPlayerLevel(entity, world) {
-    var best = 1;
+function nearbyPlayerPower(entity, world) {
+    var best = { level: 1, defense: 0, bp: 0, melee: 0, maxHp: 20, name: "?" };
+    var bestScore = -1;
     try {
         var players = world.getNearbyEntities(
             Math.floor(entity.getX()),
@@ -475,11 +484,26 @@ function nearbyPlayerLevel(entity, world) {
         );
         for (var i = 0; i < players.length; i++) {
             if (!isPlayer(players[i])) continue;
-            var lvl = readPlayerPower(players[i]).level;
-            if (lvl > best) best = lvl;
+            var p = readPlayerPower(players[i]);
+            var score = p.level * 1000 + p.defense + p.bp * 0.01;
+            if (score > bestScore) {
+                bestScore = score;
+                best = p;
+            }
         }
     } catch (e) {}
     return best;
+}
+
+function calcMobDefense(tier, power) {
+    var base = num(tier.defense, 0);
+    var def = base
+        + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER * (num(tier.tier, 1) / 4.0)
+        + num(power.level, 1) * END_MOB_DEF_PER_LEVEL * num(tier.tier, 1);
+    var maxDef = base * END_MOB_DEF_SCALE_CAP + num(power.defense, 0) * END_MOB_DEF_FROM_PLAYER;
+    if (def > maxDef && maxDef > base) def = maxDef;
+    if (def < base) def = base;
+    return Math.floor(def);
 }
 
 function buffMob(entity, world) {
@@ -489,16 +513,18 @@ function buffMob(entity, world) {
     var tier = END_MOB_TIERS[kind];
     if (tier == null) return false;
 
-    var playerLevel = nearbyPlayerLevel(entity, world);
-    var levelScale = 1 + (playerLevel * END_MOB_LEVEL_HP_PER_LEVEL) / Math.max(1, tier.hp);
+    var power = nearbyPlayerPower(entity, world);
+    var levelScale = 1 + (power.level * END_MOB_LEVEL_HP_PER_LEVEL) / Math.max(1, tier.hp);
     if (levelScale > END_MOB_LEVEL_SCALE_CAP) levelScale = END_MOB_LEVEL_SCALE_CAP;
 
     var hp = Math.floor(tier.hp * levelScale);
-    var dmg = Math.floor(tier.damage * Math.min(2.0, 1 + playerLevel / 200));
+    var dmg = Math.floor(tier.damage * Math.min(2.0, 1 + power.level / 200));
+    var def = calcMobDefense(tier, power);
 
-    markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp);
+    markBuffed(entity, kind + ":t" + tier.tier + ":hp" + hp + ":def" + def);
     setAbsoluteHealth(entity, hp);
     setAttackDamage(entity, dmg);
+    if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
     return true;
 }
 
@@ -509,7 +535,7 @@ function applyDragonStats(entity, power, sourceLabel) {
     markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
     setAbsoluteHealth(entity, hp);
     setAttackDamage(entity, dmg);
-    storeDragonDefense(entity, def);
+    storeEntityDefense(entity, def);
     try {
         entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level +
             " / " + Math.floor(hp / 1000) + "k HP / DEF " + Math.floor(def / 1000) + "k]");
@@ -795,7 +821,8 @@ function tryNaturalDragonSpawn(player) {
     if (result != null) {
         broadcastOnce(world, "end.strength.naturalAnnounce." + now,
             COLOR + "5[The End] " + COLOR + "cAn Ender Dragon has appeared! " +
-            COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP, scaled to " +
+            COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
+            Math.floor(result.defense / 1000) + "k DEF, scaled to " +
             result.power.name + ")");
     }
 }
@@ -832,12 +859,15 @@ function cmdSpawnDragon(player) {
     }
 
     msg(player, COLOR + "6[The End] " + COLOR + "eSpawned Ender Dragon with " +
-        COLOR + "c" + result.hp + COLOR + "e HP " +
-        COLOR + "8(Lv" + result.power.level + " / BP " + Math.floor(result.power.bp) + ")");
+        COLOR + "c" + result.hp + COLOR + "e HP / " +
+        COLOR + "b" + result.defense + COLOR + "e DEF " +
+        COLOR + "8(Lv" + result.power.level + " / player DEF " +
+        Math.floor(result.power.defense) + ")");
     broadcastOnce(world, "end.strength.cmdAnnounce." + nowMs(),
         COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
         COLOR + "7 summoned an Ender Dragon! " +
-        COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP)");
+        COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
+        Math.floor(result.defense / 1000) + "k DEF)");
 }
 
 function findOnlinePlayer(name) {
@@ -963,6 +993,43 @@ function kill(event) {
         scheduleCrystalClear(player);
     } catch (error) {
         try { print("[EndStrength] kill: " + error); } catch (e) {}
+    }
+}
+
+/*
+ * Apply stored DMZ-style defense when players hit the dragon.
+ * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
+ * to the post-mitigation amount before it continues.
+ */
+function damagedEntity(event) {
+    try {
+        if (DRAGON_DEF_ENABLED !== true) return;
+        var target = event.target;
+        if (target == null) return;
+        if (classifyEndEntity(target) !== "dragon") return;
+
+        var raw = Number(event.damage);
+        if (isNaN(raw) || !isFinite(raw) || raw <= 0) return;
+
+        var def = readDragonDefense(target);
+        if (!(def > 0)) {
+            /* Late/unbuffed dragon: scale from strongest End player once. */
+            try {
+                var world = target.getWorld();
+                var powerPlayer = strongestPlayerInEnd(world);
+                if (powerPlayer == null && isPlayer(event.player)) powerPlayer = event.player;
+                if (powerPlayer != null) {
+                    applyDragonStats(target, readPlayerPower(powerPlayer), "onhit");
+                    def = readDragonDefense(target);
+                }
+            } catch (e1) {}
+        }
+        if (!(def > 0)) return;
+
+        var taken = mitigateWithDmzDefense(raw, def);
+        event.damage = taken;
+    } catch (error) {
+        try { print("[EndStrength] damagedEntity: " + error); } catch (e) {}
     }
 }
 
