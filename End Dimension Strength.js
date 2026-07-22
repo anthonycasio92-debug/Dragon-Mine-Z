@@ -1,10 +1,11 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.0.1
+ Version: 2.1.0
 
  - Stronger End mobs (tiered absolute HP around ~50k)
  - Ender Dragon starts at 200,000 HP and scales with player stats
+ - Dragon uses DMZ defense mitigation (virtual DEF from player getDefense)
  - /enddragon command spawn (CMI alias -> trigger 50)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
@@ -18,6 +19,7 @@
  - tick
  - kill
  - trigger
+ - damagedEntity
 
  COMMAND:
    noppes script trigger 50 <playerName>
@@ -32,6 +34,7 @@
 var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
 var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
 var StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
+var ConfigManager = Java.type("com.dragonminez.common.config.ConfigManager");
 
 /* ========================= CONFIG ========================= */
 
@@ -57,6 +60,20 @@ var DRAGON_HP_PER_PLAYER_HP = 1.5;    /* player max HP contribution */
 var DRAGON_HP_CAP = 5000000;          /* safety cap */
 var DRAGON_DAMAGE_BASE = 80;
 var DRAGON_DAMAGE_PER_LEVEL = 1.5;
+
+/*
+ * Virtual DMZ defense on the dragon (StatsData only exists on players).
+ * We store DEF on the dragon and mitigate hits with the same
+ * calculatePostMitigationDamage-style formula DMZ uses.
+ */
+var DRAGON_DEF_ENABLED = true;
+var DRAGON_DEF_BASE = 40000;
+var DRAGON_DEF_FROM_PLAYER = 3.0;     /* player getDefense() * this */
+var DRAGON_DEF_PER_LEVEL = 750;
+var DRAGON_DEF_PER_BP = 0.08;
+var DRAGON_DEF_CAP = 2500000;
+var DRAGON_DEF_NBT = "end_strength_dragon_def";
+var DRAGON_MIN_DAMAGE_FRACTION = 0.02; /* always allow at least 2% of a hit through */
 
 /*
  * End mob tiers (absolute HP targets).
@@ -181,7 +198,10 @@ function getDmz(player) {
 }
 
 function readPlayerPower(player) {
-    var out = { level: 1, bp: 0, melee: 0, maxHp: 20, name: str(player != null ? player.getName() : "?") };
+    var out = {
+        level: 1, bp: 0, melee: 0, maxHp: 20, defense: 0,
+        name: str(player != null ? player.getName() : "?")
+    };
     if (player == null) return out;
     var data = getDmz(player);
     if (data == null) return out;
@@ -191,6 +211,7 @@ function readPlayerPower(player) {
     }
     try { out.melee = Math.max(0, num(data.getMeleeDamage(), 0)); } catch (e4) {}
     try { out.maxHp = Math.max(20, num(data.getMaxHealth(), 20)); } catch (e5) {}
+    try { out.defense = Math.max(0, num(data.getDefense(), 0)); } catch (e6) {}
     return out;
 }
 
@@ -227,6 +248,104 @@ function calcDragonDamage(power) {
     var dmg = DRAGON_DAMAGE_BASE + power.level * DRAGON_DAMAGE_PER_LEVEL;
     if (dmg < DRAGON_DAMAGE_BASE) dmg = DRAGON_DAMAGE_BASE;
     return Math.floor(dmg);
+}
+
+function calcDragonDefense(power) {
+    var def = DRAGON_DEF_BASE
+        + num(power.defense, 0) * DRAGON_DEF_FROM_PLAYER
+        + power.level * DRAGON_DEF_PER_LEVEL
+        + power.bp * DRAGON_DEF_PER_BP;
+    if (def < DRAGON_DEF_BASE) def = DRAGON_DEF_BASE;
+    if (def > DRAGON_DEF_CAP) def = DRAGON_DEF_CAP;
+    return Math.floor(def);
+}
+
+/*
+ * Port of DMZ StatsData.calculatePostMitigationDamage core math
+ * (flat absorb + defense / (scale + defense) percent reduction).
+ * Used because the dragon cannot hold a real StatsData capability.
+ */
+function mitigateWithDmzDefense(rawDamage, defense) {
+    var raw = Math.max(0, num(rawDamage, 0));
+    var def = Math.max(0, num(defense, 0));
+    if (!(raw > 0)) return 0;
+    if (!(def > 0) || DRAGON_DEF_ENABLED !== true) return raw;
+
+    var flatMaxFrac = 0.35;
+    var defScale = 12.0;
+    var reductionCap = 0.85;
+    try {
+        var cfg = ConfigManager.getCombatConfig();
+        try { flatMaxFrac = num(cfg.getFlatMitigationMaxAbsorbFraction(), flatMaxFrac); } catch (e1) {}
+        try { defScale = num(cfg.getDefenseReductionScale(), defScale); } catch (e2) {}
+        try {
+            var capObj = cfg.getBaseDamageReductionCap();
+            if (capObj != null) reductionCap = num(capObj.doubleValue ? capObj.doubleValue() : capObj, reductionCap);
+        } catch (e3) {}
+    } catch (eCfg) {}
+
+    if (defScale < 1) defScale = 1;
+    if (flatMaxFrac < 0) flatMaxFrac = 0;
+    if (flatMaxFrac > 1) flatMaxFrac = 1;
+    if (reductionCap < 0) reductionCap = 0;
+    if (reductionCap > 0.95) reductionCap = 0.95;
+
+    var flatCap = raw * flatMaxFrac;
+    var flatAbsorb = def < flatCap ? def : flatCap;
+    var remaining = raw - flatAbsorb;
+    if (remaining < 0) remaining = 0;
+
+    var ratio = def / (defScale + def);
+    if (ratio > reductionCap) ratio = reductionCap;
+    if (ratio < 0) ratio = 0;
+
+    var taken = remaining * (1.0 - ratio);
+    var minTaken = raw * DRAGON_MIN_DAMAGE_FRACTION;
+    if (taken < minTaken) taken = minTaken;
+    if (!isFinite(taken) || taken < 0) taken = minTaken;
+    return taken;
+}
+
+function storeDragonDefense(entity, defense) {
+    defense = Math.max(0, Math.floor(num(defense, 0)));
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null) temp.put(DRAGON_DEF_NBT, "" + defense);
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return;
+        var nbt = mc.getPersistentData();
+        try { nbt.putDouble(DRAGON_DEF_NBT, defense); }
+        catch (e2) {
+            try { nbt.m_128347_(DRAGON_DEF_NBT, defense); } catch (e3) {}
+        }
+    } catch (e4) {}
+}
+
+function readDragonDefense(entity) {
+    try {
+        var temp = entity.getTempdata();
+        if (temp != null && temp.has(DRAGON_DEF_NBT)) {
+            var t = num(temp.get(DRAGON_DEF_NBT), -1);
+            if (t >= 0) return t;
+        }
+    } catch (e1) {}
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return 0;
+        var nbt = mc.getPersistentData();
+        var has = false;
+        try { has = nbt.contains(DRAGON_DEF_NBT) === true; } catch (e2) {
+            try { has = nbt.m_128441_(DRAGON_DEF_NBT) === true; } catch (e3) {}
+        }
+        if (!has) return 0;
+        try { return Math.max(0, num(nbt.getDouble(DRAGON_DEF_NBT), 0)); }
+        catch (e4) {
+            try { return Math.max(0, num(nbt.m_128459_(DRAGON_DEF_NBT), 0)); } catch (e5) {}
+        }
+    } catch (e6) {}
+    return 0;
 }
 
 function entityKey(entity) {
@@ -386,14 +505,16 @@ function buffMob(entity, world) {
 function applyDragonStats(entity, power, sourceLabel) {
     var hp = calcDragonHp(power);
     var dmg = calcDragonDamage(power);
-    markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp);
+    var def = calcDragonDefense(power);
+    markBuffed(entity, "dragon:" + sourceLabel + ":hp" + hp + ":def" + def);
     setAbsoluteHealth(entity, hp);
     setAttackDamage(entity, dmg);
+    storeDragonDefense(entity, def);
     try {
-        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level + " / " +
-            Math.floor(hp / 1000) + "k HP]");
+        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" + power.level +
+            " / " + Math.floor(hp / 1000) + "k HP / DEF " + Math.floor(def / 1000) + "k]");
     } catch (e) {}
-    return hp;
+    return { hp: hp, damage: dmg, defense: def };
 }
 
 function findDragons(world) {
@@ -444,8 +565,13 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
     }
     if (dragon == null) return null;
 
-    var hp = applyDragonStats(dragon, power, sourceLabel);
-    return { dragon: dragon, hp: hp, power: power };
+    var stats = applyDragonStats(dragon, power, sourceLabel);
+    return {
+        dragon: dragon,
+        hp: stats.hp,
+        defense: stats.defense,
+        power: power
+    };
 }
 
 /* ========================= EGG REWARD ========================= */
@@ -616,8 +742,6 @@ function claimEggReward(player, victim) {
         try { player.getTempdata().put(TEMP_EGG_CLEAR, "" + EGG_CLEAR_ATTEMPTS); } catch (e6) {}
         clearDragonEggBlocks(world);
     }
-
-    scheduleCrystalClear(player);
 }
 
 /* ========================= NATURAL / COMMAND SPAWN ========================= */
