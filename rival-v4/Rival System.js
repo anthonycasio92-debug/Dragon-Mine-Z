@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.8
+ Version: 4.6.9
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -354,7 +354,8 @@ function rcLinkStatus(link) {
         return "mutual";
     }
     if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
-    if (link.declaredByMe === true || link.declaredByThem === true || link.inviteSent === true) {
+    if (link.declaredByMe === true || link.declaredByThem === true ||
+        link.inviteSent === true || link.inviteReceived === true) {
         return "unknown";
     }
     return "none";
@@ -383,6 +384,7 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.declaredByMe = link.declaredByMe === true;
     link.declaredByThem = link.declaredByThem === true;
     link.inviteSent = link.inviteSent === true;
+    link.inviteReceived = link.inviteReceived === true;
     link.mutualAccepted = link.mutualAccepted === true;
     link.isNemesis = link.isNemesis === true && link.mutual === true;
     link.points = Math.max(0, rcNumber(link.points, 0));
@@ -1034,6 +1036,7 @@ function rcArchiveRivalLink(ownerRecord, rivalUuid) {
     snap.declaredByMe = false;
     snap.declaredByThem = false;
     snap.inviteSent = false;
+    snap.inviteReceived = false;
     snap.mutualAccepted = false;
     snap.mutualSince = 0;
     snap.status = "archived";
@@ -1057,6 +1060,7 @@ function rcRestorePastRival(ownerRecord, targetRecord) {
     link.declaredByMe = false;
     link.declaredByThem = false;
     link.inviteSent = false;
+    link.inviteReceived = false;
     link.mutualAccepted = false;
     link.mutualSince = 0;
     link.updatedAt = rcNow();
@@ -1153,26 +1157,61 @@ function rcGetRequest(database, fromUuid, toUuid) {
 
     var createdAt = rcNumber(request.createdAt, 0);
     if (createdAt <= 0 || rcNow() - createdAt > RC_REQUEST_EXPIRE_MS) {
+        rcClearInviteFlags(database, fromUuid, toUuid);
         delete database.requests[key];
         return null;
     }
     return request;
 }
 
-function rcRemoveRequestsBetween(database, uuidA, uuidB) {
-    delete database.requests[rcRequestKey(uuidA, uuidB)];
-    delete database.requests[rcRequestKey(uuidB, uuidA)];
-}
-
 function rcCleanupExpiredRequests(database) {
     var now = rcNow();
     for (var key in database.requests) {
         if (!database.requests.hasOwnProperty(key)) continue;
-        var createdAt = rcNumber(database.requests[key].createdAt, 0);
+        var req = database.requests[key];
+        var createdAt = rcNumber(req.createdAt, 0);
         if (createdAt <= 0 || now - createdAt > RC_REQUEST_EXPIRE_MS) {
+            rcClearInviteFlags(database, req.fromUuid, req.toUuid);
             delete database.requests[key];
         }
     }
+}
+
+function rcClearInviteFlags(database, fromU, toU) {
+    var from = database.players[fromU];
+    var to = database.players[toU];
+    if (from !== null && from !== undefined && from.rivals[toU] !== undefined) {
+        var fl = from.rivals[toU];
+        fl.inviteSent = false;
+        if (fl.declaredByMe !== true) fl.inviteReceived = false;
+        if (fl.declaredByMe !== true && fl.declaredByThem !== true &&
+            fl.inviteReceived !== true && fl.mutual !== true) {
+            delete from.rivals[toU];
+        } else {
+            rcRefreshLinkStatus(fl);
+        }
+    }
+    if (to !== null && to !== undefined && to.rivals[fromU] !== undefined) {
+        var tl = to.rivals[fromU];
+        tl.inviteReceived = false;
+        if (tl.declaredByMe !== true) tl.declaredByThem = false;
+        if (tl.declaredByMe !== true && tl.declaredByThem !== true &&
+            tl.inviteSent !== true && tl.mutual !== true) {
+            delete to.rivals[fromU];
+        } else {
+            rcRefreshLinkStatus(tl);
+        }
+    }
+}
+
+function rcRemoveRequestsBetween(database, uuidA, uuidB) {
+    if (database.requests[rcRequestKey(uuidA, uuidB)] !== undefined ||
+        database.requests[rcRequestKey(uuidB, uuidA)] !== undefined) {
+        rcClearInviteFlags(database, uuidA, uuidB);
+        rcClearInviteFlags(database, uuidB, uuidA);
+    }
+    delete database.requests[rcRequestKey(uuidA, uuidB)];
+    delete database.requests[rcRequestKey(uuidB, uuidA)];
 }
 
 /* ========================= CORE OPERATIONS ========================= */
@@ -1186,6 +1225,7 @@ function rcFormDeclared(database, playerRecord, targetRecord, note) {
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = true;
     playerRival.inviteSent = false;
+    playerRival.inviteReceived = false;
     playerRival.mutualAccepted = false;
     if (rcNumber(playerRival.firstMetAt, 0) <= 0) playerRival.firstMetAt = now;
     rcRefreshLinkStatus(playerRival);
@@ -1195,6 +1235,7 @@ function rcFormDeclared(database, playerRecord, targetRecord, note) {
     targetRival.declaredByMe = true;
     targetRival.declaredByThem = true;
     targetRival.inviteSent = false;
+    targetRival.inviteReceived = false;
     targetRival.mutualAccepted = false;
     if (rcNumber(targetRival.firstMetAt, 0) <= 0) targetRival.firstMetAt = now;
     rcRefreshLinkStatus(targetRival);
@@ -1214,6 +1255,7 @@ function rcFormMutual(database, playerRecord, targetRecord, note) {
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = true;
     playerRival.inviteSent = false;
+    playerRival.inviteReceived = false;
     playerRival.mutualAccepted = false;
     playerRival.mutualSince = now;
     if (rcNumber(playerRival.firstMetAt, 0) <= 0) playerRival.firstMetAt = now;
@@ -1224,6 +1266,7 @@ function rcFormMutual(database, playerRecord, targetRecord, note) {
     targetRival.declaredByMe = true;
     targetRival.declaredByThem = true;
     targetRival.inviteSent = false;
+    targetRival.inviteReceived = false;
     targetRival.mutualAccepted = false;
     targetRival.mutualSince = now;
     if (rcNumber(targetRival.firstMetAt, 0) <= 0) targetRival.firstMetAt = now;
@@ -1307,6 +1350,11 @@ function rcDeclare(player, targetName) {
         return;
     }
 
+    /* Cancel my own pending Mutual invite if I switch to silent rival. */
+    if (rcGetRequest(database, playerUuid, targetUuid) !== null) {
+        rcRemoveRequestsBetween(database, playerUuid, targetUuid);
+    }
+
     var theirLink = targetRecord.rivals[playerUuid];
     var theyRivaledMe = theirLink !== null && theirLink !== undefined &&
         theirLink.declaredByMe === true && theirLink.mutual !== true;
@@ -1315,6 +1363,8 @@ function rcDeclare(player, targetName) {
         rcRemoveRequestsBetween(database, playerUuid, targetUuid);
         database.cooldowns[cooldownKey] = rcNow();
         playerRecord.totals.declarationsSent++;
+        rcRecalcCareerRp(playerRecord);
+        rcRecalcCareerRp(targetRecord);
         rcSaveDatabase(player, database);
         rcMessage(player, RC_COLOR + "e" + RC_COLOR + "lDECLARED! " + RC_COLOR + "e" + targetRecord.name);
         rcMessage(player, RC_COLOR + "8You both rivaled each other. Propose Mutual with  " +
@@ -1329,12 +1379,14 @@ function rcDeclare(player, targetName) {
     playerRival.declaredByMe = true;
     playerRival.declaredByThem = false;
     playerRival.inviteSent = false;
+    playerRival.inviteReceived = false;
     playerRival.mutual = false;
     rcRefreshLinkStatus(playerRival);
     rcPushHistory(playerRival, "declare", "Silent rivalry.");
 
     database.cooldowns[cooldownKey] = rcNow();
     playerRecord.totals.declarationsSent++;
+    rcRecalcCareerRp(playerRecord);
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "7Unknown Rival: " + RC_COLOR + "e" + targetRecord.name);
@@ -1411,7 +1463,7 @@ function rcRequest(player, targetName) {
     rcPushHistory(playerRival, "request", "Sent Mutual request.");
 
     var targetRival = rcGetOrCreateRival(targetRecord, playerRecord);
-    targetRival.declaredByThem = true;
+    targetRival.inviteReceived = true;
     targetRival.mutual = false;
     rcRefreshLinkStatus(targetRival);
     rcPushHistory(targetRival, "requested_by", "Received Mutual request.");
@@ -1480,12 +1532,6 @@ function rcAccept(player, targetName) {
         link.mutualAccepted = true;
         rcRefreshLinkStatus(link);
         if (their.mutualAccepted === true) {
-            var onlineDec = rcFindOnlinePlayerAnyWorld(fromRecord.name);
-            if (onlineDec === null) {
-                rcMessage(player, RC_COLOR + "cThey must be online to finish Mutual.");
-                rcSaveDatabase(player, database);
-                return;
-            }
             rcFormMutual(database, playerRecord, fromRecord, "Both accepted Declared rivalry.");
             rcRemoveRequestsBetween(database, fromRecord.uuid, playerRecord.uuid);
             playerRecord.totals.declarationsAccepted++;
@@ -1493,8 +1539,11 @@ function rcAccept(player, targetName) {
             rcSaveDatabase(player, database);
             rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + fromRecord.name);
             rcMessage(player, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
-            rcMessage(onlineDec, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
-            rcMessage(onlineDec, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+            var onlineDec = rcFindOnlinePlayerAnyWorld(fromRecord.name);
+            if (onlineDec !== null) {
+                rcMessage(onlineDec, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
+                rcMessage(onlineDec, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+            }
             return;
         }
         rcSaveDatabase(player, database);
@@ -1601,15 +1650,20 @@ function rcRemove(player, targetName) {
             kept.isNemesis = false;
             kept.declaredByThem = false;
             kept.inviteSent = false;
+            kept.inviteReceived = false;
             kept.mutualAccepted = false;
             kept.mutualSince = 0;
-            if (kept.declaredByMe !== true) kept.declaredByMe = true;
-            rcRefreshLinkStatus(kept);
-            rcPushHistory(kept, "demoted", playerRecord.name + " ended Declared rivalry");
+            if (kept.declaredByMe === true) {
+                rcRefreshLinkStatus(kept);
+                rcPushHistory(kept, "demoted", playerRecord.name + " ended Declared rivalry");
+            } else {
+                delete targetRecord.rivals[playerRecord.uuid];
+            }
         }
     } else if (targetRecord.rivals[playerRecord.uuid] !== undefined) {
         var theirLink = targetRecord.rivals[playerRecord.uuid];
         theirLink.declaredByThem = false;
+        theirLink.inviteReceived = false;
         theirLink.inviteSent = false;
         if (theirLink.declaredByMe !== true && theirLink.mutual !== true) {
             delete targetRecord.rivals[playerRecord.uuid];
@@ -3515,19 +3569,26 @@ function chEnsureCorePlayer(core, player) {
                 declarationsAccepted: 0,
                 declarationsDeclined: 0,
                 rivalsRemoved: 0
-            }
+            },
+            pastRivals: {}
         };
         core.players[uuid] = record;
     }
     record.name = name;
     record.nameLower = name.toLowerCase();
     if (record.rivals === null || typeof record.rivals !== "object") record.rivals = {};
+    if (record.pastRivals === null || typeof record.pastRivals !== "object") record.pastRivals = {};
     if (record.career === null || typeof record.career !== "object") record.career = {};
     return record;
 }
 
 function chEnsureLink(owner, target) {
     if (owner.rivals[target.uuid] === undefined) {
+        var restored = rcRestorePastRival(owner, target);
+        if (restored !== null) {
+            rcRecalcCareerRp(owner);
+            return restored;
+        }
         var t = chNow();
         owner.rivals[target.uuid] = {
             uuid: target.uuid,
