@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.7.3
+ Version: 2.7.4
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -13,10 +13,13 @@
    TP boosts. Absurd vanilla HP → billions of TP. So HP stays modest and
    DEF carries the fight (flat absorb + % reduction like DMZ).
  - Per-hit damage caps remain as a safety net vs one-shot skills.
+ - Dragon max_health is applied ONCE (spawn / real HP change only). Constant
+   attribute rewrites break EndDragonFight phase AI. No orphan /summon.
 
  FEATURES:
- - Dragon always scales to the strongest player currently in The End
- - Dragon spawned via EndDragonFight (not orphan /summon)
+ - Dragon always scales DEF to the strongest End player; HP grows only when needed
+ - Dragon spawned via EndDragonFight only (orphan summon disabled — broken AI)
+ - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
  - End mobs ~10–22 matched hits
  - /enddragon command spawn (CMI alias -> trigger 50)
@@ -166,7 +169,7 @@ var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
 var COLOR = "\u00A7";
-var BUFF_TAG = "end_strength_v14"; /* v14 = DMZ HP mirror + DEF-carried toughness */
+var BUFF_TAG = "end_strength_v15"; /* v15 = preserve dragon AI; clearer already-alive */
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
 var TEMP_CRYSTAL_CLEAR = "end.strength.crystalClear";
@@ -743,6 +746,17 @@ function applyRealMaxHealth(entity, targetHp) {
     /* Final safety: never write a TP-breaking max_health value. */
     targetHp = Math.max(1, Math.floor(num(targetHp, 1)));
     if (targetHp > DRAGON_HP_CAP) targetHp = DRAGON_HP_CAP;
+
+    /*
+     * If max HP is already correct, do NOT remove/re-add modifiers.
+     * Constant attribute rewrites break Ender Dragon phase / movement AI.
+     */
+    var curMax = getEntityMaxHealthSafe(entity);
+    if (Math.abs(curMax - targetHp) < 1.0) {
+        putNbtNumber(entity, END_STRENGTH_MAX_NBT, targetHp);
+        return true;
+    }
+
     ensureMaxHealthAttributeUncapped();
 
     /* Prefer AttributeModifier (same pattern DMZ uses for player HP). */
@@ -1200,27 +1214,32 @@ function applyDragonStats(entity, power, sourceLabel) {
     var newCurrent = hp;
     var score = powerScore(power);
     var overTpSafe = prevMax > DRAGON_HP_CAP + 1;
+    var midFight = (sourceLabel === "rescale" || sourceLabel === "onhit" || sourceLabel === "strongest") && alreadyBuffed(entity);
+    var touchHealth = true;
 
-    /* Mid-fight rescale to a stronger End player: grow HP, keep remaining %. */
-    if (prevMax > 20 && prevHp > 0 && (sourceLabel === "rescale" || sourceLabel === "onhit" || sourceLabel === "strongest") && alreadyBuffed(entity)) {
+    /* Mid-fight: only rewrite max_health when HP must actually change. */
+    if (midFight && prevMax > 20 && prevHp > 0) {
         var ratio = prevHp / prevMax;
         if (!(ratio >= 0)) ratio = 1;
         if (ratio > 1) ratio = 1;
         if (overTpSafe) {
-            /* Old multi-million HP must shrink immediately — it breaks kill TP. */
             newCurrent = Math.max(1, Math.floor(hp * ratio));
-        } else if (hp >= prevMax) {
+            touchHealth = true;
+        } else if (hp > prevMax + 500) {
             newCurrent = Math.max(1, Math.floor(hp * ratio));
-            if (hp > prevMax) newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
+            newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
+            touchHealth = true;
         } else {
-            /* Do not shrink mid-fight if the strongest player is weaker than peak. */
+            /* DEF/name rescale only — leave attributes alone (keeps dragon AI). */
             newCurrent = prevHp;
             hp = prevMax;
+            touchHealth = false;
         }
         if (newCurrent > hp) newCurrent = hp;
-        ensureMaxHealthAttributeUncapped();
-        applyRealMaxHealth(entity, hp);
-        setEntityHealthSafe(entity, newCurrent);
+        if (touchHealth === true) {
+            applyRealMaxHealth(entity, hp);
+            setEntityHealthSafe(entity, newCurrent);
+        }
     } else {
         setAbsoluteHealth(entity, hp, "dragon");
         newCurrent = hp;
@@ -1230,7 +1249,10 @@ function applyDragonStats(entity, power, sourceLabel) {
     storeEntityDefense(entity, def);
     storeDmzHpSource(entity, num(power != null ? power.maxHp : 0, 0));
     storeHitTarget(entity, DRAGON_TARGET_HITS);
-    setEntityBattlePower(entity, calcEndBattlePower("dragon", power, hp));
+    /* Pin BP once; avoid rewriting every rescale tick. */
+    if (!midFight || touchHealth === true || !alreadyBuffed(entity)) {
+        setEntityBattlePower(entity, calcEndBattlePower("dragon", power, hp));
+    }
     try {
         var temp = entity.getTempdata();
         if (temp != null) {
@@ -1279,20 +1301,25 @@ function maybeRescaleDragon(entity, world, player) {
     } catch (e2) {}
 
     var strongerArrived = desiredScore > lastScore * (1.0 + DRAGON_SCALE_SCORE_EPSILON) + 1;
-    var needs = !alreadyBuffed(entity)
-        || !(curDef > 0)
+    var needsHp = !alreadyBuffed(entity)
         || desiredHp > curMax + 500
-        || curMax > DRAGON_HP_CAP + 1 /* shrink legacy multi-million HP */
-        || desiredDef > curDef + 500
-        || strongerArrived;
+        || curMax > DRAGON_HP_CAP + 1;
+    var needsDef = !(curDef > 0) || Math.abs(desiredDef - curDef) > 100 || strongerArrived;
 
-    if (!needs) {
-        /* Still keep DEF locked to strongest even on tiny drifts. */
-        if (Math.abs(desiredDef - curDef) > 100) {
-            storeEntityDefense(entity, desiredDef);
-            updateDragonName(entity, power, curMax, desiredDef);
-        }
-        return false;
+    if (!needsHp && !needsDef) return false;
+
+    /* DEF-only updates must not rewrite max_health attributes. */
+    if (!needsHp && needsDef) {
+        storeEntityDefense(entity, desiredDef);
+        try {
+            var t3 = entity.getTempdata();
+            if (t3 != null) {
+                t3.put(TEMP_DRAGON_SCALE_SCORE, "" + desiredScore);
+                t3.put(TEMP_DRAGON_SCALE_NAME, power != null ? str(power.name) : "?");
+            }
+        } catch (e3) {}
+        updateDragonName(entity, power, curMax, desiredDef);
+        return true;
     }
 
     var label = alreadyBuffed(entity) ? "strongest" : "scan";
@@ -1302,14 +1329,63 @@ function maybeRescaleDragon(entity, world, player) {
 
 function findDragons(world) {
     var found = [];
+    var seen = {};
     if (world == null) return found;
+
+    function pushDragon(ent) {
+        if (ent == null) return;
+        var id = "";
+        try { id = str(ent.getUUID()); } catch (e0) {
+            try { id = str(ent.getMCEntity().m_20148_()); } catch (e1) {
+                id = str(ent.getX()) + "," + str(ent.getY()) + "," + str(ent.getZ());
+            }
+        }
+        if (seen[id] === true) return;
+        seen[id] = true;
+        found.push(ent);
+    }
+
     try {
         var list = world.getAllEntities(-1);
         for (var i = 0; i < list.length; i++) {
-            if (classifyEndEntity(list[i]) === "dragon") found.push(list[i]);
+            if (classifyEndEntity(list[i]) === "dragon") pushDragon(list[i]);
         }
     } catch (e) {}
+
+    /* MC-level backup — CNPC scans sometimes miss the fight dragon. */
+    try {
+        var level = getMcServerLevel(world);
+        if (level != null) {
+            var EntityType = Java.type("net.minecraft.world.entity.EntityType");
+            var AABB = Java.type("net.minecraft.world.phys.AABB");
+            var box = new AABB(-600.0, 0.0, -600.0, 600.0, 320.0, 600.0);
+            var mcList = null;
+            try {
+                mcList = level.getEntities(EntityType.ENDER_DRAGON, box, function (e) { return e != null && e.isAlive(); });
+            } catch (e2) {
+                try {
+                    mcList = level.m_45976_(EntityType.f_20530_, box, function (e) { return e != null && e.m_6084_(); });
+                } catch (e3) {}
+            }
+            if (mcList != null) {
+                var it = mcList.iterator();
+                while (it.hasNext()) {
+                    pushDragon(wrapMcEntity(it.next()));
+                }
+            }
+        }
+    } catch (e4) {}
+
     return found;
+}
+
+function notifyDragonAlreadyAlive(player, dragons) {
+    var n = dragons != null ? dragons.length : 0;
+    var line = COLOR + "c[The End] " + COLOR + "eA dragon is already alive"
+        + (n > 1 ? COLOR + "7 (" + n + ")" : "")
+        + COLOR + "c — defeat it before spawning another.";
+    msg(player, line);
+    try { print("[EndStrength] " + str(player != null ? player.getName() : "?") + ": dragon already alive (" + n + ")"); } catch (e1) {}
 }
 
 function wrapMcEntity(mcEntity) {
@@ -1542,13 +1618,16 @@ function spawnDragonEntityFallback(world, x, y, z) {
 }
 
 function spawnDragonEntity(world, x, y, z) {
+    /*
+     * Fight-manager spawn ONLY. Orphan createEntity//summon dragons have no
+     * EndDragonFight link → broken perch/charge/crystal AI.
+     */
     var viaFight = spawnDragonViaFight(world);
     if (viaFight != null) return viaFight;
     try {
-        print("[EndStrength] EndDragonFight spawn failed; using fallback summon (AI may be limited).");
+        print("[EndStrength] EndDragonFight spawn failed — refusing orphan summon (keeps AI intact).");
     } catch (e1) {}
-    clearAllDragons(world);
-    return spawnDragonEntityFallback(world, x, y, z);
+    return null;
 }
 
 function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
@@ -1833,7 +1912,7 @@ function tryNaturalDragonSpawn(player) {
 }
 
 function cmdSpawnDragon(player) {
-    if (!isPlayer(player)) return;
+    if (!isRealOnlinePlayer(player) && !isPlayer(player)) return;
     var world = getEndWorld();
     if (world == null) {
         msg(player, COLOR + "c[The End] Could not find The End world.");
@@ -1842,7 +1921,7 @@ function cmdSpawnDragon(player) {
 
     var existing = findDragons(world);
     if (existing.length > 0) {
-        msg(player, COLOR + "c[The End] A dragon is already alive.");
+        notifyDragonAlreadyAlive(player, existing);
         return;
     }
 
@@ -1859,7 +1938,13 @@ function cmdSpawnDragon(player) {
 
     var result = spawnScaledDragon(world, player, "command", x, y, z);
     if (result == null) {
-        msg(player, COLOR + "c[The End] Failed to spawn the dragon.");
+        /* Race / scan miss: dragon appeared (or was always there). */
+        existing = findDragons(world);
+        if (existing.length > 0) {
+            notifyDragonAlreadyAlive(player, existing);
+            return;
+        }
+        msg(player, COLOR + "c[The End] Failed to spawn the dragon through EndDragonFight.");
         return;
     }
 
@@ -1972,7 +2057,14 @@ function tick(event) {
                 var ent = list[i];
                 var kind = classifyEndEntity(ent);
                 if (kind === "dragon") {
-                    repairEndHealthIfStripped(ent, "dragon");
+                    /* Soft repair only — avoid thrashing attributes (breaks AI). */
+                    try {
+                        var intended = readNbtNumber(ent, END_STRENGTH_MAX_NBT);
+                        var curMax = getEntityMaxHealthSafe(ent);
+                        if (intended > 0 && curMax + 1 < intended * 0.5) {
+                            repairEndHealthIfStripped(ent, "dragon");
+                        }
+                    } catch (eRep) {}
                     maybeRescaleDragon(ent, world, player);
                 } else if (kind != null) {
                     repairEndHealthIfStripped(ent, kind);
