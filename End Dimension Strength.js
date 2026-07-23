@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.7.1
+ Version: 2.7.2
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -25,22 +25,19 @@
  - End crystals destroyed after each dragon kill
  - Kill announce fires once (no chat spam)
 
- PLACE AS:
- CustomNPCs Global Player Script — OWN tab (do not merge with other .js)
-
- REQUIRED EVENTS:
- - tick
- - kill
- - trigger
- - damagedEntity
+ INSTALL (BOTH required for /enddragon from console or CMI):
+ 1) Global Player — End Dimension Strength.js (OWN tab)
+    events: tick, kill, trigger, damagedEntity
+ 2) Global Forge — EndDragon-Forge-Trigger.js (OWN tab)
+    event: trigger
+    Forwards trigger 50 when the command source is console/FakePlayer.
+    Without this, `noppes script trigger 50 <name>` from console does nothing.
 
  COMMAND:
    noppes script trigger 50 <playerName>
 
  CMI alias (see EndDragon-Alias.yml):
-   MUST use asOp! — NOT asFakeOp!
-   CustomNPCs ignores player-script triggers from FakePlayer sources,
-   so asFakeOp! makes /enddragon appear to do nothing.
+   Prefer asOp!. asFakeOp! needs the Forge bridge above.
 ============================================================
 */
 
