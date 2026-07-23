@@ -176,7 +176,8 @@ var CRYSTAL_CLEAR_ATTEMPTS = 12;
 var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
-var COLOR = "\u00A7";
+/* Same as Sparring — fromCharCode is more reliable than "\u00A7" in CNPC. */
+var COLOR = String.fromCharCode(167);
 var BUFF_TAG = "end_strength_v15"; /* v15 = preserve dragon AI; clearer already-alive */
 var TEMP_SCAN = "end.strength.scan";
 var TEMP_EGG_CLEAR = "end.strength.eggClear";
@@ -287,8 +288,23 @@ function num(v, f) {
     var n = Number(v);
     return isNaN(n) || !isFinite(n) ? f : n;
 }
+function chatColor(code) {
+    return COLOR + str(code);
+}
+
+/* Strip fancy dashes / stray CR that break Minecraft legacy color parsing. */
+function sanitizeChat(text) {
+    var s = str(text);
+    try { s = s.split("\r").join(""); } catch (e0) {}
+    try { s = s.split("\u2014").join("-"); } catch (e1) {} /* em dash */
+    try { s = s.split("\u2013").join("-"); } catch (e2) {} /* en dash */
+    return s;
+}
+
 function msg(player, text) {
-    try { if (player != null) player.message(text); } catch (e) {}
+    try {
+        if (player != null) player.message(sanitizeChat(text));
+    } catch (e) {}
 }
 
 function broadcastOnce(world, lockKey, text) {
@@ -1446,12 +1462,13 @@ function updateDragonName(entity, power, hp, def) {
     try {
         var who = (power != null && power.name) ? str(power.name) : "?";
         var src = num(power != null ? power.maxHp : 0, 0);
-        entity.setName(COLOR + "cEnder Dragon " + COLOR + "8[Lv" +
-            (power != null ? power.level : 1) + " / " + formatHpLabel(hp) +
-            " HP / DEF " + formatHpLabel(def) +
-            COLOR + "7 vs " + who +
-            (src > 0 ? COLOR + "8 | DMZ " + formatHpLabel(src) : "") +
-            COLOR + "8]");
+        entity.setName(
+            chatColor("c") + "Ender Dragon " +
+            chatColor("8") + "[Lv" + (power != null ? power.level : 1) +
+            " / " + formatHpLabel(hp) + " HP / DEF " + formatHpLabel(def) +
+            chatColor("7") + " vs " + who +
+            (src > 0 ? chatColor("8") + " | DMZ " + formatHpLabel(src) : "") +
+            chatColor("8") + "]");
     } catch (e) {}
 }
 
@@ -1662,8 +1679,11 @@ function processEndKillTpClawback(player) {
     var fair = estimateFairEndKillTp(player, kind);
     var delta = fair - awarded;
     if (Math.abs(delta) <= 1) {
-        msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
-            COLOR + "7 TP" + COLOR + "8 (End payout)");
+        msg(player,
+            chatColor("6") + "[End] " +
+            chatColor("e") + "+" + formatHpLabel(fair) +
+            chatColor("7") + " TP" +
+            chatColor("8") + " (End payout)");
         return false;
     }
 
@@ -1671,11 +1691,15 @@ function processEndKillTpClawback(player) {
 
     var label = kind === "dragon" ? "Ender Dragon" : str(kind);
     if (delta > 0) {
-        msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
-            COLOR + "7 TP for defeating " + COLOR + "d" + label +
-            COLOR + "8 (End payout; was " + formatHpLabel(awarded) + ")");
+        msg(player,
+            chatColor("6") + "[End] " +
+            chatColor("e") + "+" + formatHpLabel(fair) +
+            chatColor("7") + " TP for defeating " +
+            chatColor("d") + label +
+            chatColor("8") + " (End payout; was " + formatHpLabel(awarded) + ")");
     } else {
-        msg(player, COLOR + "7[End] Kill TP settled to End payout (" +
+        msg(player,
+            chatColor("7") + "[End] Kill TP settled to End payout (" +
             formatHpLabel(fair) + " TP after boosts).");
     }
     return true;
@@ -1803,8 +1827,9 @@ function buffMob(entity, world) {
     else setAttackDamage(entity, ENDERMAN_ATTACK_DAMAGE);
     if (END_MOB_DEF_ENABLED === true) storeEntityDefense(entity, def);
     try {
-        entity.setName(COLOR + "d" + tier.label + COLOR + "8[" +
-            formatHpLabel(hp) + " HP / DEF " + formatHpLabel(def) + "]");
+        entity.setName(
+            chatColor("d") + tier.label +
+            chatColor("8") + "[" + formatHpLabel(hp) + " HP / DEF " + formatHpLabel(def) + "]");
     } catch (eName) {}
     return true;
 }
@@ -2029,9 +2054,9 @@ function findDragons(world) {
 
 function notifyDragonAlreadyAlive(player, dragons) {
     var n = dragons != null ? dragons.length : 0;
-    var line = COLOR + "c[The End] " + COLOR + "eA dragon is already alive"
-        + (n > 1 ? COLOR + "7 (" + n + ")" : "")
-        + COLOR + "c — defeat it before spawning another.";
+    var line = chatColor("c") + "[The End] " + chatColor("e") + "A dragon is already alive"
+        + (n > 1 ? chatColor("7") + " (" + n + ")" : "")
+        + chatColor("c") + " - defeat it before spawning another.";
     msg(player, line);
     try { print("[EndStrength] " + str(player != null ? player.getName() : "?") + ": dragon already alive (" + n + ")"); } catch (e1) {}
 }
@@ -2762,16 +2787,20 @@ function claimEggReward(player, victim) {
         if (giveDragonEgg(recipients[r])) {
             given++;
             if (ANNOUNCE_EGG_TO_KILLER === true) {
-                msg(recipients[r], COLOR + "6[The End] " + COLOR + "eYou received the " +
-                    COLOR + "dDragon Egg" + COLOR + "e!");
+                msg(recipients[r],
+                    chatColor("6") + "[The End] " +
+                    chatColor("e") + "You received the " +
+                    chatColor("d") + "Dragon Egg" +
+                    chatColor("e") + "!");
             }
         }
     }
 
     if (ANNOUNCE_EGG_SERVER === true && given > 0) {
         broadcastOnce(world, WORLD_ANNOUNCE_LOCK + lockKey,
-            COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
-            COLOR + "7 defeated the Ender Dragon and claimed the egg!");
+            chatColor("5") + "[The End] " +
+            chatColor("d") + str(player.getName()) +
+            chatColor("7") + " defeated the Ender Dragon and claimed the egg!");
     }
 
     if (REMOVE_EGG_BLOCK === true) {
@@ -2827,9 +2856,10 @@ function tryNaturalDragonSpawn(player) {
 
     if (result != null) {
         broadcastOnce(world, "end.strength.naturalAnnounce." + now,
-            COLOR + "5[The End] " + COLOR + "cAn Ender Dragon has appeared! " +
-            COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
-            Math.floor(result.defense / 1000) + "k DEF, scaled to " +
+            chatColor("5") + "[The End] " +
+            chatColor("c") + "An Ender Dragon has appeared! " +
+            chatColor("8") + "(" + formatHpLabel(result.hp) + " HP / " +
+            formatHpLabel(result.defense) + " DEF, scaled to " +
             result.power.name + ")");
     }
 }
@@ -2893,7 +2923,7 @@ function processCmdSpawnRequest(player) {
     try {
         print("[EndStrength] Processing queued /enddragon for " + myName);
     } catch (eLog) {}
-    msg(player, COLOR + "7[The End] Processing dragon spawn request...");
+    msg(player, chatColor("7") + "[The End] Processing dragon spawn request...");
     cmdSpawnDragon(player, { queueRetry: false });
     return true;
 }
@@ -2933,7 +2963,7 @@ function cmdSpawnDragon(player, opts) {
     if (world == null) world = wrapEndWorld(endLevel);
 
     if (world == null && endLevel == null) {
-        msg(player, COLOR + "c[The End] Could not find The End world.");
+        msg(player, chatColor("c") + "[The End] Could not find The End world.");
         try { print("[EndStrength] cmdSpawnDragon: End world null"); } catch (e1) {}
         return;
     }
@@ -2957,7 +2987,7 @@ function cmdSpawnDragon(player, opts) {
         }
     } catch (e2) {}
 
-    msg(player, COLOR + "7[The End] Spawning Ender Dragon...");
+    msg(player, chatColor("7") + "[The End] Spawning Ender Dragon...");
     var result = spawnScaledDragon(world, player, "command", x, y, z);
     if (result == null) {
         existing = [];
@@ -2972,25 +3002,30 @@ function cmdSpawnDragon(player, opts) {
         }
         if (allowQueueRetry) {
             try { queueCmdSpawnRequest(player); } catch (eQ) {}
-            msg(player, COLOR + "c[The End] Dragon spawn did not return yet — retrying once...");
+            msg(player, chatColor("c") + "[The End] Dragon spawn did not return yet - retrying once...");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
         } else {
-            msg(player, COLOR + "c[The End] Failed to spawn the dragon.");
+            msg(player, chatColor("c") + "[The End] Failed to spawn the dragon.");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e4) {}
         }
         return;
     }
 
-    msg(player, COLOR + "6[The End] " + COLOR + "eSpawned Ender Dragon with " +
-        COLOR + "c" + result.hp + COLOR + "e HP / " +
-        COLOR + "b" + result.defense + COLOR + "e DEF " +
-        COLOR + "8(scaled to " + result.power.name + " / Lv" + result.power.level + ")");
+    msg(player,
+        chatColor("6") + "[The End] " +
+        chatColor("e") + "Spawned Ender Dragon with " +
+        chatColor("c") + formatHpLabel(result.hp) +
+        chatColor("e") + " HP / " +
+        chatColor("b") + formatHpLabel(result.defense) +
+        chatColor("e") + " DEF " +
+        chatColor("8") + "(scaled to " + result.power.name + " / Lv" + result.power.level + ")");
     if (world != null) {
         broadcastOnce(world, "end.strength.cmdAnnounce." + nowMs(),
-            COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
-            COLOR + "7 summoned an Ender Dragon! " +
-            COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
-            Math.floor(result.defense / 1000) + "k DEF, scaled to " +
+            chatColor("5") + "[The End] " +
+            chatColor("d") + str(player.getName()) +
+            chatColor("7") + " summoned an Ender Dragon! " +
+            chatColor("8") + "(" + formatHpLabel(result.hp) + " HP / " +
+            formatHpLabel(result.defense) + " DEF, scaled to " +
             result.power.name + ")");
     }
 }
@@ -3058,9 +3093,13 @@ function cmdCleanupDragons(player) {
         }
     } catch (e7) {}
 
-    msg(player, COLOR + "6[The End] " + COLOR + "eCleared ender dragons" +
-        (removed > 0 ? COLOR + "7 (" + removed + " removed)" : COLOR + "8 (none found / killall sent)") +
-        COLOR + "e.");
+    msg(player,
+        chatColor("6") + "[The End] " +
+        chatColor("e") + "Cleared ender dragons" +
+        (removed > 0
+            ? chatColor("7") + " (" + removed + " removed)"
+            : chatColor("8") + " (none found / killall sent)") +
+        chatColor("e") + ".");
     try {
         print("[EndStrength] cleanup trigger 51 by " + str(player.getName()) +
             " removed~" + removed);
@@ -3529,7 +3568,7 @@ function trigger(event) {
             try {
                 print("[EndStrength] trigger 51 -> cmdCleanupDragons for " + str(player.getName()));
             } catch (e6) {}
-            msg(player, COLOR + "7[The End] Trigger 51 received — clearing dragons...");
+            msg(player, chatColor("7") + "[The End] Trigger 51 received - clearing dragons...");
             cmdCleanupDragons(player);
             return;
         }
@@ -3537,7 +3576,7 @@ function trigger(event) {
         try {
             print("[EndStrength] trigger 50 -> cmdSpawnDragon for " + str(player.getName()));
         } catch (e7) {}
-        msg(player, COLOR + "7[The End] Trigger 50 received — spawning dragon...");
+        msg(player, chatColor("7") + "[The End] Trigger 50 received - spawning dragon...");
         cmdSpawnDragon(player);
     } catch (error) {
         try { print("[EndStrength] trigger: " + error); } catch (e) {}
