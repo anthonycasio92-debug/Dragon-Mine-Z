@@ -594,7 +594,36 @@ function cancelDamageOnProtectedDummy(dummy, forgeEvent) {
  * a CNPC Forge script tab if bus registration fails on your
  * build (enable EntityJoinLevelEvent, LivingHurtEvent,
  * LivingDamageEvent).
+ *
+ * Nashorn strict mode forbids nested function declarations
+ * inside try/blocks — keep helpers at top level only.
  */
+
+function isClientLevel(level) {
+    try {
+        if (level == null) {
+            return true;
+        }
+        if (level.m_5776_) {
+            return level.m_5776_() === true;
+        }
+        if (level.isClientSide != null) {
+            return level.isClientSide === true;
+        }
+    } catch (sideErr) {}
+    return false;
+}
+
+function isClientEntity(entity) {
+    try {
+        if (entity == null) {
+            return true;
+        }
+        return isClientLevel(entity.m_9236_());
+    } catch (sideErr) {
+        return false;
+    }
+}
 
 function registerForgeProtectHooks() {
     if (FORGE_HOOKS_REGISTERED) {
@@ -621,21 +650,6 @@ function registerForgeProtectHooks() {
             "java.util.function.Consumer"
         );
 
-        function isClientLevel(level) {
-            try {
-                if (level == null) {
-                    return true;
-                }
-                if (level.m_5776_) {
-                    return level.m_5776_() === true;
-                }
-                if (level.isClientSide != null) {
-                    return level.isClientSide === true;
-                }
-            } catch (sideErr) {}
-            return false;
-        }
-
         var joinConsumer = new Consumer({
             accept: function (event) {
                 try {
@@ -657,7 +671,7 @@ function registerForgeProtectHooks() {
                         return;
                     }
                     var living = event.getEntity();
-                    if (isClientLevel(living.m_9236_())) {
+                    if (isClientEntity(living)) {
                         return;
                     }
                     cancelDamageOnProtectedDummy(living, event);
@@ -672,7 +686,7 @@ function registerForgeProtectHooks() {
                         return;
                     }
                     var living = event.getEntity();
-                    if (isClientLevel(living.m_9236_())) {
+                    if (isClientEntity(living)) {
                         return;
                     }
                     cancelDamageOnProtectedDummy(living, event);
@@ -705,7 +719,8 @@ function registerForgeProtectHooks() {
         return true;
     } catch (regErr) {
         /*
-         * Fallback: Rhino may prefer a plain JS function.
+         * Fallback: Nashorn may prefer a plain JS function
+         * expression instead of java.util.function.Consumer.
          */
         try {
             var MinecraftForge2 = Java.type(
@@ -724,27 +739,13 @@ function registerForgeProtectHooks() {
                 "net.minecraftforge.event.entity.living.LivingDamageEvent"
             );
 
-            function skipClientEntity(entity) {
-                try {
-                    var level = entity.m_9236_();
-                    if (level != null && level.m_5776_) {
-                        return level.m_5776_() === true;
-                    }
-                } catch (sideErr) {}
-                return false;
-            }
-
             MinecraftForge2.EVENT_BUS.addListener(
                 EventPriority2.HIGHEST,
                 false,
                 EntityJoinLevelEvent2.class,
                 function (event) {
                     try {
-                        if (
-                            event.getLevel != null &&
-                            event.getLevel().m_5776_ &&
-                            event.getLevel().m_5776_()
-                        ) {
+                        if (isClientLevel(event.getLevel())) {
                             return;
                         }
                         protectJoinedShadowDummy(event.getEntity());
@@ -759,7 +760,7 @@ function registerForgeProtectHooks() {
                 function (event) {
                     try {
                         var living = event.getEntity();
-                        if (skipClientEntity(living)) {
+                        if (isClientEntity(living)) {
                             return;
                         }
                         cancelDamageOnProtectedDummy(living, event);
@@ -774,7 +775,7 @@ function registerForgeProtectHooks() {
                 function (event) {
                     try {
                         var living = event.getEntity();
-                        if (skipClientEntity(living)) {
+                        if (isClientEntity(living)) {
                             return;
                         }
                         cancelDamageOnProtectedDummy(living, event);
