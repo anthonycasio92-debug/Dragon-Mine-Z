@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.8.1
+ Version: 2.8.2
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -270,7 +270,179 @@ function isRealOnlinePlayer(entity) {
     return isPlayer(entity) && !isFakePlayerEntity(entity);
 }
 
-function getEndWorld() {
+function getMinecraftServer() {
+    try {
+        var ServerLifecycleHooks = Java.type("net.minecraftforge.server.ServerLifecycleHooks");
+        var server = ServerLifecycleHooks.getCurrentServer();
+        if (server != null) return server;
+    } catch (e1) {}
+    try {
+        var worlds = NpcAPI.Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            var level = getMcServerLevel(worlds[i]);
+            if (level == null) continue;
+            try {
+                var s = level.getServer();
+                if (s != null) return s;
+            } catch (e2) {
+                try {
+                    var s2 = level.m_7654_();
+                    if (s2 != null) return s2;
+                } catch (e3) {}
+            }
+        }
+    } catch (e4) {}
+    return null;
+}
+
+function getEndServerLevel() {
+    var server = getMinecraftServer();
+    if (server == null) return null;
+
+    var endLevel = null;
+    try {
+        var Level = Java.type("net.minecraft.world.level.Level");
+        try { endLevel = server.getLevel(Level.END); } catch (e1) {
+            try { endLevel = server.m_129880_(Level.END); } catch (e2) {
+                try { endLevel = server.m_129880_(Level.f_46430_); } catch (e3) {}
+            }
+        }
+    } catch (e4) {}
+
+    if (endLevel == null) {
+        try {
+            var ResourceKey = Java.type("net.minecraft.resources.ResourceKey");
+            var ResourceLocation = Java.type("net.minecraft.resources.ResourceLocation");
+            var Registries = Java.type("net.minecraft.core.registries.Registries");
+            var dimReg = null;
+            try { dimReg = Registries.DIMENSION; } catch (e5) {
+                try { dimReg = Registries.f_256787_; } catch (e6) {}
+            }
+            var loc = null;
+            try { loc = ResourceLocation.parse("minecraft:the_end"); } catch (e7) {
+                loc = new ResourceLocation("minecraft", "the_end");
+            }
+            var key = ResourceKey.create(dimReg, loc);
+            try { endLevel = server.getLevel(key); } catch (e8) {
+                try { endLevel = server.m_129880_(key); } catch (e9) {}
+            }
+        } catch (e10) {}
+    }
+
+    if (endLevel == null) {
+        try {
+            var all = server.getAllLevels();
+            var it = all.iterator();
+            while (it.hasNext()) {
+                var lvl = it.next();
+                try {
+                    var dim = str(lvl.dimension().location()).toLowerCase();
+                    if (dim === "minecraft:the_end" || dim.indexOf("the_end") >= 0) {
+                        endLevel = lvl;
+                        break;
+                    }
+                } catch (e11) {
+                    try {
+                        var dim2 = str(lvl.m_46472_().m_135782_()).toLowerCase();
+                        if (dim2.indexOf("the_end") >= 0) { endLevel = lvl; break; }
+                    } catch (e12) {}
+                }
+            }
+        } catch (e13) {}
+    }
+    return endLevel;
+}
+
+function forceLoadEndChunks(endLevel) {
+    if (endLevel == null) return false;
+    var ok = false;
+    try {
+        var ChunkPos = Java.type("net.minecraft.world.level.ChunkPos");
+        var TicketType = Java.type("net.minecraft.server.level.TicketType");
+        var source = null;
+        try { source = endLevel.getChunkSource(); } catch (e1) {
+            try { source = endLevel.m_7726_(); } catch (e2) {}
+        }
+        if (source != null) {
+            var centers = [
+                new ChunkPos(0, 0),
+                new ChunkPos(0, -1),
+                new ChunkPos(-1, 0),
+                new ChunkPos(-1, -1)
+            ];
+            for (var i = 0; i < centers.length; i++) {
+                try {
+                    source.addRegionTicket(TicketType.PLAYER, centers[i], 3, centers[i]);
+                    ok = true;
+                } catch (e3) {
+                    try {
+                        source.m_8387_(TicketType.f_9442_, centers[i], 3, centers[i]);
+                        ok = true;
+                    } catch (e4) {}
+                }
+            }
+        }
+    } catch (e5) {}
+
+    try {
+        var ChunkStatus = Java.type("net.minecraft.world.level.chunk.ChunkStatus");
+        var full = null;
+        try { full = ChunkStatus.FULL; } catch (e6) {
+            try { full = ChunkStatus.f_62349_; } catch (e7) {}
+        }
+        var coords = [[0, 0], [0, -1], [-1, 0], [-1, -1], [1, 0], [0, 1]];
+        for (var c = 0; c < coords.length; c++) {
+            try {
+                if (full != null) {
+                    endLevel.getChunk(coords[c][0], coords[c][1], full, true);
+                } else {
+                    endLevel.getChunk(coords[c][0], coords[c][1]);
+                }
+                ok = true;
+            } catch (e8) {
+                try {
+                    endLevel.m_6522_(coords[c][0], coords[c][1], full, true);
+                    ok = true;
+                } catch (e9) {
+                    try { endLevel.m_6325_(coords[c][0], coords[c][1]); ok = true; } catch (e10) {}
+                }
+            }
+        }
+    } catch (e11) {}
+
+    /* Also poke the dragon perch chunk. */
+    try {
+        var BlockPos = Java.type("net.minecraft.core.BlockPos");
+        endLevel.getChunkAt(new BlockPos(0, 128, 0));
+        ok = true;
+    } catch (e12) {
+        try {
+            var BlockPos2 = Java.type("net.minecraft.core.BlockPos");
+            endLevel.m_46739_(new BlockPos2(0, 128, 0));
+            ok = true;
+        } catch (e13) {}
+    }
+    return ok;
+}
+
+function wrapEndWorld(endLevel) {
+    if (endLevel == null) return null;
+    try {
+        var wrapped = NpcAPI.Instance().getIWorld(endLevel);
+        if (wrapped != null) return wrapped;
+    } catch (e1) {}
+    try {
+        var wrapped2 = NpcAPI.Instance().getIWorld("minecraft:the_end");
+        if (wrapped2 != null) return wrapped2;
+    } catch (e2) {}
+    try {
+        var wrapped3 = NpcAPI.Instance().getIWorld("the_end");
+        if (wrapped3 != null) return wrapped3;
+    } catch (e3) {}
+    return null;
+}
+
+function getEndWorldFromNpc() {
     var names = ["minecraft:the_end", "the_end", "end"];
     for (var i = 0; i < names.length; i++) {
         try {
@@ -287,49 +459,236 @@ function getEndWorld() {
     return null;
 }
 
+function getEndWorld() {
+    try {
+        var endLevel = getEndServerLevel();
+        if (endLevel != null) {
+            var wrapped = wrapEndWorld(endLevel);
+            if (wrapped != null) return wrapped;
+        }
+    } catch (e0) {}
+    return getEndWorldFromNpc();
+}
+
 /* Force-load The End so EndDragonFight exists even when nobody is there yet. */
 function forceLoadEndWorld() {
-    var world = getEndWorld();
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (e1) {}
+    if (endLevel != null) {
+        try { forceLoadEndChunks(endLevel); } catch (e2) {}
+        var wrapped = wrapEndWorld(endLevel);
+        if (wrapped != null) return wrapped;
+    }
+    return getEndWorld();
+}
+
+function setObjectField(obj, field, value) {
+    if (obj == null || field == null) return false;
     try {
-        var ServerLifecycleHooks = Java.type("net.minecraftforge.server.ServerLifecycleHooks");
-        var server = ServerLifecycleHooks.getCurrentServer();
-        if (server != null) {
-            var Level = Java.type("net.minecraft.world.level.Level");
-            var endLevel = null;
-            try { endLevel = server.getLevel(Level.END); } catch (e1) {
-                try { endLevel = server.m_129880_(Level.f_46430_); } catch (e2) {}
+        field.setAccessible(true);
+        field.set(obj, value);
+        return true;
+    } catch (e1) {}
+    try {
+        var Unsafe = Java.type("sun.misc.Unsafe");
+        var uf = Unsafe.class.getDeclaredField("theUnsafe");
+        uf.setAccessible(true);
+        var unsafe = uf.get(null);
+        var offset = unsafe.objectFieldOffset(field);
+        unsafe.putObject(obj, offset, value);
+        return true;
+    } catch (e2) {}
+    return false;
+}
+
+function readDragonFightFromLevel(endLevel) {
+    if (endLevel == null) return null;
+
+    var methodNames = ["getDragonFight", "m_8850_", "m_8596_", "dragonFight"];
+    for (var i = 0; i < methodNames.length; i++) {
+        try {
+            var m = endLevel.getClass().getMethod(methodNames[i]);
+            var fight = m.invoke(endLevel);
+            if (fight != null) return fight;
+        } catch (e1) {}
+        try {
+            var m2 = endLevel.getClass().getDeclaredMethod(methodNames[i]);
+            m2.setAccessible(true);
+            var fight2 = m2.invoke(endLevel);
+            if (fight2 != null) return fight2;
+        } catch (e2) {}
+    }
+
+    /* Scan methods whose return type is EndDragonFight. */
+    try {
+        var methods = endLevel.getClass().getMethods();
+        for (var mi = 0; mi < methods.length; mi++) {
+            try {
+                var rt = str(methods[mi].getReturnType().getName());
+                if (rt.indexOf("EndDragonFight") < 0) continue;
+                if (methods[mi].getParameterCount() !== 0) continue;
+                var f3 = methods[mi].invoke(endLevel);
+                if (f3 != null) return f3;
+            } catch (e3) {}
+        }
+    } catch (e4) {}
+
+    /* Field scan. */
+    try {
+        var cls = endLevel.getClass();
+        while (cls != null) {
+            var fields = cls.getDeclaredFields();
+            for (var fi = 0; fi < fields.length; fi++) {
+                try {
+                    var ft = str(fields[fi].getType().getName());
+                    if (ft.indexOf("EndDragonFight") < 0) continue;
+                    fields[fi].setAccessible(true);
+                    var f4 = fields[fi].get(endLevel);
+                    if (f4 != null) return f4;
+                } catch (e5) {}
             }
-            if (endLevel != null) {
+            cls = cls.getSuperclass();
+        }
+    } catch (e6) {}
+    return null;
+}
+
+function findDragonFightField(endLevel) {
+    if (endLevel == null) return null;
+    try {
+        var cls = endLevel.getClass();
+        while (cls != null) {
+            var fields = cls.getDeclaredFields();
+            for (var i = 0; i < fields.length; i++) {
                 try {
-                    var ChunkPos = Java.type("net.minecraft.world.level.ChunkPos");
-                    var TicketType = Java.type("net.minecraft.server.level.TicketType");
-                    var pos = new ChunkPos(0, 0);
-                    endLevel.getChunkSource().addRegionTicket(TicketType.PLAYER, pos, 3, pos);
-                } catch (e3) {
-                    try { endLevel.getChunk(0, 0); } catch (e4) {
-                        try { endLevel.m_6325_(0, 0); } catch (e5) {}
-                    }
+                    var ft = str(fields[i].getType().getName());
+                    if (ft.indexOf("EndDragonFight") >= 0) return fields[i];
+                } catch (e1) {}
+            }
+            cls = cls.getSuperclass();
+        }
+    } catch (e2) {}
+    return null;
+}
+
+function createEndDragonFightInstance(endLevel) {
+    if (endLevel == null) return null;
+    var EndDragonFight = null;
+    try {
+        EndDragonFight = Java.type("net.minecraft.world.level.dimension.end.EndDragonFight");
+    } catch (e0) { return null; }
+
+    var server = null;
+    try { server = endLevel.getServer(); } catch (e1) {
+        try { server = endLevel.m_7654_(); } catch (e2) {}
+    }
+
+    var seed = 0;
+    try { seed = server.getWorldData().worldGenOptions().seed(); } catch (e3) {
+        try { seed = endLevel.getSeed(); } catch (e4) {
+            try { seed = endLevel.m_7328_(); } catch (e5) {}
+        }
+    }
+
+    var data = null;
+    try { data = server.getWorldData().endDragonFightData(); } catch (e6) {
+        try { data = server.getWorldData().m_223722_(); } catch (e7) {}
+    }
+    if (data == null) {
+        try {
+            var Data = Java.type("net.minecraft.world.level.dimension.end.EndDragonFight$Data");
+            try { data = Data.DEFAULT; } catch (e8) {
+                try { data = Data.f_287647_; } catch (e9) {}
+            }
+        } catch (e10) {}
+    }
+
+    /* Prefer public constructors via reflection (Data vs CompoundTag across mappings). */
+    try {
+        var LongCls = Java.type("java.lang.Long");
+        var seedObj = LongCls.valueOf(seed);
+        var ctors = EndDragonFight.class.getConstructors();
+        for (var i = 0; i < ctors.length; i++) {
+            var ctor = ctors[i];
+            var params = ctor.getParameterTypes();
+            if (params.length !== 3) continue;
+            try {
+                var args = Java.to([endLevel, seedObj, data], "java.lang.Object[]");
+                var made = ctor.newInstance(args);
+                if (made != null) return made;
+            } catch (e11) {
+                try {
+                    var made2 = ctor.newInstance(endLevel, seedObj, data);
+                    if (made2 != null) return made2;
+                } catch (e12) {
+                    try {
+                        var made3 = ctor.newInstance(endLevel, seed, data);
+                        if (made3 != null) return made3;
+                    } catch (e12b) {}
                 }
-                try {
-                    var wrapped = NpcAPI.Instance().getIWorld(endLevel);
-                    if (wrapped != null) world = wrapped;
-                } catch (e6) {}
             }
         }
-    } catch (e) {}
+    } catch (e13) {}
 
-    if (world == null) world = getEndWorld();
-    if (world != null) {
-        try {
-            var level = getMcServerLevel(world);
-            if (level != null) {
-                try { level.getChunk(0, 0); } catch (e7) {
-                    try { level.m_6325_(0, 0); } catch (e8) {}
-                }
-            }
-        } catch (e9) {}
+    try {
+        return new EndDragonFight(endLevel, seed, data);
+    } catch (e14) {
+        try { print("[EndStrength] EndDragonFight ctor failed: " + e14); } catch (e15) {}
     }
-    return world;
+    return null;
+}
+
+function attachDragonFightToLevel(endLevel, fight) {
+    if (endLevel == null || fight == null) return false;
+    var field = findDragonFightField(endLevel);
+    if (field == null) return false;
+    return setObjectField(endLevel, field, fight);
+}
+
+/*
+ * Authoritative fight lookup: real End ServerLevel from the Minecraft server,
+ * force-loaded island chunks, then get-or-create EndDragonFight.
+ */
+function getOrCreateEndDragonFight() {
+    var endLevel = getEndServerLevel();
+    if (endLevel == null) {
+        try { print("[EndStrength] getEndServerLevel() returned null"); } catch (e0) {}
+        return { fight: null, level: null, world: null };
+    }
+
+    try {
+        var dimName = "?";
+        try { dimName = str(endLevel.dimension().location()); } catch (eDim) {
+            try { dimName = str(endLevel.m_46472_().m_135782_()); } catch (eDim2) {}
+        }
+        print("[EndStrength] End ServerLevel=" + endLevel.getClass().getName() + " dim=" + dimName);
+    } catch (eLog) {}
+
+    try { forceLoadEndChunks(endLevel); } catch (eChunk) {}
+
+    var fight = readDragonFightFromLevel(endLevel);
+    if (fight == null) {
+        try { print("[EndStrength] EndDragonFight missing — creating and attaching one"); } catch (e1) {}
+        fight = createEndDragonFightInstance(endLevel);
+        if (fight != null) {
+            var attached = attachDragonFightToLevel(endLevel, fight);
+            try {
+                print("[EndStrength] Created EndDragonFight attach=" + attached +
+                    " class=" + fight.getClass().getName());
+            } catch (e2) {}
+            /* Re-read in case attach replaced/wrapped it. */
+            var again = readDragonFightFromLevel(endLevel);
+            if (again != null) fight = again;
+        } else {
+            try { print("[EndStrength] Failed to construct EndDragonFight"); } catch (e3) {}
+        }
+    }
+
+    return {
+        fight: fight,
+        level: endLevel,
+        world: wrapEndWorld(endLevel)
+    };
 }
 
 function isInTheEnd(world) {
@@ -1548,21 +1907,16 @@ function getMcServerLevel(world) {
 }
 
 function getEndDragonFight(world) {
-    var level = getMcServerLevel(world);
-    if (level == null) return null;
+    /* Prefer the real End ServerLevel from the dedicated server. */
     try {
-        var fight = level.getDragonFight();
-        if (fight != null) return fight;
-    } catch (e1) {}
-    try {
-        var fight2 = level.m_8850_();
-        if (fight2 != null) return fight2;
-    } catch (e2) {}
-    try {
-        var fight3 = level.dragonFight();
-        if (fight3 != null) return fight3;
-    } catch (e3) {}
-    return null;
+        var bundle = getOrCreateEndDragonFight();
+        if (bundle != null && bundle.fight != null) return bundle.fight;
+    } catch (e0) {}
+
+    var level = null;
+    try { level = getEndServerLevel(); } catch (e1) {}
+    if (level == null) level = getMcServerLevel(world);
+    return readDragonFightFromLevel(level);
 }
 
 function setFightBoolean(fight, names, value) {
@@ -1669,23 +2023,32 @@ function restoreTowerCrystals(world) {
  * Raw /summon or createEntity orphans break perch/charge/crystal phase AI.
  */
 function spawnDragonViaFight(world) {
-    if (world == null) {
-        world = forceLoadEndWorld();
-    } else {
-        try { forceLoadEndWorld(); } catch (eForce) {}
-    }
-    if (world == null) return null;
-    clearAllDragons(world);
+    var bundle = null;
+    try { bundle = getOrCreateEndDragonFight(); } catch (eBundle) {}
 
-    var fight = getEndDragonFight(world);
-    if (fight == null) {
-        try { world = forceLoadEndWorld() || world; } catch (eLoad) {}
-        fight = getEndDragonFight(world);
-    }
-    if (fight == null) {
-        try { print("[EndStrength] EndDragonFight is null (End not loaded?)"); } catch (eNull) {}
+    var endLevel = bundle != null ? bundle.level : null;
+    var fight = bundle != null ? bundle.fight : null;
+    if (bundle != null && bundle.world != null) world = bundle.world;
+    if (world == null) world = forceLoadEndWorld();
+    if (world == null && endLevel == null) {
+        try { print("[EndStrength] No End world/level available for dragon spawn"); } catch (eNo) {}
         return null;
     }
+
+    try { clearAllDragons(world); } catch (eClear) {}
+
+    if (fight == null) {
+        try { fight = getEndDragonFight(world); } catch (eFight) {}
+    }
+    if (fight == null) {
+        try {
+            print("[EndStrength] EndDragonFight is still null after get-or-create");
+            print("[EndStrength] tip: visit The End once so the dimension initializes, then /enddragon");
+        } catch (eNull) {}
+        return null;
+    }
+
+    try { forceLoadEndChunks(endLevel != null ? endLevel : getMcServerLevel(world)); } catch (eChunks) {}
 
     try { fight.skipArenaLoadedCheck(); } catch (e1) {
         try { invokeFightMethod(fight, ["skipArenaLoadedCheck", "m_287277_", "setSkipChunksLoadedCheck"]); } catch (e2) {}
@@ -1710,7 +2073,7 @@ function spawnDragonViaFight(world) {
 
     var mcDragon = null;
     try {
-        mcDragon = invokeFightMethod(fight, ["createNewDragon", "m_64110_"]);
+        mcDragon = invokeFightMethod(fight, ["createNewDragon", "m_64110_", "m_64099_"]);
     } catch (e5) {
         mcDragon = null;
     }
@@ -1720,6 +2083,16 @@ function spawnDragonViaFight(world) {
         try {
             mcDragon = invokeFightMethod(fight, ["findOrCreateDragon", "m_64103_", "checkDragonSeen"]);
         } catch (e6) {}
+    }
+
+    /* Last resort: spawn entity on the End ServerLevel and link it to this fight. */
+    if (mcDragon == null && endLevel != null) {
+        try {
+            mcDragon = spawnLinkedDragonOnLevel(endLevel, fight);
+            try { print("[EndStrength] Used linked ServerLevel dragon spawn fallback"); } catch (e7) {}
+        } catch (e8) {
+            try { print("[EndStrength] Linked dragon fallback failed: " + e8); } catch (e9) {}
+        }
     }
 
     if (mcDragon == null) return null;
@@ -1734,6 +2107,75 @@ function spawnDragonViaFight(world) {
     /* Wrapper may lag one tick — re-find. */
     var found = findDragons(world);
     return found.length > 0 ? found[found.length - 1] : null;
+}
+
+/* Spawn an EnderDragon on the End ServerLevel and bind it to EndDragonFight. */
+function spawnLinkedDragonOnLevel(endLevel, fight) {
+    if (endLevel == null) return null;
+    var EntityType = Java.type("net.minecraft.world.entity.EntityType");
+    var dragonType = null;
+    try { dragonType = EntityType.ENDER_DRAGON; } catch (e1) {
+        try { dragonType = EntityType.f_20530_; } catch (e2) {}
+    }
+    if (dragonType == null) return null;
+
+    var dragon = null;
+    try { dragon = dragonType.create(endLevel); } catch (e3) {
+        try { dragon = dragonType.m_20615_(endLevel); } catch (e4) {}
+    }
+    if (dragon == null) return null;
+
+    try {
+        dragon.moveTo(0.0, 128.0, 0.0, endLevel.getRandom().nextFloat() * 360.0, 0.0);
+    } catch (e5) {
+        try { dragon.m_7678_(0.0, 128.0, 0.0, 0.0, 0.0); } catch (e6) {
+            try { dragon.setPos(0.0, 128.0, 0.0); } catch (e7) {}
+        }
+    }
+
+    if (fight != null) {
+        try { dragon.setDragonFight(fight); } catch (e8) {
+            try { dragon.m_64093_(fight); } catch (e9) {
+                try {
+                    var df = dragon.getClass().getDeclaredField("dragonFight");
+                    setObjectField(dragon, df, fight);
+                } catch (e10) {
+                    try {
+                        var df2 = dragon.getClass().getDeclaredField("f_64065_");
+                        setObjectField(dragon, df2, fight);
+                    } catch (e11) {}
+                }
+            }
+        }
+        try {
+            var BlockPos = Java.type("net.minecraft.core.BlockPos");
+            var origin = new BlockPos(0, 128, 0);
+            try { dragon.setFightOrigin(origin); } catch (e12) {
+                try { dragon.m_287185_(origin); } catch (e13) {}
+            }
+        } catch (e14a) {}
+
+        /* Point fight UUID at this dragon when possible. */
+        try {
+            var uuidFieldNames = ["dragonUUID", "f_64067_", "field_13113"];
+            for (var u = 0; u < uuidFieldNames.length; u++) {
+                try {
+                    var uf = fight.getClass().getDeclaredField(uuidFieldNames[u]);
+                    setObjectField(fight, uf, dragon.getUUID());
+                    break;
+                } catch (e14) {}
+            }
+        } catch (e15) {}
+    }
+
+    try {
+        endLevel.addFreshEntity(dragon);
+    } catch (e16) {
+        try { endLevel.m_7967_(dragon); } catch (e17) {
+            try { endLevel.addWithUUID(dragon); } catch (e18) { return null; }
+        }
+    }
+    return dragon;
 }
 
 function spawnDragonEntityFallback(world, x, y, z) {
