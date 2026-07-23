@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.9.0
+ Version: 2.9.1
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -1929,6 +1929,50 @@ function maybeRescaleDragon(entity, world, player) {
     return true;
 }
 
+function isLivingDragon(entity) {
+    if (entity == null) return false;
+    try {
+        if (classifyEndEntity(entity) !== "dragon") return false;
+    } catch (e0) { return false; }
+
+    try {
+        if (typeof entity.isAlive === "function" && entity.isAlive() === false) return false;
+    } catch (e1) {}
+    try {
+        var hp = num(entity.getHealth(), -1);
+        if (hp >= 0 && hp <= 0.01) return false;
+    } catch (e2) {}
+
+    try {
+        var mc = entity.getMCEntity();
+        if (mc != null) {
+            try {
+                if (mc.isAlive && mc.isAlive() === false) return false;
+            } catch (e3) {
+                try { if (mc.m_6084_ && mc.m_6084_() === false) return false; } catch (e4) {}
+            }
+            try {
+                var mchp = -1;
+                try { mchp = num(mc.getHealth(), -1); } catch (e5) {
+                    try { mchp = num(mc.m_21223_(), -1); } catch (e6) {}
+                }
+                if (mchp >= 0 && mchp <= 0.01) return false;
+            } catch (e7) {}
+            try {
+                if (mc.isRemoved && mc.isRemoved() === true) return false;
+            } catch (e8) {
+                try { if (mc.m_213877_ && mc.m_213877_() === true) return false; } catch (e9) {}
+            }
+            try {
+                if (mc.isDeadOrDying && mc.isDeadOrDying() === true) return false;
+            } catch (e10) {
+                try { if (mc.m_21224_ && mc.m_21224_() === true) return false; } catch (e11) {}
+            }
+        }
+    } catch (e12) {}
+    return true;
+}
+
 function findDragons(world) {
     var found = [];
     var seen = {};
@@ -1936,6 +1980,7 @@ function findDragons(world) {
 
     function pushDragon(ent) {
         if (ent == null) return;
+        if (!isLivingDragon(ent)) return;
         var id = "";
         try { id = str(ent.getUUID()); } catch (e0) {
             try { id = str(ent.getMCEntity().m_20148_()); } catch (e1) {
@@ -3100,6 +3145,8 @@ function spawnDragonBreathFireball(world, dragon, target) {
 
 function fireDragonKiBeam(world, dragon, target) {
     if (world == null || dragon == null || target == null) return false;
+    if (!isLivingDragon(dragon)) return false;
+
     var x0 = num(dragon.getX(), 0);
     var y0 = num(dragon.getY(), 0) - 1.0;
     var z0 = num(dragon.getZ(), 0);
@@ -3130,22 +3177,30 @@ function fireDragonKiBeam(world, dragon, target) {
         hurtPlayerVanilla(target, dmg);
     }
 
-    try {
-        world.playSoundAt(target.getX(), target.getY(), target.getZ(),
-            "minecraft:entity.ender_dragon.shoot", 1.0, 1.35);
-    } catch (e5) {
-        try {
-            NpcAPI.Instance().executeCommand(world,
-                "execute in minecraft:the_end run playsound minecraft:entity.ender_dragon.shoot master @a " +
-                Math.floor(x1) + " " + Math.floor(y1) + " " + Math.floor(z1) + " 1 1.3");
-        } catch (e6) {}
-    }
+    /*
+     * Do NOT use world.playSoundAt / playsound here — CustomNPCs broadcasts
+     * those as chat spam: [@CustomNPCs-API: Played sound ...].
+     * Particles + damage are enough for the ki-beam feel.
+     */
     return true;
 }
 
 function tickDragonExtraAttacks(world, player) {
     if (DRAGON_EXTRA_ATTACKS_ENABLED !== true) return;
     if (world == null || !isInTheEnd(world)) return;
+
+    var dragons = [];
+    try { dragons = findDragons(world); } catch (e1) {}
+    if (dragons.length <= 0) {
+        try { dragons = findDragonsOnLevel(getEndServerLevel()); } catch (e2) {}
+    }
+
+    /* Drop dead / dying dragons so attacks stop the moment the fight ends. */
+    var living = [];
+    for (var fi = 0; fi < dragons.length; fi++) {
+        if (isLivingDragon(dragons[fi])) living.push(dragons[fi]);
+    }
+    if (living.length <= 0) return;
 
     var t = nowMs();
     try {
@@ -3163,15 +3218,10 @@ function tickDragonExtraAttacks(world, player) {
         } catch (eLock2) { return; }
     }
 
-    var dragons = [];
-    try { dragons = findDragons(world); } catch (e1) {}
-    if (dragons.length <= 0) {
-        try { dragons = findDragonsOnLevel(getEndServerLevel()); } catch (e2) {}
-    }
-    if (dragons.length <= 0) return;
+    for (var d = 0; d < living.length; d++) {
+        var dragon = living[d];
+        if (!isLivingDragon(dragon)) continue;
 
-    for (var d = 0; d < dragons.length; d++) {
-        var dragon = dragons[d];
         var target = nearestPlayerToEntity(dragon, world, DRAGON_ATTACK_RANGE);
         if (target == null) target = player;
         if (!isRealOnlinePlayer(target)) continue;
