@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.9.1
+ Version: 2.10.0
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -15,12 +15,11 @@
  - End kill TP is SETTLED with dampened BP scaling + per-mob level softcaps
    (e.g. ~200k enderman at level ~4000).
  - Per-hit damage caps remain as a safety net vs one-shot skills.
- - Dragon max_health is applied ONCE (spawn / real HP change only). Constant
-   attribute rewrites break EndDragonFight phase AI. No orphan /summon.
+ - Dragon max_health is applied ONCE (spawn / real HP change only).
 
  FEATURES:
  - Dragon always scales DEF to the strongest End player; HP grows only when needed
- - Dragon spawned via EndDragonFight only (orphan summon disabled — broken AI)
+ - Spawn prefers EndDragonFight; falls back to createEntity/summon if needed
  - Extra dragon attacks: ki beams + dragon-fireball breath
  - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
@@ -29,20 +28,22 @@
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
- - Kill announce fires once (no chat spam)
 
- PLACE AS (one script only):
- CustomNPCs Global Player Script — OWN tab (do not merge with other scripts)
- events: tick, kill, trigger, damagedEntity
+ INSTALL (TWO scripts — this is what made trigger 50 work before):
+   1) THIS file → Global Player, OWN tab
+      events: tick, kill, trigger, damagedEntity
+   2) EndDragon-Forge-Trigger.js → Global Forge Scripts, OWN tab
+      event: trigger
+      CNPC skips Player triggers for FakeOp/console; the Forge bridge
+      forwards 50/51 to the named player's scripts.
 
  COMMANDS:
    noppes script trigger 50 <playerName>   # spawn dragon
    noppes script trigger 51 <playerName>   # kill all ender dragons
 
  CMI (EndDragon-Alias.yml):
-   asFakeOp! noppes script trigger 50/51 [playerName]
-   Trigger resolves the REAL player from arguments[0] (not event.entity,
-   which is the FakeOp source and breaks spawn/messages).
+   asOp! noppes script trigger 50/51 [playerName]
+   (prefer asOp!; Forge bridge also covers asFakeOp/console)
 ============================================================
 */
 
@@ -2482,14 +2483,40 @@ function spawnDragonEntityFallback(world, x, y, z) {
 
 function spawnDragonEntity(world, x, y, z) {
     /*
-     * Fight-manager spawn ONLY. Orphan createEntity//summon dragons have no
-     * EndDragonFight link → broken perch/charge/crystal AI.
+     * Prefer EndDragonFight (best AI). If that fails, fall back to
+     * createEntity//summon like the earlier working versions so /enddragon
+     * still produces a living dragon.
      */
     var viaFight = spawnDragonViaFight(world);
     if (viaFight != null) return viaFight;
+
     try {
-        print("[EndStrength] EndDragonFight spawn failed — refusing orphan summon (keeps AI intact).");
+        print("[EndStrength] EndDragonFight spawn failed; using fallback summon.");
     } catch (e1) {}
+
+    try { if (world != null) clearAllDragons(world); } catch (e2) {}
+    try {
+        var onLevel = findDragonsOnLevel(getEndServerLevel());
+        for (var i = 0; i < onLevel.length; i++) despawnDragonEntity(onLevel[i]);
+    } catch (e3) {}
+
+    var fallback = spawnDragonEntityFallback(world, x, y, z);
+    if (fallback != null) {
+        /* Best-effort: link fallback dragon to fight manager for better AI. */
+        try {
+            var bundle = getOrCreateEndDragonFight();
+            if (bundle != null && bundle.fight != null && bundle.level != null) {
+                var mc = null;
+                try { mc = fallback.getMCEntity(); } catch (e4) {}
+                if (mc != null) {
+                    try { mc.setDragonFight(bundle.fight); } catch (e5) {
+                        try { mc.m_64093_(bundle.fight); } catch (e6) {}
+                    }
+                }
+            }
+        } catch (e7) {}
+        return fallback;
+    }
     return null;
 }
 
@@ -2875,22 +2902,15 @@ function cmdSpawnDragon(player, opts) {
     /* Consume any queued request so tick does not double-run this. */
     try { clearCmdSpawnRequests(); } catch (eClr) {}
 
-    var bundle = null;
-    try { bundle = getOrCreateEndDragonFight(); } catch (eBundle) {
-        try { print("[EndStrength] cmdSpawnDragon bundle error: " + eBundle); } catch (eB) {}
-    }
-
-    var endLevel = bundle != null ? bundle.level : null;
-    var world = bundle != null ? bundle.world : null;
-    if (world == null) world = forceLoadEndWorld();
-    if (world == null) world = getEndWorld();
-    if (endLevel == null) {
-        try { endLevel = getEndServerLevel(); } catch (eLvl) {}
-    }
+    try { forceLoadEndWorld(); } catch (eForce) {}
+    var world = getEndWorld();
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (eLvl) {}
+    if (world == null) world = wrapEndWorld(endLevel);
 
     if (world == null && endLevel == null) {
-        msg(player, COLOR + "c[The End] Could not find / load The End world.");
-        try { print("[EndStrength] cmdSpawnDragon: End world/level null"); } catch (e1) {}
+        msg(player, COLOR + "c[The End] Could not find The End world.");
+        try { print("[EndStrength] cmdSpawnDragon: End world null"); } catch (e1) {}
         return;
     }
 
@@ -2913,31 +2933,25 @@ function cmdSpawnDragon(player, opts) {
         }
     } catch (e2) {}
 
-    msg(player, COLOR + "7[The End] Spawning through EndDragonFight...");
+    msg(player, COLOR + "7[The End] Spawning Ender Dragon...");
     var result = spawnScaledDragon(world, player, "command", x, y, z);
     if (result == null) {
-        /* Race / scan miss: dragon appeared (or was always there). */
         existing = [];
         try { if (world != null) existing = findDragons(world); } catch (eEx2) {}
         if (existing.length <= 0) existing = findDragonsOnLevel(endLevel);
         if (existing.length > 0) {
-            /* Spawn worked; CNPC wrap/stats path missed the return value. */
             try {
                 applyDragonStats(existing[existing.length - 1], readPlayerPower(player), "command");
             } catch (eStats) {}
-            msg(player, COLOR + "6[The End] " + COLOR + "eEnder Dragon spawned and is alive in The End.");
-            try { print("[EndStrength] cmdSpawnDragon recovered dragon via ServerLevel scan"); } catch (eRec) {}
+            notifyDragonAlreadyAlive(player, existing);
             return;
         }
-        /* One automatic tick retry if End was still loading (trigger path only). */
         if (allowQueueRetry) {
             try { queueCmdSpawnRequest(player); } catch (eQ) {}
-            msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
-            msg(player, COLOR + "7[The End] Retrying automatically once — check console for [EndStrength] details.");
+            msg(player, COLOR + "c[The End] Dragon spawn did not return yet — retrying once...");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
         } else {
-            msg(player, COLOR + "c[The End] Failed to spawn the dragon through EndDragonFight.");
-            msg(player, COLOR + "7[The End] Check console for [EndStrength] details, then retry in The End.");
+            msg(player, COLOR + "c[The End] Failed to spawn the dragon.");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e4) {}
         }
         return;
