@@ -2461,23 +2461,47 @@ function spawnLinkedDragonOnLevel(endLevel, fight) {
 }
 
 function spawnDragonEntityFallback(world, x, y, z) {
-    if (world == null) return null;
-    try {
-        var ent = world.createEntity("minecraft:ender_dragon");
-        if (ent == null) return null;
-        try { ent.setPosition(x, y, z); } catch (e1) {
-            try { ent.setPos(x, y, z); } catch (e2) {}
-        }
-        world.spawnEntity(ent);
-        return ent;
-    } catch (e3) {
+    x = Math.floor(num(x, NATURAL_SPAWN_X));
+    y = Math.floor(num(y, NATURAL_SPAWN_Y));
+    z = Math.floor(num(z, NATURAL_SPAWN_Z));
+
+    if (world != null) {
         try {
-            NpcAPI.Instance().executeCommand(world,
-                "summon minecraft:ender_dragon " + x + " " + y + " " + z);
-            var dragons = findDragons(world);
-            if (dragons.length > 0) return dragons[dragons.length - 1];
-        } catch (e4) {}
+            var ent = world.createEntity("minecraft:ender_dragon");
+            if (ent != null) {
+                try { ent.setPosition(x, y, z); } catch (e1) {
+                    try { ent.setPos(x, y, z); } catch (e2) {}
+                }
+                world.spawnEntity(ent);
+                return ent;
+            }
+        } catch (e3) {}
     }
+
+    /* Command summon — works even when CNPC createEntity fails. */
+    try {
+        var cmdWorld = world;
+        if (cmdWorld == null) {
+            try { cmdWorld = NpcAPI.Instance().getIWorlds()[0]; } catch (eW) {}
+        }
+        if (cmdWorld != null) {
+            NpcAPI.Instance().executeCommand(cmdWorld,
+                "execute in minecraft:the_end run summon minecraft:ender_dragon " +
+                x + " " + y + " " + z);
+        }
+    } catch (e4) {
+        try {
+            if (world != null) {
+                NpcAPI.Instance().executeCommand(world,
+                    "summon minecraft:ender_dragon " + x + " " + y + " " + z);
+            }
+        } catch (e5) {}
+    }
+
+    var dragons = [];
+    try { if (world != null) dragons = findDragons(world); } catch (e6) {}
+    if (dragons.length <= 0) dragons = findDragonsOnLevel(getEndServerLevel());
+    if (dragons.length > 0) return dragons[dragons.length - 1];
     return null;
 }
 
