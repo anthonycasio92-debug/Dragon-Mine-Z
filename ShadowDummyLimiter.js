@@ -47,10 +47,26 @@ var SHADOW_DUMMY_PERCENT =
     50;
 
 /*
- * How often the script checks each player.
+ * How often the script checks each player for a new dummy.
+ * Keep this low — dummies spawn with default HP and can be
+ * one-shot before copyStats/heal runs.
  */
 var CHECK_INTERVAL_MS =
-    500;
+    100;
+
+/*
+ * While waiting for a brand-new dummy UUID / entity, check
+ * every player tick so protection starts immediately.
+ */
+var FAST_CHECK_WHILE_PENDING_MS =
+    0;
+
+/*
+ * God-mode + heal window after the dummy is first seen /
+ * configured so it cannot die in the spawn second.
+ */
+var SPAWN_PROTECT_MS =
+    3000;
 
 /*
  * Prevent blocked-summon messages from spamming.
@@ -95,6 +111,18 @@ var KEY_PROCESSING_UUID =
 
 var KEY_MESSAGE_COOLDOWN =
     "dmz_minigame_shadow_dummy_message_cooldown";
+
+var KEY_PROTECT_UNTIL =
+    "dmz_minigame_shadow_dummy_protect_until";
+
+var KEY_PROTECT_UUID =
+    "dmz_minigame_shadow_dummy_protect_uuid";
+
+var TAG_SPAWN_PROTECT =
+    "dmz_minigame_spawn_protect";
+
+var TAG_SPAWN_PROTECT_UNTIL =
+    "dmz_minigame_spawn_protect_until";
 
 
 /*
@@ -355,6 +383,328 @@ function clearActiveDummyTempState(
             KEY_PROCESSING_UUID
         );
 
+        temp.remove(
+            KEY_PROTECT_UNTIL
+        );
+
+        temp.remove(
+            KEY_PROTECT_UUID
+        );
+
+    } catch (err) {}
+}
+
+
+/*
+ * ============================================================
+ * SPAWN PROTECTION
+ * ============================================================
+ *
+ * Dummies spawn with default monster HP. Until copyStats + heal
+ * finish (and briefly after), keep them unkillable.
+ */
+
+function setDummyInvulnerable(
+    dummy,
+    enabled
+) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.setInvulnerable(
+            enabled === true
+        );
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.m_20331_(
+            enabled === true
+        );
+    } catch (err2) {}
+}
+
+
+function bumpDummyHurtInvuln(
+    dummy
+) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.invulnerableTime =
+            40;
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.f_19802_ =
+            40;
+    } catch (err2) {}
+}
+
+
+function fullyHealDummy(
+    dummy
+) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.m_21153_(
+            dummy.m_21233_()
+        );
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.setHealth(
+            dummy.getMaxHealth()
+        );
+    } catch (err2) {}
+}
+
+
+function grantSpawnProtection(
+    player,
+    dummy,
+    dummyUUID,
+    now
+) {
+    if (
+        dummy == null ||
+        now == null
+    ) {
+        return;
+    }
+
+    var until =
+        Number(now) +
+        SPAWN_PROTECT_MS;
+
+    setDummyInvulnerable(
+        dummy,
+        true
+    );
+
+    bumpDummyHurtInvuln(
+        dummy
+    );
+
+    fullyHealDummy(
+        dummy
+    );
+
+    try {
+        var persistent =
+            dummy.getPersistentData();
+
+        persistent.m_128379_(
+            TAG_SPAWN_PROTECT,
+            true
+        );
+
+        persistent.m_128356_(
+            TAG_SPAWN_PROTECT_UNTIL,
+            until
+        );
+
+    } catch (tagErr) {}
+
+    try {
+        var temp =
+            player.getTempdata();
+
+        temp.put(
+            KEY_PROTECT_UNTIL,
+            "" + until
+        );
+
+        if (dummyUUID != null) {
+            temp.put(
+                KEY_PROTECT_UUID,
+                "" + dummyUUID
+            );
+        }
+
+    } catch (tempErr) {}
+}
+
+
+function clearSpawnProtection(
+    dummy
+) {
+    if (dummy == null) {
+        return;
+    }
+
+    setDummyInvulnerable(
+        dummy,
+        false
+    );
+
+    try {
+        var persistent =
+            dummy.getPersistentData();
+
+        persistent.m_128379_(
+            TAG_SPAWN_PROTECT,
+            false
+        );
+
+        persistent.m_128356_(
+            TAG_SPAWN_PROTECT_UNTIL,
+            0
+        );
+
+    } catch (tagErr) {}
+}
+
+
+function isDummySpawnProtected(
+    dummy,
+    now
+) {
+    if (dummy == null) {
+        return false;
+    }
+
+    try {
+        var persistent =
+            dummy.getPersistentData();
+
+        if (
+            !persistent.m_128471_(
+                TAG_SPAWN_PROTECT
+            )
+        ) {
+            return false;
+        }
+
+        var until =
+            Number(
+                persistent.m_128454_(
+                    TAG_SPAWN_PROTECT_UNTIL
+                )
+            );
+
+        if (
+            isNaN(until) ||
+            !isFinite(until)
+        ) {
+            return false;
+        }
+
+        return Number(now) < until;
+
+    } catch (err) {
+        return false;
+    }
+}
+
+
+function maintainSpawnProtection(
+    player,
+    mcPlayer,
+    now
+) {
+    try {
+        var temp =
+            player.getTempdata();
+
+        var until =
+            readNumber(
+                temp,
+                KEY_PROTECT_UNTIL,
+                0
+            );
+
+        var protectUUID =
+            readString(
+                temp,
+                KEY_PROTECT_UUID,
+                ""
+            );
+
+        if (
+            until <= 0 ||
+            protectUUID === ""
+        ) {
+            return;
+        }
+
+        var uuidObj =
+            null;
+
+        try {
+            var UUID =
+                Java.type(
+                    "java.util.UUID"
+                );
+
+            uuidObj =
+                UUID.fromString(
+                    protectUUID
+                );
+
+        } catch (uuidErr) {
+            uuidObj =
+                protectUUID;
+        }
+
+        var dummy =
+            findShadowDummy(
+                mcPlayer,
+                uuidObj
+            );
+
+        if (dummy == null) {
+            if (Number(now) >= until) {
+                temp.remove(
+                    KEY_PROTECT_UNTIL
+                );
+
+                temp.remove(
+                    KEY_PROTECT_UUID
+                );
+            }
+
+            return;
+        }
+
+        if (Number(now) >= until) {
+            clearSpawnProtection(
+                dummy
+            );
+
+            temp.remove(
+                KEY_PROTECT_UNTIL
+            );
+
+            temp.remove(
+                KEY_PROTECT_UUID
+            );
+
+            return;
+        }
+
+        setDummyInvulnerable(
+            dummy,
+            true
+        );
+
+        bumpDummyHurtInvuln(
+            dummy
+        );
+
+        fullyHealDummy(
+            dummy
+        );
+
     } catch (err) {}
 }
 
@@ -433,6 +783,17 @@ function configureShadowDummy(
 ) {
     try {
         /*
+         * Lock the dummy before any stat rewrite so it cannot
+         * die mid-configure on default spawn HP.
+         */
+        grantSpawnProtection(
+            player,
+            dummy,
+            dummyUUID,
+            now
+        );
+
+        /*
          * Remove the original penalties before applying the
          * fixed 50% minigame configuration.
          */
@@ -491,20 +852,19 @@ function configureShadowDummy(
         } catch (tagErr) {}
 
         /*
-         * Fully heal the dummy to its recalculated maximum.
+         * Fully heal the dummy to its recalculated maximum,
+         * then refresh spawn protection on the new max HP.
          */
-        try {
-            dummy.m_21153_(
-                dummy.m_21233_()
-            );
+        fullyHealDummy(
+            dummy
+        );
 
-        } catch (healthErr) {
-            try {
-                dummy.setHealth(
-                    dummy.getMaxHealth()
-                );
-            } catch (mappedHealthErr) {}
-        }
+        grantSpawnProtection(
+            player,
+            dummy,
+            dummyUUID,
+            now
+        );
 
         syncPlayerStats(
             mcPlayer
@@ -720,6 +1080,16 @@ function processNewShadowDummy(
             return;
         }
 
+        /*
+         * Protect immediately on first sight — before stats copy.
+         */
+        grantSpawnProtection(
+            player,
+            dummy,
+            dummyUUID,
+            now
+        );
+
         configureShadowDummy(
             player,
             mcPlayer,
@@ -745,7 +1115,7 @@ function processNewShadowDummy(
  * ============================================================
  *
  * Install this as a CustomNPCs PLAYER script.
- * Enable the Tick event.
+ * Enable events: Tick, DamagedEntity
  */
 
 function tick(event) {
@@ -763,12 +1133,43 @@ function tick(event) {
         var now =
             System.currentTimeMillis();
 
+        var mcPlayer =
+            player.getMCEntity
+                ? player.getMCEntity()
+                : player;
+
+        if (mcPlayer == null) {
+            return;
+        }
+
+        /*
+         * Keep protected dummies topped up every tick while
+         * the spawn window is active (not throttled).
+         */
+        maintainSpawnProtection(
+            player,
+            mcPlayer,
+            now
+        );
+
         var nextCheck =
             readNumber(
                 temp,
                 KEY_NEXT_CHECK,
                 0
             );
+
+        var pendingUUID =
+            readString(
+                temp,
+                KEY_PROCESSING_UUID,
+                ""
+            );
+
+        var checkInterval =
+            pendingUUID !== ""
+                ? FAST_CHECK_WHILE_PENDING_MS
+                : CHECK_INTERVAL_MS;
 
         if (
             now <
@@ -782,18 +1183,9 @@ function tick(event) {
             "" +
             (
                 now +
-                CHECK_INTERVAL_MS
+                checkInterval
             )
         );
-
-        var mcPlayer =
-            player.getMCEntity
-                ? player.getMCEntity()
-                : player;
-
-        if (mcPlayer == null) {
-            return;
-        }
 
         var playerData =
             StatsProvider
@@ -845,4 +1237,86 @@ function tick(event) {
             err
         );
     }
+}
+
+
+/*
+ * Cancel damage the player deals to a spawn-protected dummy.
+ * Enable DamagedEntity on this Player script tab.
+ */
+function damagedEntity(event) {
+    try {
+        if (event == null) {
+            return;
+        }
+
+        var target =
+            event.target;
+
+        if (target == null) {
+            return;
+        }
+
+        var mcTarget =
+            null;
+
+        try {
+            mcTarget =
+                target.getMCEntity
+                    ? target.getMCEntity()
+                    : null;
+        } catch (mcErr) {}
+
+        if (
+            mcTarget == null ||
+            !ShadowDummyEntity.class
+                .isInstance(
+                    mcTarget
+                )
+        ) {
+            return;
+        }
+
+        var now =
+            System.currentTimeMillis();
+
+        if (
+            !isDummySpawnProtected(
+                mcTarget,
+                now
+            )
+        ) {
+            return;
+        }
+
+        try {
+            event.damage =
+                0;
+        } catch (dmgErr) {}
+
+        try {
+            if (
+                typeof event.setCanceled ===
+                "function"
+            ) {
+                event.setCanceled(
+                    true
+                );
+            }
+        } catch (cancelErr) {}
+
+        setDummyInvulnerable(
+            mcTarget,
+            true
+        );
+
+        bumpDummyHurtInvuln(
+            mcTarget
+        );
+
+        fullyHealDummy(
+            mcTarget
+        );
+
+    } catch (err) {}
 }
