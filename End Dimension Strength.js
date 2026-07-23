@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.10.0
+ Version: 2.10.1
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -3112,10 +3112,6 @@ function cmdCleanupDragons(player) {
         print("[EndStrength] cleanup trigger 51 by " + str(player.getName()) +
             " removed~" + removed);
     } catch (e8) {}
-}
-
-function vecLength(x, y, z) {
-    return Math.sqrt(x * x + y * y + z * z);
 }
 
 function nearestPlayerToEntity(entity, world, range) {
