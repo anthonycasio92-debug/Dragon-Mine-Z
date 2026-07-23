@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.7.0
+ Version: 2.7.1
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -26,7 +26,7 @@
  - Kill announce fires once (no chat spam)
 
  PLACE AS:
- CustomNPCs Global Player Script
+ CustomNPCs Global Player Script — OWN tab (do not merge with other .js)
 
  REQUIRED EVENTS:
  - tick
@@ -36,11 +36,11 @@
 
  COMMAND:
    noppes script trigger 50 <playerName>
- CMI alias example:
-   enddragon:
-     Cmds:
-     - asFakeOp! noppes script trigger 50 [playerName]
-     ExactMatch: true
+
+ CMI alias (see EndDragon-Alias.yml):
+   MUST use asOp! — NOT asFakeOp!
+   CustomNPCs ignores player-script triggers from FakePlayer sources,
+   so asFakeOp! makes /enddragon appear to do nothing.
 ============================================================
 */
 
@@ -2061,7 +2061,16 @@ function damagedEntity(event) {
 
 function trigger(event) {
     try {
-        if (event == null || event.id != TRIGGER_ID) return;
+        if (event == null) return;
+
+        /*
+         * Coerce id — some callers pass string "50".
+         * CNPC also drops player-script triggers when the command source is a
+         * FakePlayer (CMI asFakeOp!). Alias must use asOp! / asPlayer!.
+         */
+        var id = -1;
+        try { id = Math.floor(Number(event.id)); } catch (eId) { id = -1; }
+        if (id !== TRIGGER_ID) return;
 
         var playerName = "";
         try {
@@ -2075,17 +2084,31 @@ function trigger(event) {
             }
         } catch (e2) {}
 
-        var player = findOnlinePlayer(playerName);
+        var player = null;
+
+        /* Prefer the real command-source player when present. */
+        try {
+            if (event.entity != null && isPlayer(event.entity)) player = event.entity;
+        } catch (e3) {}
+        try {
+            if (player == null && event.player != null && isPlayer(event.player)) {
+                player = event.player;
+            }
+        } catch (e4) {}
+
+        if (player == null && playerName !== "") {
+            player = findOnlinePlayer(playerName);
+        }
+
         if (player == null) {
             try {
-                if (event.entity != null && isPlayer(event.entity)) player = event.entity;
-            } catch (e3) {}
-        }
-        if (player == null) {
-            try { print("[EndStrength] trigger 50: player not found (" + playerName + ")"); } catch (e4) {}
+                print("[EndStrength] trigger 50: player not found (" + playerName +
+                    "). If using CMI, replace asFakeOp! with asOp! — FakePlayer sources are ignored by CNPC player scripts.");
+            } catch (e5) {}
             return;
         }
 
+        try { print("[EndStrength] trigger 50 ok for " + str(player.getName())); } catch (e6) {}
         cmdSpawnDragon(player);
     } catch (error) {
         try { print("[EndStrength] trigger: " + error); } catch (e) {}
