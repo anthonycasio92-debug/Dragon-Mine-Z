@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.10.1
+ Version: 2.10.2
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -197,15 +197,16 @@ var TEMP_CMD_SPAWN_LOCK = "end.strength.cmdSpawnLock";
 var TEMP_DRAGON_ATTACK = "end.strength.dragonAtk";
 
 /*
- * End kill TP settle (Sparring-inspired, dampened + softcaps):
- * DMZ awards health-based kill TP first; we settle to:
- *   base * dampened BP multiplier * kill boosts, then softcap by level.
+ * End kill TP settle (gentle):
+ * 1) Keep DMZ's normal health-based kill TP
+ * 2) Add a modest End bonus (light BP scale, hard-capped)
+ * 3) Softcap only as a MAX (claw down inflated awards)
  *
- * Target (after boosts): level ~4000 enderman ≈ 200k TP.
- * Dragon / shulker sit above that; phantom / endermite below.
+ * Does NOT force a full Sparring-scale payout anymore — that adjusted too hard.
  */
 var END_TP_SETTLE_ENABLED = true;
 var END_TP_SETTLE_DELAY_TICKS = 6;
+/* Kept for reference / legacy helpers; settle no longer forces these. */
 var END_TP_FAIR_DRAGON = 8000;
 var END_TP_FAIR_MOB = {
     endermite: 1000,
@@ -213,12 +214,18 @@ var END_TP_FAIR_MOB = {
     enderman: 2200,
     shulker: 3000
 };
-/* Sparring BP curve is for repeating payouts — keep only a slice of bonus. */
-var END_TP_BP_DAMPEN = 0.12;
-/*
- * Softcaps are the real mid-game brake. Values are final settled TP
- * (after BP dampen + kill boosts).
- */
+/* Flat End bonus added on top of DMZ kill TP (before softcap). */
+var END_TP_KILL_BONUS = {
+    dragon: 18000,
+    shulker: 6000,
+    enderman: 4500,
+    phantom: 3000,
+    endermite: 2000
+};
+/* Bonus BP scale — heavily dampened vs Sparring, and hard-capped. */
+var END_TP_BP_DAMPEN = 0.06;
+var END_TP_BONUS_BP_MULT_CAP = 2.5;
+/* Softcaps = MAX only. Level ~4000 enderman cannot exceed ~200k. */
 var END_TP_SOFTCAP_BY_KIND = {
     dragon: [
         { level: 1000, cap: 280000 },
@@ -262,6 +269,8 @@ var END_TP_SOFTCAP_BY_KIND = {
     ]
 };
 var END_TP_SOFTCAP_DEFAULT_MAX = 1000000;
+/* Ignore tiny estimate mismatches so we don't spam tiny adjusts. */
+var END_TP_ADJUST_MIN_DELTA = 50;
 
 /* Extra scripted dragon attacks — real DragonMineZ ki projectiles. */
 var DRAGON_EXTRA_ATTACKS_ENABLED = true;
@@ -1525,11 +1534,23 @@ function getSparringStyleBpMultiplier(bp) {
 
 function getEndBpMultiplier(bp) {
     var raw = getSparringStyleBpMultiplier(bp);
-    var dampen = num(END_TP_BP_DAMPEN, 0.18);
+    var dampen = num(END_TP_BP_DAMPEN, 0.06);
     if (dampen < 0) dampen = 0;
     if (dampen > 1) dampen = 1;
     /* Keep 1.0 floor; only scale the bonus above 1x. */
-    return Math.max(1.0, 1.0 + (raw - 1.0) * dampen);
+    var mult = Math.max(1.0, 1.0 + (raw - 1.0) * dampen);
+    var cap = num(END_TP_BONUS_BP_MULT_CAP, 2.5);
+    if (cap < 1) cap = 1;
+    if (mult > cap) mult = cap;
+    return mult;
+}
+
+function endKillBonusBase(kind) {
+    if (kind != null && END_TP_KILL_BONUS != null && END_TP_KILL_BONUS[kind] != null) {
+        return Math.max(0, Math.floor(num(END_TP_KILL_BONUS[kind], 0)));
+    }
+    if (kind === "dragon") return Math.max(0, Math.floor(num(END_TP_KILL_BONUS.dragon, 18000)));
+    return 2500;
 }
 
 function interpolateSoftCapTable(table, level, fallbackMax) {
@@ -1586,29 +1607,36 @@ function estimateDmzKillTpAward(player, maxHp) {
     return base;
 }
 
-function estimateFairEndKillTp(player, kind) {
-    var fairBase = fairEndKillTpBase(kind);
+/*
+ * Gentle target = DMZ kill award + modest End bonus, then MAX softcap.
+ * No longer replaces the kill with a full Sparring-scale lump sum.
+ */
+function estimateFairEndKillTp(player, kind, dmzAwarded) {
+    var awarded = Math.max(0, Math.floor(num(dmzAwarded, 0)));
     var power = readPlayerPower(player);
-    var bpMult = getEndBpMultiplier(power.bp);
-    fairBase = Math.max(1, Math.floor(fairBase * bpMult));
+    var bonus = Math.floor(endKillBonusBase(kind) * getEndBpMultiplier(power.bp));
+    if (bonus < 0) bonus = 0;
+
+    /* Apply kill TP boosts only to the small bonus, not a huge sparring base. */
     var data = getDmz(player);
-    var awarded = fairBase;
-    if (data != null) {
+    if (data != null && bonus > 0) {
         try {
             if (TpSource != null && TpSource.KILL != null) {
-                awarded = Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, fairBase), fairBase)));
+                bonus = Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, bonus), bonus)));
             } else {
-                awarded = Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
+                bonus = Math.max(0, Math.floor(num(data.calculateTPGain(bonus), bonus)));
             }
         } catch (e1) {
             try {
-                awarded = Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
+                bonus = Math.max(0, Math.floor(num(data.calculateTPGain(bonus), bonus)));
             } catch (e2) {}
         }
     }
+
+    var target = awarded + bonus;
     var cap = getEndKillTpSoftCap(power.level, kind);
-    if (awarded > cap) awarded = cap;
-    return awarded;
+    if (target > cap) target = cap;
+    return target;
 }
 
 function getPlayerTrainingPoints(player) {
@@ -1684,16 +1712,10 @@ function processEndKillTpClawback(player) {
     var kind = parts[1];
     var maxHp = num(parts[2], 0);
     var awarded = estimateDmzKillTpAward(player, maxHp);
-    var fair = estimateFairEndKillTp(player, kind);
-    var delta = fair - awarded;
-    if (Math.abs(delta) <= 1) {
-        msg(player,
-            chatColor("6") + "[End] " +
-            chatColor("e") + "+" + formatHpLabel(fair) +
-            chatColor("7") + " TP" +
-            chatColor("8") + " (End payout)");
-        return false;
-    }
+    var target = estimateFairEndKillTp(player, kind, awarded);
+    var delta = target - awarded;
+    var minDelta = Math.max(1, Math.floor(num(END_TP_ADJUST_MIN_DELTA, 50)));
+    if (Math.abs(delta) < minDelta) return false;
 
     if (!adjustPlayerTrainingPoints(player, delta)) return false;
 
@@ -1701,14 +1723,13 @@ function processEndKillTpClawback(player) {
     if (delta > 0) {
         msg(player,
             chatColor("6") + "[End] " +
-            chatColor("e") + "+" + formatHpLabel(fair) +
-            chatColor("7") + " TP for defeating " +
-            chatColor("d") + label +
-            chatColor("8") + " (End payout; was " + formatHpLabel(awarded) + ")");
+            chatColor("e") + "+" + formatHpLabel(delta) +
+            chatColor("7") + " End bonus TP" +
+            chatColor("8") + " (" + label + ")");
     } else {
         msg(player,
-            chatColor("7") + "[End] Kill TP settled to End payout (" +
-            formatHpLabel(fair) + " TP after boosts).");
+            chatColor("7") + "[End] Kill TP capped (" +
+            formatHpLabel(target) + " TP max for " + label + ").");
     }
     return true;
 }
