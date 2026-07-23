@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.8.2
+ Version: 2.8.3
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -664,7 +664,9 @@ function getOrCreateEndDragonFight() {
         print("[EndStrength] End ServerLevel=" + endLevel.getClass().getName() + " dim=" + dimName);
     } catch (eLog) {}
 
-    try { forceLoadEndChunks(endLevel); } catch (eChunk) {}
+    try { forceLoadEndChunks(endLevel); } catch (eChunk) {
+        try { print("[EndStrength] forceLoadEndChunks error: " + eChunk); } catch (eChunk2) {}
+    }
 
     var fight = readDragonFightFromLevel(endLevel);
     if (fight == null) {
@@ -682,12 +684,19 @@ function getOrCreateEndDragonFight() {
         } else {
             try { print("[EndStrength] Failed to construct EndDragonFight"); } catch (e3) {}
         }
+    } else {
+        try { print("[EndStrength] EndDragonFight ready class=" + fight.getClass().getName()); } catch (eReady) {}
+    }
+
+    var world = wrapEndWorld(endLevel);
+    if (world == null) {
+        try { print("[EndStrength] CNPC IWorld wrap failed — will spawn via ServerLevel directly"); } catch (eW) {}
     }
 
     return {
         fight: fight,
         level: endLevel,
-        world: wrapEndWorld(endLevel)
+        world: world
     };
 }
 
@@ -1936,15 +1945,97 @@ function setFightBoolean(fight, names, value) {
 
 function invokeFightMethod(fight, names) {
     if (fight == null) return null;
+    var lastErr = null;
     for (var i = 0; i < names.length; i++) {
         try {
             var m = fight.getClass().getDeclaredMethod(names[i]);
             m.setAccessible(true);
             return m.invoke(fight);
-        } catch (e1) {}
+        } catch (e1) { lastErr = e1; }
         try {
             var m0 = fight.getClass().getMethod(names[i]);
             return m0.invoke(fight);
+        } catch (e2) { lastErr = e2; }
+    }
+
+    /* Scan private no-arg methods whose name mentions Dragon. */
+    try {
+        var methods = fight.getClass().getDeclaredMethods();
+        for (var mi = 0; mi < methods.length; mi++) {
+            try {
+                var mn = str(methods[mi].getName());
+                if (methods[mi].getParameterCount() !== 0) continue;
+                var looksCreate = mn.toLowerCase().indexOf("createdragon") >= 0
+                    || mn.toLowerCase().indexOf("newdragon") >= 0
+                    || mn === "createNewDragon"
+                    || mn === "m_64110_"
+                    || mn === "m_64099_";
+                if (!looksCreate) continue;
+                methods[mi].setAccessible(true);
+                var out = methods[mi].invoke(fight);
+                try { print("[EndStrength] invokeFightMethod via scan: " + mn); } catch (eScan) {}
+                return out;
+            } catch (e3) { lastErr = e3; }
+        }
+    } catch (e4) { lastErr = e4; }
+
+    if (lastErr != null) {
+        try { print("[EndStrength] invokeFightMethod failed: " + lastErr); } catch (e5) {}
+    }
+    return null;
+}
+
+function findDragonsOnLevel(endLevel) {
+    var out = [];
+    if (endLevel == null) return out;
+    try {
+        var EntityType = Java.type("net.minecraft.world.entity.EntityType");
+        var AABB = Java.type("net.minecraft.world.phys.AABB");
+        var box = new AABB(-800.0, 0.0, -800.0, 800.0, 320.0, 800.0);
+        var dragonType = null;
+        try { dragonType = EntityType.ENDER_DRAGON; } catch (e1) {
+            try { dragonType = EntityType.f_20530_; } catch (e2) {}
+        }
+        if (dragonType == null) return out;
+        var mcList = null;
+        try {
+            mcList = endLevel.getEntities(dragonType, box, function (e) {
+                try { return e != null && e.isAlive(); } catch (eA) {
+                    try { return e != null && e.m_6084_(); } catch (eB) { return e != null; }
+                }
+            });
+        } catch (e3) {
+            try {
+                mcList = endLevel.m_45976_(dragonType, box, function (e) {
+                    try { return e != null && e.m_6084_(); } catch (eC) { return e != null; }
+                });
+            } catch (e4) {}
+        }
+        if (mcList == null) return out;
+        var it = mcList.iterator();
+        while (it.hasNext()) {
+            var wrapped = wrapMcEntity(it.next());
+            if (wrapped != null) out.push(wrapped);
+        }
+    } catch (e5) {}
+    return out;
+}
+
+function resolveSpawnedDragon(mcDragon, world, endLevel) {
+    var wrapped = wrapMcEntity(mcDragon);
+    if (wrapped != null) return wrapped;
+
+    var found = [];
+    try { if (world != null) found = findDragons(world); } catch (e1) {}
+    if (found.length > 0) return found[found.length - 1];
+
+    found = findDragonsOnLevel(endLevel);
+    if (found.length > 0) return found[found.length - 1];
+
+    /* Dragon exists on ServerLevel even if CNPC wrap failed — keep a pending buff. */
+    if (mcDragon != null) {
+        try {
+            print("[EndStrength] Dragon spawned on ServerLevel but CNPC wrap failed — entity is alive in The End");
         } catch (e2) {}
     }
     return null;
@@ -2024,7 +2115,9 @@ function restoreTowerCrystals(world) {
  */
 function spawnDragonViaFight(world) {
     var bundle = null;
-    try { bundle = getOrCreateEndDragonFight(); } catch (eBundle) {}
+    try { bundle = getOrCreateEndDragonFight(); } catch (eBundle) {
+        try { print("[EndStrength] getOrCreateEndDragonFight error: " + eBundle); } catch (eB2) {}
+    }
 
     var endLevel = bundle != null ? bundle.level : null;
     var fight = bundle != null ? bundle.fight : null;
@@ -2035,7 +2128,11 @@ function spawnDragonViaFight(world) {
         return null;
     }
 
-    try { clearAllDragons(world); } catch (eClear) {}
+    try { if (world != null) clearAllDragons(world); } catch (eClear) {}
+    try {
+        var existingLvl = findDragonsOnLevel(endLevel);
+        for (var di = 0; di < existingLvl.length; di++) despawnDragonEntity(existingLvl[di]);
+    } catch (eClear2) {}
 
     if (fight == null) {
         try { fight = getEndDragonFight(world); } catch (eFight) {}
@@ -2048,6 +2145,7 @@ function spawnDragonViaFight(world) {
         return null;
     }
 
+    try { print("[EndStrength] Spawning dragon via EndDragonFight..."); } catch (eSp) {}
     try { forceLoadEndChunks(endLevel != null ? endLevel : getMcServerLevel(world)); } catch (eChunks) {}
 
     try { fight.skipArenaLoadedCheck(); } catch (e1) {
@@ -2063,50 +2161,82 @@ function spawnDragonViaFight(world) {
         true);
 
     /* Fresh crystal set for a proper fight (avoid duplicates / empty towers). */
-    try { clearEndCrystals(world); } catch (eClr) {}
+    try { if (world != null) clearEndCrystals(world); } catch (eClr) {}
     try { fight.resetSpikeCrystals(); } catch (e3) {
         try { invokeFightMethod(fight, ["resetSpikeCrystals", "m_64101_", "resetEndCrystals"]); } catch (e4) {}
     }
 
     /* Re-place tower crystals so the dragon keeps normal heal/perch AI. */
-    try { restoreTowerCrystals(world); } catch (eCrystal) {}
+    try { if (world != null) restoreTowerCrystals(world); } catch (eCrystal) {}
 
     var mcDragon = null;
     try {
         mcDragon = invokeFightMethod(fight, ["createNewDragon", "m_64110_", "m_64099_"]);
+        if (mcDragon != null) {
+            try { print("[EndStrength] createNewDragon OK"); } catch (eOk) {}
+        } else {
+            try { print("[EndStrength] createNewDragon returned null"); } catch (eN) {}
+        }
     } catch (e5) {
+        try { print("[EndStrength] createNewDragon error: " + e5); } catch (e5b) {}
         mcDragon = null;
     }
 
     if (mcDragon == null) {
-        /* Fallback: findOrCreateDragon private path */
         try {
             mcDragon = invokeFightMethod(fight, ["findOrCreateDragon", "m_64103_", "checkDragonSeen"]);
-        } catch (e6) {}
+            if (mcDragon != null) {
+                try { print("[EndStrength] findOrCreateDragon OK"); } catch (eOk2) {}
+            }
+        } catch (e6) {
+            try { print("[EndStrength] findOrCreateDragon error: " + e6); } catch (e6b) {}
+        }
     }
 
     /* Last resort: spawn entity on the End ServerLevel and link it to this fight. */
     if (mcDragon == null && endLevel != null) {
         try {
             mcDragon = spawnLinkedDragonOnLevel(endLevel, fight);
-            try { print("[EndStrength] Used linked ServerLevel dragon spawn fallback"); } catch (e7) {}
+            if (mcDragon != null) {
+                try { print("[EndStrength] Used linked ServerLevel dragon spawn fallback"); } catch (e7) {}
+            } else {
+                try { print("[EndStrength] Linked ServerLevel dragon spawn returned null"); } catch (e7b) {}
+            }
         } catch (e8) {
             try { print("[EndStrength] Linked dragon fallback failed: " + e8); } catch (e9) {}
         }
     }
 
-    if (mcDragon == null) return null;
+    if (mcDragon == null) {
+        /* Maybe createNewDragon added it but returned void/null — scan level. */
+        var scanned = findDragonsOnLevel(endLevel);
+        if (scanned.length > 0) {
+            try { print("[EndStrength] Found dragon on ServerLevel after spawn attempts"); } catch (eSc) {}
+            return scanned[scanned.length - 1];
+        }
+        try { print("[EndStrength] All dragon spawn attempts failed"); } catch (eFail) {}
+        return null;
+    }
 
     setFightBoolean(fight,
         ["dragonKilled", "f_64068_", "field_13115"],
         false);
 
-    var wrapped = wrapMcEntity(mcDragon);
-    if (wrapped != null) return wrapped;
+    var resolved = resolveSpawnedDragon(mcDragon, world, endLevel);
+    if (resolved != null) return resolved;
 
-    /* Wrapper may lag one tick — re-find. */
-    var found = findDragons(world);
-    return found.length > 0 ? found[found.length - 1] : null;
+    /*
+     * Entity exists in The End even if CNPC cannot wrap it this tick.
+     * Return a soft success marker via pending buff + level scan next tick.
+     */
+    try {
+        var wPend = world != null ? world : wrapEndWorld(endLevel);
+        if (wPend != null) {
+            wPend.getStoreddata().put(WORLD_PENDING_DRAGON_BUFF, "command||" + nowMs());
+        }
+    } catch (ePend) {}
+    var scanned2 = findDragonsOnLevel(endLevel);
+    return scanned2.length > 0 ? scanned2[scanned2.length - 1] : null;
 }
 
 /* Spawn an EnderDragon on the End ServerLevel and bind it to EndDragonFight. */
@@ -2213,8 +2343,14 @@ function spawnDragonEntity(world, x, y, z) {
 }
 
 function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
-    if (world == null) return null;
-    var existing = findDragons(world);
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (e0) {}
+    if (world == null) world = wrapEndWorld(endLevel);
+    if (world == null && endLevel == null) return null;
+
+    var existing = [];
+    try { if (world != null) existing = findDragons(world); } catch (e1) {}
+    if (existing.length <= 0) existing = findDragonsOnLevel(endLevel);
     if (existing.length > 0) return null;
 
     /* Always size from the strongest player currently in The End. */
@@ -2225,15 +2361,18 @@ function spawnScaledDragon(world, powerPlayer, sourceLabel, x, y, z) {
     var dragon = spawnDragonEntity(world, x, y, z);
     if (dragon == null) {
         /* Fight/command summon may lag one tick */
-        existing = findDragons(world);
-        if (existing.length > 0) dragon = existing[0];
+        try { if (world != null) existing = findDragons(world); } catch (e2) {}
+        if (existing.length <= 0) existing = findDragonsOnLevel(endLevel);
+        if (existing.length > 0) dragon = existing[existing.length - 1];
     }
     if (dragon == null) {
         try {
-            var stored = world.getStoreddata();
-            stored.put(WORLD_PENDING_DRAGON_BUFF, sourceLabel + "|" +
-                (scalePlayer != null ? str(scalePlayer.getName()) : "") + "|" + nowMs());
-        } catch (e1) {}
+            var storedWorld = world != null ? world : wrapEndWorld(endLevel);
+            if (storedWorld != null) {
+                storedWorld.getStoreddata().put(WORLD_PENDING_DRAGON_BUFF, sourceLabel + "|" +
+                    (scalePlayer != null ? str(scalePlayer.getName()) : "") + "|" + nowMs());
+            }
+        } catch (e3) {}
         return null;
     }
 
@@ -2585,15 +2724,28 @@ function cmdSpawnDragon(player, opts) {
     /* Consume any queued request so tick does not double-run this. */
     try { clearCmdSpawnRequests(); } catch (eClr) {}
 
-    var world = forceLoadEndWorld();
+    var bundle = null;
+    try { bundle = getOrCreateEndDragonFight(); } catch (eBundle) {
+        try { print("[EndStrength] cmdSpawnDragon bundle error: " + eBundle); } catch (eB) {}
+    }
+
+    var endLevel = bundle != null ? bundle.level : null;
+    var world = bundle != null ? bundle.world : null;
+    if (world == null) world = forceLoadEndWorld();
     if (world == null) world = getEndWorld();
-    if (world == null) {
+    if (endLevel == null) {
+        try { endLevel = getEndServerLevel(); } catch (eLvl) {}
+    }
+
+    if (world == null && endLevel == null) {
         msg(player, COLOR + "c[The End] Could not find / load The End world.");
-        try { print("[EndStrength] cmdSpawnDragon: End world null"); } catch (e1) {}
+        try { print("[EndStrength] cmdSpawnDragon: End world/level null"); } catch (e1) {}
         return;
     }
 
-    var existing = findDragons(world);
+    var existing = [];
+    try { if (world != null) existing = findDragons(world); } catch (eEx1) {}
+    if (existing.length <= 0) existing = findDragonsOnLevel(endLevel);
     if (existing.length > 0) {
         notifyDragonAlreadyAlive(player, existing);
         return;
@@ -2614,20 +2766,27 @@ function cmdSpawnDragon(player, opts) {
     var result = spawnScaledDragon(world, player, "command", x, y, z);
     if (result == null) {
         /* Race / scan miss: dragon appeared (or was always there). */
-        existing = findDragons(world);
+        existing = [];
+        try { if (world != null) existing = findDragons(world); } catch (eEx2) {}
+        if (existing.length <= 0) existing = findDragonsOnLevel(endLevel);
         if (existing.length > 0) {
-            notifyDragonAlreadyAlive(player, existing);
+            /* Spawn worked; CNPC wrap/stats path missed the return value. */
+            try {
+                applyDragonStats(existing[existing.length - 1], readPlayerPower(player), "command");
+            } catch (eStats) {}
+            msg(player, COLOR + "6[The End] " + COLOR + "eEnder Dragon spawned and is alive in The End.");
+            try { print("[EndStrength] cmdSpawnDragon recovered dragon via ServerLevel scan"); } catch (eRec) {}
             return;
         }
         /* One automatic tick retry if End was still loading (trigger path only). */
         if (allowQueueRetry) {
             try { queueCmdSpawnRequest(player); } catch (eQ) {}
             msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
-            msg(player, COLOR + "7[The End] Retrying automatically once — or stand in The End and run /enddragon again.");
+            msg(player, COLOR + "7[The End] Retrying automatically once — check console for [EndStrength] details.");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
         } else {
             msg(player, COLOR + "c[The End] Failed to spawn the dragon through EndDragonFight.");
-            msg(player, COLOR + "7[The End] Stand in The End and run /enddragon again.");
+            msg(player, COLOR + "7[The End] Check console for [EndStrength] details, then retry in The End.");
             try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e4) {}
         }
         return;
@@ -2637,12 +2796,14 @@ function cmdSpawnDragon(player, opts) {
         COLOR + "c" + result.hp + COLOR + "e HP / " +
         COLOR + "b" + result.defense + COLOR + "e DEF " +
         COLOR + "8(scaled to " + result.power.name + " / Lv" + result.power.level + ")");
-    broadcastOnce(world, "end.strength.cmdAnnounce." + nowMs(),
-        COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
-        COLOR + "7 summoned an Ender Dragon! " +
-        COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
-        Math.floor(result.defense / 1000) + "k DEF, scaled to " +
-        result.power.name + ")");
+    if (world != null) {
+        broadcastOnce(world, "end.strength.cmdAnnounce." + nowMs(),
+            COLOR + "5[The End] " + COLOR + "d" + str(player.getName()) +
+            COLOR + "7 summoned an Ender Dragon! " +
+            COLOR + "8(" + Math.floor(result.hp / 1000) + "k HP / " +
+            Math.floor(result.defense / 1000) + "k DEF, scaled to " +
+            result.power.name + ")");
+    }
 }
 
 function findOnlinePlayer(name) {
