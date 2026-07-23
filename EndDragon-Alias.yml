@@ -1,11 +1,12 @@
 #
-# End Dimension Strength - CMI alias
+# End Dimension Strength - CMI aliases
 #
 # ONE script only:
 #   End Dimension Strength.js — Global Player, OWN tab
 #   events: tick, kill, trigger, damagedEntity
 #
-# /enddragon  -> noppes script trigger 50 [playerName]
+# /enddragon     -> trigger 50  (spawn)
+# /cleardragons  -> trigger 51  (kill all ender dragons)
 #
 # asFakeOp! is fine — the script resolves the real player from
 # [playerName] / arguments[0] (not event.entity).
@@ -20,5 +21,15 @@ CustomAlias:
   spawndragon:
     Cmds:
     - asFakeOp! noppes script trigger 50 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  cleardragons:
+    Cmds:
+    - asFakeOp! noppes script trigger 51 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  killdragons:
+    Cmds:
+    - asFakeOp! noppes script trigger 51 [playerName]
     AddTabs: true
     ExactMatch: true

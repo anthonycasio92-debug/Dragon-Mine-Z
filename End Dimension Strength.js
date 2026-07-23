@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.8.4
+ Version: 2.9.0
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -12,8 +12,8 @@
  - DMZ kill TP = entity.getMaxHealth() * tpHealthRatio (default 0.25) then
    TP boosts. Absurd vanilla HP → billions of TP. So HP stays modest and
    DEF carries the fight (flat absorb + % reduction like DMZ).
- - End kill TP is SETTLED to Sparring/Rival-scale payouts (BP curve), not
-   left at the tiny health-based DMZ award from TP-safe HP pools.
+ - End kill TP is SETTLED with dampened BP scaling + per-mob level softcaps
+   (e.g. ~200k enderman at level ~4000).
  - Per-hit damage caps remain as a safety net vs one-shot skills.
  - Dragon max_health is applied ONCE (spawn / real HP change only). Constant
    attribute rewrites break EndDragonFight phase AI. No orphan /summon.
@@ -21,10 +21,11 @@
  FEATURES:
  - Dragon always scales DEF to the strongest End player; HP grows only when needed
  - Dragon spawned via EndDragonFight only (orphan summon disabled — broken AI)
+ - Extra dragon attacks: ki beams + dragon-fireball breath
  - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
  - End mobs ~10–22 matched hits
- - /enddragon command spawn (CMI alias -> trigger 50) — all in THIS script
+ - /enddragon spawn (trigger 50) + /cleardragons cleanup (trigger 51)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
@@ -34,11 +35,12 @@
  CustomNPCs Global Player Script — OWN tab (do not merge with other scripts)
  events: tick, kill, trigger, damagedEntity
 
- COMMAND:
-   noppes script trigger 50 <playerName>
+ COMMANDS:
+   noppes script trigger 50 <playerName>   # spawn dragon
+   noppes script trigger 51 <playerName>   # kill all ender dragons
 
  CMI (EndDragon-Alias.yml):
-   asFakeOp! noppes script trigger 50 [playerName]
+   asFakeOp! noppes script trigger 50/51 [playerName]
    Trigger resolves the REAL player from arguments[0] (not event.entity,
    which is the FakeOp source and breaks spawn/messages).
 ============================================================
@@ -53,7 +55,10 @@ try { TpSource = Java.type("com.dragonminez.common.config.TpSource"); } catch (e
 
 /* ========================= CONFIG ========================= */
 
-var TRIGGER_ID = 50;
+var TRIGGER_SPAWN_ID = 50;
+var TRIGGER_CLEANUP_ID = 51;
+/* Back-compat alias */
+var TRIGGER_ID = TRIGGER_SPAWN_ID;
 
 var SCAN_INTERVAL_MS = 1500;
 var SCAN_RADIUS = 96;
@@ -187,46 +192,84 @@ var WORLD_PENDING_DRAGON_BUFF = "end.strength.pendingDragonBuff";
 var WORLD_CMD_SPAWN_REQUEST = "end.strength.cmdSpawnRequest";
 var TEMP_TP_CLAWBACK = "end.strength.tpClawback";
 var TEMP_CMD_SPAWN_LOCK = "end.strength.cmdSpawnLock";
+var TEMP_DRAGON_ATTACK = "end.strength.dragonAtk";
 
 /*
- * End kill TP settle (Sparring-inspired, dampened):
- * DMZ still awards health-based kill TP first (tiny on TP-safe HP).
- * A few ticks later we REPLACE that with a fair payout:
- *   base * dampened BP multiplier * DMZ kill TP boosts
+ * End kill TP settle (Sparring-inspired, dampened + softcaps):
+ * DMZ awards health-based kill TP first; we settle to:
+ *   base * dampened BP multiplier * kill boosts, then softcap by level.
  *
- * Full Sparring BP curve is too hot for a one-time End kill (lv~4k was
- * hitting ~1M dragon TP). End uses the same shape but dampened, plus a
- * soft level cap so mid-game lands near ~200k for the dragon.
- *
- * Bases (pre BP / boosts):
- *   dragon   ~ strong Rival-style lump
- *   shulker / enderman / phantom / endermite — smaller fractions
+ * Target (after boosts): level ~4000 enderman ≈ 200k TP.
+ * Dragon / shulker sit above that; phantom / endermite below.
  */
 var END_TP_SETTLE_ENABLED = true;
 var END_TP_SETTLE_DELAY_TICKS = 6;
-var END_TP_FAIR_DRAGON = 10000;
+var END_TP_FAIR_DRAGON = 8000;
 var END_TP_FAIR_MOB = {
-    endermite: 1200,
-    phantom: 1600,
-    enderman: 2400,
-    shulker: 3600
+    endermite: 1000,
+    phantom: 1400,
+    enderman: 2200,
+    shulker: 3000
 };
+/* Sparring BP curve is for repeating payouts — keep only a slice of bonus. */
+var END_TP_BP_DAMPEN = 0.12;
 /*
- * Sparring BP mult is for repeating 5s payouts. End kills are lump sums,
- * so only keep a fraction of (mult - 1). 0.18 ≈ lv4k dragon near ~200k
- * after typical kill boosts (was ~1M on the full curve).
+ * Softcaps are the real mid-game brake. Values are final settled TP
+ * (after BP dampen + kill boosts).
  */
-var END_TP_BP_DAMPEN = 0.18;
-/* Soft-cap final settled TP by killer level (dragon). Mobs use fractions. */
-var END_TP_DRAGON_SOFTCAP_BY_LEVEL = [
-    { level: 1000, cap: 80000 },
-    { level: 2500, cap: 140000 },
-    { level: 4000, cap: 220000 },
-    { level: 7000, cap: 350000 },
-    { level: 10000, cap: 500000 },
-    { level: 20000, cap: 750000 }
-];
-var END_TP_DRAGON_SOFTCAP_MAX = 1000000;
+var END_TP_SOFTCAP_BY_KIND = {
+    dragon: [
+        { level: 1000, cap: 280000 },
+        { level: 2500, cap: 450000 },
+        { level: 4000, cap: 650000 },
+        { level: 7000, cap: 950000 },
+        { level: 10000, cap: 1400000 },
+        { level: 20000, cap: 2200000 }
+    ],
+    enderman: [
+        { level: 1000, cap: 70000 },
+        { level: 2500, cap: 130000 },
+        { level: 4000, cap: 200000 },
+        { level: 7000, cap: 320000 },
+        { level: 10000, cap: 450000 },
+        { level: 20000, cap: 700000 }
+    ],
+    shulker: [
+        { level: 1000, cap: 90000 },
+        { level: 2500, cap: 160000 },
+        { level: 4000, cap: 260000 },
+        { level: 7000, cap: 400000 },
+        { level: 10000, cap: 560000 },
+        { level: 20000, cap: 850000 }
+    ],
+    phantom: [
+        { level: 1000, cap: 50000 },
+        { level: 2500, cap: 95000 },
+        { level: 4000, cap: 150000 },
+        { level: 7000, cap: 240000 },
+        { level: 10000, cap: 340000 },
+        { level: 20000, cap: 520000 }
+    ],
+    endermite: [
+        { level: 1000, cap: 35000 },
+        { level: 2500, cap: 65000 },
+        { level: 4000, cap: 100000 },
+        { level: 7000, cap: 160000 },
+        { level: 10000, cap: 230000 },
+        { level: 20000, cap: 360000 }
+    ]
+};
+var END_TP_SOFTCAP_DEFAULT_MAX = 1000000;
+
+/* Extra scripted dragon attacks (on top of vanilla perch/charge AI). */
+var DRAGON_EXTRA_ATTACKS_ENABLED = true;
+var DRAGON_ATTACK_INTERVAL_MS = 3200;
+var DRAGON_ATTACK_RANGE = 96;
+var DRAGON_ATTACK_WORLD_LOCK = "end.strength.dragonAtkLock";
+var DRAGON_KI_BEAM_CHANCE = 0.55; /* else breath fireball */
+var DRAGON_KI_BEAM_DAMAGE = 14;   /* vanilla-scale chip; DMZ DEF still applies elsewhere */
+var DRAGON_KI_BEAM_HITS = 3;      /* multi-tick beam pulses */
+var DRAGON_BREATH_SPEED = 0.85;
 
 /* ========================= HELPERS ========================= */
 
@@ -1463,13 +1506,12 @@ function getEndBpMultiplier(bp) {
     return Math.max(1.0, 1.0 + (raw - 1.0) * dampen);
 }
 
-function getEndDragonTpSoftCap(level) {
+function interpolateSoftCapTable(table, level, fallbackMax) {
     level = Math.max(1, Math.floor(num(level, 1)));
-    var table = END_TP_DRAGON_SOFTCAP_BY_LEVEL;
     if (table == null || table.length <= 0) {
-        return Math.floor(num(END_TP_DRAGON_SOFTCAP_MAX, 1000000));
+        return Math.floor(num(fallbackMax, END_TP_SOFTCAP_DEFAULT_MAX));
     }
-    if (level <= table[0].level) return Math.floor(num(table[0].cap, 80000));
+    if (level <= table[0].level) return Math.floor(num(table[0].cap, table[0].cap));
     for (var i = 0; i < table.length - 1; i++) {
         var a = table[i];
         var b = table[i + 1];
@@ -1478,18 +1520,20 @@ function getEndDragonTpSoftCap(level) {
             return Math.floor(num(a.cap, 0) + (num(b.cap, 0) - num(a.cap, 0)) * t);
         }
     }
-    return Math.floor(num(END_TP_DRAGON_SOFTCAP_MAX, table[table.length - 1].cap));
+    return Math.floor(num(table[table.length - 1].cap, fallbackMax));
 }
 
 function getEndKillTpSoftCap(level, kind) {
-    var dragonCap = getEndDragonTpSoftCap(level);
-    if (kind === "dragon") return dragonCap;
-    var frac = 0.25;
-    if (kind === "shulker") frac = 0.35;
-    else if (kind === "enderman") frac = 0.25;
-    else if (kind === "phantom") frac = 0.18;
-    else if (kind === "endermite") frac = 0.12;
-    return Math.max(1000, Math.floor(dragonCap * frac));
+    var key = str(kind);
+    var table = null;
+    try {
+        if (END_TP_SOFTCAP_BY_KIND != null && END_TP_SOFTCAP_BY_KIND[key] != null) {
+            table = END_TP_SOFTCAP_BY_KIND[key];
+        } else if (END_TP_SOFTCAP_BY_KIND != null) {
+            table = END_TP_SOFTCAP_BY_KIND.enderman;
+        }
+    } catch (e1) {}
+    return Math.max(1000, interpolateSoftCapTable(table, level, END_TP_SOFTCAP_DEFAULT_MAX));
 }
 
 function estimateDmzKillTpAward(player, maxHp) {
@@ -1618,7 +1662,7 @@ function processEndKillTpClawback(player) {
     var delta = fair - awarded;
     if (Math.abs(delta) <= 1) {
         msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
-            COLOR + "7 TP" + COLOR + "8 (Sparring-scale End payout)");
+            COLOR + "7 TP" + COLOR + "8 (End payout)");
         return false;
     }
 
@@ -1628,9 +1672,9 @@ function processEndKillTpClawback(player) {
     if (delta > 0) {
         msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
             COLOR + "7 TP for defeating " + COLOR + "d" + label +
-            COLOR + "8 (Sparring-scale payout; was " + formatHpLabel(awarded) + ")");
+            COLOR + "8 (End payout; was " + formatHpLabel(awarded) + ")");
     } else {
-        msg(player, COLOR + "7[End] Kill TP settled to Sparring-scale payout (" +
+        msg(player, COLOR + "7[End] Kill TP settled to End payout (" +
             formatHpLabel(fair) + " TP after boosts).");
     }
     return true;
@@ -2883,6 +2927,292 @@ function findOnlinePlayer(name) {
     return null;
 }
 
+/* ========================= CLEANUP / DRAGON ATTACKS ========================= */
+
+function cmdCleanupDragons(player) {
+    if (!isRealOnlinePlayer(player) && !isPlayer(player)) {
+        try { print("[EndStrength] cmdCleanupDragons: invalid player"); } catch (e0) {}
+        return;
+    }
+
+    var world = forceLoadEndWorld() || getEndWorld();
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (e1) {}
+
+    var removed = 0;
+    try {
+        if (world != null) removed += clearAllDragons(world);
+    } catch (e2) {}
+
+    try {
+        var onLevel = findDragonsOnLevel(endLevel);
+        for (var i = 0; i < onLevel.length; i++) {
+            despawnDragonEntity(onLevel[i]);
+            removed++;
+        }
+    } catch (e3) {}
+
+    /* Command fallback in case entity handles miss anything. */
+    try {
+        if (world != null) {
+            NpcAPI.Instance().executeCommand(world,
+                "execute in minecraft:the_end run kill @e[type=minecraft:ender_dragon]");
+        }
+    } catch (e4) {
+        try {
+            if (world != null) {
+                NpcAPI.Instance().executeCommand(world, "kill @e[type=minecraft:ender_dragon]");
+            }
+        } catch (e5) {}
+    }
+
+    try { clearCmdSpawnRequests(); } catch (e6) {}
+    try {
+        if (world != null) {
+            var stored = world.getStoreddata();
+            if (stored.has(WORLD_PENDING_DRAGON_BUFF)) stored.remove(WORLD_PENDING_DRAGON_BUFF);
+            stored.put(WORLD_LAST_NATURAL, "" + nowMs());
+        }
+    } catch (e7) {}
+
+    msg(player, COLOR + "6[The End] " + COLOR + "eCleared ender dragons" +
+        (removed > 0 ? COLOR + "7 (" + removed + " removed)" : COLOR + "8 (none found / killall sent)") +
+        COLOR + "e.");
+    try {
+        print("[EndStrength] cleanup trigger 51 by " + str(player.getName()) +
+            " removed~" + removed);
+    } catch (e8) {}
+}
+
+function vecLength(x, y, z) {
+    return Math.sqrt(x * x + y * y + z * z);
+}
+
+function nearestPlayerToEntity(entity, world, range) {
+    if (entity == null) return null;
+    var best = null;
+    var bestD = range * range;
+    try {
+        var list = null;
+        if (world != null) {
+            list = world.getNearbyEntities(
+                Math.floor(entity.getX()),
+                Math.floor(entity.getY()),
+                Math.floor(entity.getZ()),
+                Math.floor(range),
+                1
+            );
+        }
+        if (list == null) return null;
+        for (var i = 0; i < list.length; i++) {
+            if (!isRealOnlinePlayer(list[i])) continue;
+            var dx = list[i].getX() - entity.getX();
+            var dy = list[i].getY() - entity.getY();
+            var dz = list[i].getZ() - entity.getZ();
+            var d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestD) {
+                bestD = d2;
+                best = list[i];
+            }
+        }
+    } catch (e) {}
+    return best;
+}
+
+function hurtPlayerVanilla(player, amount) {
+    amount = Math.max(1, num(amount, 1));
+    try { player.damage(amount); return true; } catch (e1) {}
+    try {
+        var mc = player.getMCEntity();
+        if (mc == null) return false;
+        var DamageSource = Java.type("net.minecraft.world.damagesource.DamageSource");
+        var src = null;
+        try { src = mc.damageSources().magic(); } catch (e2) {
+            try { src = mc.m_269291_().m_269079_(); } catch (e3) {}
+        }
+        if (src != null) {
+            try { mc.hurt(src, amount); return true; } catch (e4) {
+                try { mc.m_6469_(src, amount); return true; } catch (e5) {}
+            }
+        }
+    } catch (e6) {}
+    return false;
+}
+
+function spawnDragonBreathFireball(world, dragon, target) {
+    if (world == null || dragon == null || target == null) return false;
+    var x = num(dragon.getX(), 0);
+    var y = num(dragon.getY(), 0) - 1.5;
+    var z = num(dragon.getZ(), 0);
+    var tx = num(target.getX(), 0);
+    var ty = num(target.getY(), 0) + 1.0;
+    var tz = num(target.getZ(), 0);
+    var dx = tx - x;
+    var dy = ty - y;
+    var dz = tz - z;
+    var len = vecLength(dx, dy, dz);
+    if (!(len > 0.001)) return false;
+    var spd = num(DRAGON_BREATH_SPEED, 0.85);
+    dx = (dx / len) * spd;
+    dy = (dy / len) * spd;
+    dz = (dz / len) * spd;
+
+    try {
+        var fb = world.createEntity("minecraft:dragon_fireball");
+        if (fb != null) {
+            try { fb.setPosition(x, y, z); } catch (e1) {
+                try { fb.setPos(x, y, z); } catch (e2) {}
+            }
+            try {
+                var mc = fb.getMCEntity();
+                if (mc != null) {
+                    try { mc.setDeltaMovement(dx, dy, dz); } catch (e3) {
+                        try { mc.m_20334_(dx, dy, dz); } catch (e4) {}
+                    }
+                    /* power vector used by DragonFireball */
+                    try {
+                        mc.xPower = dx * 0.1;
+                        mc.yPower = dy * 0.1;
+                        mc.zPower = dz * 0.1;
+                    } catch (e5) {
+                        try {
+                            mc.f_36864_ = dx * 0.1;
+                            mc.f_36865_ = dy * 0.1;
+                            mc.f_36866_ = dz * 0.1;
+                        } catch (e6) {}
+                    }
+                }
+            } catch (e7) {}
+            world.spawnEntity(fb);
+            return true;
+        }
+    } catch (e8) {}
+
+    try {
+        NpcAPI.Instance().executeCommand(world,
+            "execute in minecraft:the_end run summon minecraft:dragon_fireball " +
+            x.toFixed(2) + " " + y.toFixed(2) + " " + z.toFixed(2) +
+            " {power:[" + dx.toFixed(3) + "," + dy.toFixed(3) + "," + dz.toFixed(3) + "]}");
+        return true;
+    } catch (e9) {}
+    return false;
+}
+
+function fireDragonKiBeam(world, dragon, target) {
+    if (world == null || dragon == null || target == null) return false;
+    var x0 = num(dragon.getX(), 0);
+    var y0 = num(dragon.getY(), 0) - 1.0;
+    var z0 = num(dragon.getZ(), 0);
+    var x1 = num(target.getX(), 0);
+    var y1 = num(target.getY(), 0) + 1.0;
+    var z1 = num(target.getZ(), 0);
+    var steps = 18;
+    for (var i = 1; i <= steps; i++) {
+        var t = i / steps;
+        var px = x0 + (x1 - x0) * t;
+        var py = y0 + (y1 - y0) * t;
+        var pz = z0 + (z1 - z0) * t;
+        try {
+            world.spawnParticle("minecraft:end_rod", px, py, pz, 0, 0, 0, 0.01, 2);
+        } catch (e1) {
+            try { world.spawnParticle("end_rod", px, py, pz, 0, 0, 0, 0.01, 2); } catch (e2) {}
+        }
+        try {
+            world.spawnParticle("minecraft:dragon_breath", px, py, pz, 0, 0, 0, 0.02, 1);
+        } catch (e3) {
+            try { world.spawnParticle("dragon_breath", px, py, pz, 0, 0, 0, 0.02, 1); } catch (e4) {}
+        }
+    }
+
+    var dmg = Math.max(4, num(DRAGON_KI_BEAM_DAMAGE, 14));
+    var pulses = Math.max(1, Math.floor(num(DRAGON_KI_BEAM_HITS, 3)));
+    for (var p = 0; p < pulses; p++) {
+        hurtPlayerVanilla(target, dmg);
+    }
+
+    try {
+        world.playSoundAt(target.getX(), target.getY(), target.getZ(),
+            "minecraft:entity.ender_dragon.shoot", 1.0, 1.35);
+    } catch (e5) {
+        try {
+            NpcAPI.Instance().executeCommand(world,
+                "execute in minecraft:the_end run playsound minecraft:entity.ender_dragon.shoot master @a " +
+                Math.floor(x1) + " " + Math.floor(y1) + " " + Math.floor(z1) + " 1 1.3");
+        } catch (e6) {}
+    }
+    return true;
+}
+
+function tickDragonExtraAttacks(world, player) {
+    if (DRAGON_EXTRA_ATTACKS_ENABLED !== true) return;
+    if (world == null || !isInTheEnd(world)) return;
+
+    var t = nowMs();
+    try {
+        var stored = world.getStoreddata();
+        var last = stored.has(DRAGON_ATTACK_WORLD_LOCK)
+            ? num(stored.get(DRAGON_ATTACK_WORLD_LOCK), 0) : 0;
+        if (t - last < num(DRAGON_ATTACK_INTERVAL_MS, 3200)) return;
+        stored.put(DRAGON_ATTACK_WORLD_LOCK, "" + t);
+    } catch (eLock) {
+        try {
+            var temp = player.getTempdata();
+            var lastP = temp.has(TEMP_DRAGON_ATTACK) ? num(temp.get(TEMP_DRAGON_ATTACK), 0) : 0;
+            if (t - lastP < num(DRAGON_ATTACK_INTERVAL_MS, 3200)) return;
+            temp.put(TEMP_DRAGON_ATTACK, "" + t);
+        } catch (eLock2) { return; }
+    }
+
+    var dragons = [];
+    try { dragons = findDragons(world); } catch (e1) {}
+    if (dragons.length <= 0) {
+        try { dragons = findDragonsOnLevel(getEndServerLevel()); } catch (e2) {}
+    }
+    if (dragons.length <= 0) return;
+
+    for (var d = 0; d < dragons.length; d++) {
+        var dragon = dragons[d];
+        var target = nearestPlayerToEntity(dragon, world, DRAGON_ATTACK_RANGE);
+        if (target == null) target = player;
+        if (!isRealOnlinePlayer(target)) continue;
+
+        var roll = Math.random();
+        if (roll < num(DRAGON_KI_BEAM_CHANCE, 0.55)) {
+            fireDragonKiBeam(world, dragon, target);
+        } else {
+            spawnDragonBreathFireball(world, dragon, target);
+        }
+    }
+}
+
+function resolveTriggerPlayer(event) {
+    var playerName = "";
+    try {
+        if (event.arguments != null && event.arguments.length > 0) {
+            playerName = str(event.arguments[0]).trim();
+        }
+    } catch (e1) {}
+    try {
+        if (playerName === "" && event.args != null && event.args.length > 0) {
+            playerName = str(event.args[0]).trim();
+        }
+    } catch (e2) {}
+
+    var player = null;
+    if (playerName !== "") player = findOnlinePlayer(playerName);
+    if (player == null) {
+        try {
+            if (isRealOnlinePlayer(event.entity)) player = event.entity;
+        } catch (e3) {}
+    }
+    if (player == null) {
+        try {
+            if (isRealOnlinePlayer(event.player)) player = event.player;
+        } catch (e4) {}
+    }
+    return { player: player, playerName: playerName };
+}
+
 /* ========================= EVENTS ========================= */
 
 function tick(event) {
@@ -2901,6 +3231,9 @@ function tick(event) {
 
         var temp = player.getTempdata();
         var t = nowMs();
+
+        /* Scripted ki beam / breath attacks while a dragon is alive. */
+        try { tickDragonExtraAttacks(world, player); } catch (eAtk) {}
 
         /* Clear podium egg after a recent kill. */
         try {
@@ -3090,48 +3423,32 @@ function trigger(event) {
          */
         var id = -1;
         try { id = Number(event.id); } catch (eId) { id = -1; }
-        if (id != TRIGGER_ID) return;
+        if (id != TRIGGER_SPAWN_ID && id != TRIGGER_CLEANUP_ID) return;
 
-        var playerName = "";
-        try {
-            if (event.arguments != null && event.arguments.length > 0) {
-                playerName = str(event.arguments[0]).trim();
-            }
-        } catch (e1) {}
-        try {
-            if (playerName === "" && event.args != null && event.args.length > 0) {
-                playerName = str(event.args[0]).trim();
-            }
-        } catch (e2) {}
-
-        var player = null;
-        if (playerName !== "") {
-            player = findOnlinePlayer(playerName);
-        }
-
-        /* Fallback only for a real online player source (not FakeOp). */
-        if (player == null) {
-            try {
-                if (isRealOnlinePlayer(event.entity)) player = event.entity;
-            } catch (e3) {}
-        }
-        if (player == null) {
-            try {
-                if (isRealOnlinePlayer(event.player)) player = event.player;
-            } catch (e4) {}
-        }
+        var resolved = resolveTriggerPlayer(event);
+        var player = resolved.player;
+        var playerName = resolved.playerName;
 
         if (player == null) {
             try {
-                print("[EndStrength] trigger 50: online player not found (" + playerName +
-                    "). Use: noppes script trigger 50 <PlayerName>");
+                print("[EndStrength] trigger " + id + ": online player not found (" + playerName +
+                    "). Use: noppes script trigger " + id + " <PlayerName>");
             } catch (e5) {}
+            return;
+        }
+
+        if (id == TRIGGER_CLEANUP_ID) {
+            try {
+                print("[EndStrength] trigger 51 -> cmdCleanupDragons for " + str(player.getName()));
+            } catch (e6) {}
+            msg(player, COLOR + "7[The End] Trigger 51 received — clearing dragons...");
+            cmdCleanupDragons(player);
             return;
         }
 
         try {
             print("[EndStrength] trigger 50 -> cmdSpawnDragon for " + str(player.getName()));
-        } catch (e6) {}
+        } catch (e7) {}
         msg(player, COLOR + "7[The End] Trigger 50 received — spawning dragon...");
         cmdSpawnDragon(player);
     } catch (error) {
