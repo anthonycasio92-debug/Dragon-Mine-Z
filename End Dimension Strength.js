@@ -2325,7 +2325,7 @@ function kill(event) {
         var kind = classifyEndEntity(victim);
         if (kind == null) return;
 
-        /* Claw back HP-scaled kill TP down to a fair End payout. */
+        /* Settle HP-scaled DMZ kill TP up/down to Sparring-scale End payout. */
         try {
             scheduleEndKillTpClawback(player, kind, getEntityMaxHealthSafe(victim));
         } catch (eTp) {}
