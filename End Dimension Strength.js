@@ -20,7 +20,7 @@
  FEATURES:
  - Dragon always scales DEF to the strongest End player; HP grows only when needed
  - Spawn prefers EndDragonFight; falls back to createEntity/summon if needed
- - Extra dragon attacks: ki beams + dragon-fireball breath
+ - Extra dragon attacks: real DragonMineZ ki beams + ki blasts (not vanilla fireballs)
  - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
  - End mobs ~10–22 matched hits
@@ -263,15 +263,23 @@ var END_TP_SOFTCAP_BY_KIND = {
 };
 var END_TP_SOFTCAP_DEFAULT_MAX = 1000000;
 
-/* Extra scripted dragon attacks (on top of vanilla perch/charge AI). */
+/* Extra scripted dragon attacks — real DragonMineZ ki projectiles. */
 var DRAGON_EXTRA_ATTACKS_ENABLED = true;
 var DRAGON_ATTACK_INTERVAL_MS = 3200;
 var DRAGON_ATTACK_RANGE = 96;
 var DRAGON_ATTACK_WORLD_LOCK = "end.strength.dragonAtkLock";
-var DRAGON_KI_BEAM_CHANCE = 0.55; /* else breath fireball */
-var DRAGON_KI_BEAM_DAMAGE = 14;   /* vanilla-scale chip; DMZ DEF still applies elsewhere */
-var DRAGON_KI_BEAM_HITS = 3;      /* multi-tick beam pulses */
-var DRAGON_BREATH_SPEED = 0.85;
+var DRAGON_KI_BEAM_CHANCE = 0.60; /* else DMZ ki blast */
+var DRAGON_DMZ_KI_DAMAGE = 450;   /* kiblast DamageSource amount (non-player owner) */
+var DRAGON_DMZ_KI_MELEE_FRAC = 0.10; /* also scale from target melee */
+var DRAGON_DMZ_KI_DAMAGE_CAP = 8000;
+var DRAGON_DMZ_KI_SPEED_BEAM = 1.75;
+var DRAGON_DMZ_KI_SPEED_BLAST = 2.35;
+var DRAGON_DMZ_KI_SIZE_BLAST = 1.35;
+var DRAGON_DMZ_KI_LIFE_BEAM = 50;  /* ticks after fireHability */
+var DRAGON_DMZ_KI_LIFE_BLAST = 70;
+var DRAGON_DMZ_KI_COLOR_MAIN = 0xC44CFF;
+var DRAGON_DMZ_KI_COLOR_BORDER = 0x7A1FA2;
+var DRAGON_DMZ_KI_COLOR_OUTLINE = 0xFFFFFF;
 
 /* ========================= HELPERS ========================= */
 
@@ -3141,125 +3149,202 @@ function nearestPlayerToEntity(entity, world, range) {
     return best;
 }
 
-function hurtPlayerVanilla(player, amount) {
-    amount = Math.max(1, num(amount, 1));
-    try { player.damage(amount); return true; } catch (e1) {}
-    try {
-        var mc = player.getMCEntity();
-        if (mc == null) return false;
-        var DamageSource = Java.type("net.minecraft.world.damagesource.DamageSource");
-        var src = null;
-        try { src = mc.damageSources().magic(); } catch (e2) {
-            try { src = mc.m_269291_().m_269079_(); } catch (e3) {}
-        }
-        if (src != null) {
-            try { mc.hurt(src, amount); return true; } catch (e4) {
-                try { mc.m_6469_(src, amount); return true; } catch (e5) {}
-            }
-        }
-    } catch (e6) {}
-    return false;
+function calcDragonDmzKiDamage(targetPlayer) {
+    var base = Math.max(1, num(DRAGON_DMZ_KI_DAMAGE, 450));
+    var power = readPlayerPower(targetPlayer);
+    var scaled = Math.max(base, num(power.melee, 0) * num(DRAGON_DMZ_KI_MELEE_FRAC, 0.10));
+    var cap = Math.max(base, num(DRAGON_DMZ_KI_DAMAGE_CAP, 8000));
+    if (scaled > cap) scaled = cap;
+    return scaled;
 }
 
-function spawnDragonBreathFireball(world, dragon, target) {
-    if (world == null || dragon == null || target == null) return false;
-    var x = num(dragon.getX(), 0);
-    var y = num(dragon.getY(), 0) - 1.5;
-    var z = num(dragon.getZ(), 0);
-    var tx = num(target.getX(), 0);
-    var ty = num(target.getY(), 0) + 1.0;
-    var tz = num(target.getZ(), 0);
-    var dx = tx - x;
-    var dy = ty - y;
-    var dz = tz - z;
-    var len = vecLength(dx, dy, dz);
-    if (!(len > 0.001)) return false;
-    var spd = num(DRAGON_BREATH_SPEED, 0.85);
-    dx = (dx / len) * spd;
-    dy = (dy / len) * spd;
-    dz = (dz / len) * spd;
+function getMcEntityId(mcEntity) {
+    if (mcEntity == null) return -1;
+    try { return mcEntity.getId(); } catch (e1) {
+        try { return mcEntity.m_19879_(); } catch (e2) {}
+    }
+    return -1;
+}
 
+/* Point the dragon's look vector at the target so fireHability aims correctly. */
+function aimMcLivingAt(living, targetMc) {
+    if (living == null || targetMc == null) return false;
+    var lx = 0;
+    var ly = 0;
+    var lz = 0;
     try {
-        var fb = world.createEntity("minecraft:dragon_fireball");
-        if (fb != null) {
-            try { fb.setPosition(x, y, z); } catch (e1) {
-                try { fb.setPos(x, y, z); } catch (e2) {}
-            }
+        var eye = living.getEyePosition(1.0);
+        lx = eye.x; ly = eye.y; lz = eye.z;
+    } catch (e1) {
+        try {
+            var eye2 = living.m_20299_(1.0);
+            lx = eye2.f_82479_; ly = eye2.f_82480_; lz = eye2.f_82481_;
+        } catch (e2) {
             try {
-                var mc = fb.getMCEntity();
-                if (mc != null) {
-                    try { mc.setDeltaMovement(dx, dy, dz); } catch (e3) {
-                        try { mc.m_20334_(dx, dy, dz); } catch (e4) {}
-                    }
-                    /* power vector used by DragonFireball */
-                    try {
-                        mc.xPower = dx * 0.1;
-                        mc.yPower = dy * 0.1;
-                        mc.zPower = dz * 0.1;
-                    } catch (e5) {
-                        try {
-                            mc.f_36864_ = dx * 0.1;
-                            mc.f_36865_ = dy * 0.1;
-                            mc.f_36866_ = dz * 0.1;
-                        } catch (e6) {}
-                    }
-                }
-            } catch (e7) {}
-            world.spawnEntity(fb);
-            return true;
+                lx = living.getX();
+                ly = living.getY() + living.getBbHeight() * 0.5;
+                lz = living.getZ();
+            } catch (e3) { return false; }
         }
-    } catch (e8) {}
+    }
 
+    var tx = 0;
+    var ty = 0;
+    var tz = 0;
     try {
-        NpcAPI.Instance().executeCommand(world,
-            "execute in minecraft:the_end run summon minecraft:dragon_fireball " +
-            x.toFixed(2) + " " + y.toFixed(2) + " " + z.toFixed(2) +
-            " {power:[" + dx.toFixed(3) + "," + dy.toFixed(3) + "," + dz.toFixed(3) + "]}");
-        return true;
-    } catch (e9) {}
-    return false;
+        tx = targetMc.getX();
+        ty = targetMc.getY() + targetMc.getBbHeight() * 0.45;
+        tz = targetMc.getZ();
+    } catch (e4) {
+        try {
+            tx = targetMc.m_20185_();
+            ty = targetMc.m_20186_() + targetMc.m_20206_() * 0.45;
+            tz = targetMc.m_20189_();
+        } catch (e5) { return false; }
+    }
+
+    var dx = tx - lx;
+    var dy = ty - ly;
+    var dz = tz - lz;
+    var horiz = Math.sqrt(dx * dx + dz * dz);
+    if (!(horiz > 0.0001) && !(Math.abs(dy) > 0.0001)) return false;
+
+    var yaw = Math.atan2(-dx, dz) * (180.0 / Math.PI);
+    var pitch = -Math.atan2(dy, Math.max(0.0001, horiz)) * (180.0 / Math.PI);
+    if (pitch > 89) pitch = 89;
+    if (pitch < -89) pitch = -89;
+
+    try { living.setYRot(yaw); } catch (e6) {
+        try { living.m_146922_(yaw); } catch (e7) {}
+    }
+    try { living.setXRot(pitch); } catch (e8) {
+        try { living.m_146926_(pitch); } catch (e9) {}
+    }
+    try { living.yHeadRot = yaw; } catch (e10) {
+        try { living.f_20885_ = yaw; } catch (e11) {}
+    }
+    try { living.yBodyRot = yaw; } catch (e12) {
+        try { living.f_20883_ = yaw; } catch (e13) {}
+    }
+    return true;
 }
 
-function fireDragonKiBeam(world, dragon, target) {
+function spawnAndFireDmzKiProjectile(proj, endLevel, lifeTicks) {
+    if (proj == null || endLevel == null) return false;
+    try { proj.setCastTime(0); } catch (e1) {}
+    try { proj.setBlockDestructionEnabled(false); } catch (e2) {}
+
+    try {
+        endLevel.addFreshEntity(proj);
+    } catch (e3) {
+        try { endLevel.m_7967_(proj); } catch (e4) {
+            try { endLevel.addWithUUID(proj); } catch (e5) { return false; }
+        }
+    }
+
+    var life = Math.max(10, Math.floor(num(lifeTicks, 50)));
+    try { proj.fireHability(life); } catch (e6) {
+        try {
+            proj.setFiring(true);
+            proj.setMaxLife(life);
+        } catch (e7) {}
+    }
+    return true;
+}
+
+/*
+ * Real DragonMineZ ki beam (KiLaserEntity / setupKiBeamPlayer).
+ * Owner is the Ender Dragon (LivingEntity). Damage uses setKiDamage —
+ * non-player owners skip player-stat remapping and hit via kiblast DamageSource.
+ */
+function fireDmzKiBeam(world, dragon, target) {
     if (world == null || dragon == null || target == null) return false;
     if (!isLivingDragon(dragon)) return false;
 
-    var x0 = num(dragon.getX(), 0);
-    var y0 = num(dragon.getY(), 0) - 1.0;
-    var z0 = num(dragon.getZ(), 0);
-    var x1 = num(target.getX(), 0);
-    var y1 = num(target.getY(), 0) + 1.0;
-    var z1 = num(target.getZ(), 0);
-    var steps = 18;
-    for (var i = 1; i <= steps; i++) {
-        var t = i / steps;
-        var px = x0 + (x1 - x0) * t;
-        var py = y0 + (y1 - y0) * t;
-        var pz = z0 + (z1 - z0) * t;
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (e0) {}
+    if (endLevel == null) endLevel = getMcServerLevel(world);
+    if (endLevel == null) return false;
+
+    var owner = null;
+    var targetMc = null;
+    try { owner = dragon.getMCEntity(); } catch (e1) {}
+    try { targetMc = target.getMCEntity(); } catch (e2) {}
+    if (owner == null || targetMc == null) return false;
+
+    aimMcLivingAt(owner, targetMc);
+
+    var dmg = calcDragonDmzKiDamage(target);
+    var speed = num(DRAGON_DMZ_KI_SPEED_BEAM, 1.75);
+    var cMain = Math.floor(num(DRAGON_DMZ_KI_COLOR_MAIN, 0xC44CFF));
+    var cBorder = Math.floor(num(DRAGON_DMZ_KI_COLOR_BORDER, 0x7A1FA2));
+    var cOutline = Math.floor(num(DRAGON_DMZ_KI_COLOR_OUTLINE, 0xFFFFFF));
+
+    try {
+        var KiLaserEntity = Java.type("com.dragonminez.common.init.entities.ki.KiLaserEntity");
+        var beam = new KiLaserEntity(endLevel, owner);
         try {
-            world.spawnParticle("minecraft:end_rod", px, py, pz, 0, 0, 0, 0.01, 2);
-        } catch (e1) {
-            try { world.spawnParticle("end_rod", px, py, pz, 0, 0, 0, 0.01, 2); } catch (e2) {}
-        }
-        try {
-            world.spawnParticle("minecraft:dragon_breath", px, py, pz, 0, 0, 0, 0.02, 1);
+            beam.setupKiBeamPlayer(owner, dmg, speed, cMain, cBorder, cOutline);
         } catch (e3) {
-            try { world.spawnParticle("dragon_breath", px, py, pz, 0, 0, 0, 0.02, 1); } catch (e4) {}
+            beam.setupKiBeamPlayer(owner, dmg, speed, cMain, cBorder);
         }
+        try {
+            var tid = getMcEntityId(targetMc);
+            if (tid >= 0) beam.setHomingTarget(tid);
+        } catch (e4) {}
+        return spawnAndFireDmzKiProjectile(beam, endLevel, DRAGON_DMZ_KI_LIFE_BEAM);
+    } catch (err) {
+        try { print("[EndStrength] DMZ ki beam failed: " + err); } catch (e5) {}
+        return false;
     }
+}
 
-    var dmg = Math.max(4, num(DRAGON_KI_BEAM_DAMAGE, 14));
-    var pulses = Math.max(1, Math.floor(num(DRAGON_KI_BEAM_HITS, 3)));
-    for (var p = 0; p < pulses; p++) {
-        hurtPlayerVanilla(target, dmg);
+/* Real DragonMineZ ki blast (KiBlastEntity) — replaces vanilla dragon fireballs. */
+function fireDmzKiBlast(world, dragon, target) {
+    if (world == null || dragon == null || target == null) return false;
+    if (!isLivingDragon(dragon)) return false;
+
+    var endLevel = null;
+    try { endLevel = getEndServerLevel(); } catch (e0) {}
+    if (endLevel == null) endLevel = getMcServerLevel(world);
+    if (endLevel == null) return false;
+
+    var owner = null;
+    var targetMc = null;
+    try { owner = dragon.getMCEntity(); } catch (e1) {}
+    try { targetMc = target.getMCEntity(); } catch (e2) {}
+    if (owner == null || targetMc == null) return false;
+
+    aimMcLivingAt(owner, targetMc);
+
+    var dmg = calcDragonDmzKiDamage(target);
+    var speed = num(DRAGON_DMZ_KI_SPEED_BLAST, 2.35);
+    var size = num(DRAGON_DMZ_KI_SIZE_BLAST, 1.35);
+    var cMain = Math.floor(num(DRAGON_DMZ_KI_COLOR_MAIN, 0xC44CFF));
+    var cBorder = Math.floor(num(DRAGON_DMZ_KI_COLOR_BORDER, 0x7A1FA2));
+    var cOutline = Math.floor(num(DRAGON_DMZ_KI_COLOR_OUTLINE, 0xFFFFFF));
+
+    try {
+        var KiBlastEntity = Java.type("com.dragonminez.common.init.entities.ki.KiBlastEntity");
+        var blast = new KiBlastEntity(endLevel, owner);
+        try {
+            blast.setupKiBlastPlayer(owner, dmg, speed, cMain, cBorder, cOutline, size);
+        } catch (e3) {
+            try {
+                blast.setupKiBlastPlayer(owner, dmg, speed, cMain, cBorder, size);
+            } catch (e4) {
+                blast.setupKiBlastPlayer(owner, dmg, speed, cMain, size);
+            }
+        }
+        try {
+            var tid = getMcEntityId(targetMc);
+            if (tid >= 0) blast.setHomingTarget(tid);
+        } catch (e5) {}
+        return spawnAndFireDmzKiProjectile(blast, endLevel, DRAGON_DMZ_KI_LIFE_BLAST);
+    } catch (err) {
+        try { print("[EndStrength] DMZ ki blast failed: " + err); } catch (e6) {}
+        return false;
     }
-
-    /*
-     * Do NOT use world.playSoundAt / playsound here — CustomNPCs broadcasts
-     * those as chat spam: [@CustomNPCs-API: Played sound ...].
-     * Particles + damage are enough for the ki-beam feel.
-     */
-    return true;
 }
 
 function tickDragonExtraAttacks(world, player) {
@@ -3304,10 +3389,12 @@ function tickDragonExtraAttacks(world, player) {
         if (!isRealOnlinePlayer(target)) continue;
 
         var roll = Math.random();
-        if (roll < num(DRAGON_KI_BEAM_CHANCE, 0.55)) {
-            fireDragonKiBeam(world, dragon, target);
+        if (roll < num(DRAGON_KI_BEAM_CHANCE, 0.60)) {
+            if (!fireDmzKiBeam(world, dragon, target)) {
+                fireDmzKiBlast(world, dragon, target);
+            }
         } else {
-            spawnDragonBreathFireball(world, dragon, target);
+            fireDmzKiBlast(world, dragon, target);
         }
     }
 }
