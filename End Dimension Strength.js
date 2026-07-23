@@ -2166,7 +2166,7 @@ function findDragonsOnLevel(endLevel) {
         var it = mcList.iterator();
         while (it.hasNext()) {
             var wrapped = wrapMcEntity(it.next());
-            if (wrapped != null) out.push(wrapped);
+            if (wrapped != null && isLivingDragon(wrapped)) out.push(wrapped);
         }
     } catch (e5) {}
     return out;
