@@ -2111,7 +2111,7 @@ function processCmdSpawnRequest(player) {
         print("[EndStrength] Processing queued /enddragon for " + myName);
     } catch (eLog) {}
     msg(player, COLOR + "7[The End] Processing dragon spawn request...");
-    cmdSpawnDragon(player);
+    cmdSpawnDragon(player, { queueRetry: false });
     return true;
 }
 
