@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.8.0
+ Version: 2.8.1
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -24,19 +24,15 @@
  - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
  - End mobs ~10–22 matched hits
- - /enddragon command spawn (CMI alias -> trigger 50)
- - Also accepts queued spawn from EndDragon-Command.js (tiny trigger tab)
+ - /enddragon command spawn (CMI alias -> trigger 50) — all in THIS script
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
  - Kill announce fires once (no chat spam)
 
- PLACE AS:
- CustomNPCs Global Player Script — OWN tab
+ PLACE AS (one script only):
+ CustomNPCs Global Player Script — OWN tab (do not merge with other scripts)
  events: tick, kill, trigger, damagedEntity
-
- ALSO INSTALL (recommended):
-   EndDragon-Command.js — separate Global Player tab, event: trigger only
 
  COMMAND:
    noppes script trigger 50 <playerName>
@@ -2179,9 +2175,11 @@ function cmdSpawnDragon(player) {
             return;
         }
         /* Pending buff may still land — tell the player clearly. */
+        /* Queue a short retry — tick will re-attempt once End finishes loading. */
+        try { queueCmdSpawnRequest(player); } catch (eQ) {}
         msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
-        msg(player, COLOR + "7[The End] If none appears in a few seconds, stand in The End and retry /enddragon.");
-        try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e3) {}
+        msg(player, COLOR + "7[The End] Retrying automatically — or stand in The End and run /enddragon again.");
+        try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
         return;
     }
 
@@ -2222,7 +2220,7 @@ function tick(event) {
         /* Runs in any dimension — DMZ kill TP may land a few ticks after death. */
         try { processEndKillTpClawback(player); } catch (eClaw) {}
 
-        /* /enddragon queue from EndDragon-Command.js (or this script's trigger). */
+        /* Retry /enddragon if fight spawn lagged after trigger 50. */
         try { processCmdSpawnRequest(player); } catch (eCmd) {}
 
         var world = player.getWorld();
