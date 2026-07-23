@@ -26,11 +26,29 @@ var System = Java.type(
     "java.lang.System"
 );
 
+/*
+ * Use unicode escapes for Minecraft colors.
+ * Literal section-sign characters often break in CNPC scripts.
+ */
+var C = "\u00A7";
+
 
 /*
  * ============================================================
  * SETTINGS
  * ============================================================
+ *
+ * Spawn-second kill race:
+ * DMZ adds the dummy already tagged + stat-copied, but player
+ * scripts only run on later ticks. Melee/Ki can kill it before
+ * Tick/DamagedEntity ever see it (Ki often does not resolve as
+ * a Player source for damagedEntity).
+ *
+ * Fix:
+ * 1) Register Forge EntityJoinLevel + LivingHurt/Damage hooks
+ *    from init() so protect starts inside addFreshEntity
+ * 2) Keep invulnerable + heal for SPAWN_PROTECT_MS after accept
+ * 3) damagedEntity / kill still act as backups
  */
 
 /*
@@ -47,26 +65,28 @@ var SHADOW_DUMMY_PERCENT =
     50;
 
 /*
- * How often the script checks each player for a new dummy.
- * Keep this low — dummies spawn with default HP and can be
- * one-shot before copyStats/heal runs.
+ * Idle poll when no dummy is active.
  */
-var CHECK_INTERVAL_MS =
-    100;
+var CHECK_IDLE_MS =
+    250;
 
 /*
- * While waiting for a brand-new dummy UUID / entity, check
- * every player tick so protection starts immediately.
+ * While a dummy is pending / protected, check every tick.
  */
-var FAST_CHECK_WHILE_PENDING_MS =
+var CHECK_ACTIVE_MS =
     0;
 
 /*
- * God-mode + heal window after the dummy is first seen /
- * configured so it cannot die in the spawn second.
+ * God-mode + heal window after the dummy joins / is accepted.
  */
 var SPAWN_PROTECT_MS =
     3000;
+
+/*
+ * How long to keep hunting a blocked dummy UUID after clear.
+ */
+var PENDING_DENY_TTL_MS =
+    10000;
 
 /*
  * Prevent blocked-summon messages from spamming.
@@ -83,7 +103,7 @@ var DEBUG =
 
 /*
  * ============================================================
- * STORED-DATA KEYS
+ * STORED / TEMP / NBT KEYS
  * ============================================================
  */
 
@@ -92,13 +112,6 @@ var KEY_COOLDOWN_UNTIL =
 
 var KEY_LAST_ACCEPTED_UUID =
     "dmz_minigame_shadow_dummy_last_accepted_uuid";
-
-
-/*
- * ============================================================
- * TEMP-DATA KEYS
- * ============================================================
- */
 
 var KEY_NEXT_CHECK =
     "dmz_minigame_shadow_dummy_next_check";
@@ -118,11 +131,32 @@ var KEY_PROTECT_UNTIL =
 var KEY_PROTECT_UUID =
     "dmz_minigame_shadow_dummy_protect_uuid";
 
+var KEY_PENDING_DENY_UUID =
+    "dmz_minigame_shadow_dummy_pending_deny_uuid";
+
+var KEY_PENDING_DENY_UNTIL =
+    "dmz_minigame_shadow_dummy_pending_deny_until";
+
+var KEY_KILLCOUNT_SNAPSHOT =
+    "dmz_minigame_shadow_dummy_killcount_snapshot";
+
+var TAG_PLAYER_SHADOW =
+    "dmz_player_shadow";
+
 var TAG_SPAWN_PROTECT =
     "dmz_minigame_spawn_protect";
 
 var TAG_SPAWN_PROTECT_UNTIL =
     "dmz_minigame_spawn_protect_until";
+
+var NBT_LIMITER_LOCKED =
+    "dmz_shadow_limiter_locked";
+
+/*
+ * Script-container flag so Forge bus listeners register once.
+ */
+var FORGE_HOOKS_REGISTERED =
+    false;
 
 
 /*
@@ -131,116 +165,65 @@ var TAG_SPAWN_PROTECT_UNTIL =
  * ============================================================
  */
 
-function readNumber(
-    data,
-    key,
-    fallback
-) {
+function readNumber(data, key, fallback) {
     try {
-        if (
-            data != null &&
-            data.has(key)
-        ) {
-            var value =
-                Number(
-                    "" + data.get(key)
-                );
-
-            if (
-                !isNaN(value) &&
-                isFinite(value)
-            ) {
+        if (data != null && data.has(key)) {
+            var value = Number("" + data.get(key));
+            if (!isNaN(value) && isFinite(value)) {
                 return value;
             }
         }
     } catch (err) {}
-
     return fallback;
 }
 
-
-function readString(
-    data,
-    key,
-    fallback
-) {
+function readString(data, key, fallback) {
     try {
-        if (
-            data != null &&
-            data.has(key)
-        ) {
-            return String(
-                data.get(key)
-            );
+        if (data != null && data.has(key)) {
+            return String(data.get(key));
         }
     } catch (err) {}
-
     return fallback;
 }
 
-
-/*
- * ============================================================
- * TIME FORMAT
- * ============================================================
- */
+function uuidText(value) {
+    try {
+        if (value == null) {
+            return "";
+        }
+        return "" + value;
+    } catch (err) {
+        return "";
+    }
+}
 
 function formatRemainingTime(milliseconds) {
-    var seconds =
-        Math.max(
-            0,
-            Math.ceil(
-                Number(milliseconds) /
-                1000
-            )
-        );
-
+    var seconds = Math.max(
+        0,
+        Math.ceil(Number(milliseconds) / 1000)
+    );
     return seconds + "s";
 }
 
-
-/*
- * ============================================================
- * PLAYER MESSAGE
- * ============================================================
- */
-
-function sendLimitedMessage(
-    player,
-    message,
-    now
-) {
+function sendLimitedMessage(player, message, now) {
     try {
-        var temp =
-            player.getTempdata();
+        var temp = player.getTempdata();
+        var nextMessage = readNumber(
+            temp,
+            KEY_MESSAGE_COOLDOWN,
+            0
+        );
 
-        var nextMessage =
-            readNumber(
-                temp,
-                KEY_MESSAGE_COOLDOWN,
-                0
-            );
-
-        if (
-            now <
-            nextMessage
-        ) {
+        if (now < nextMessage) {
             return;
         }
 
         temp.put(
             KEY_MESSAGE_COOLDOWN,
-            "" +
-            (
-                now +
-                MESSAGE_COOLDOWN_MS
-            )
+            "" + (now + MESSAGE_COOLDOWN_MS)
         );
 
-        player.message(
-            message
-        );
-
+        player.message(message);
     } catch (err) {}
 }
 
@@ -251,26 +234,18 @@ function sendLimitedMessage(
  * ============================================================
  */
 
-function syncPlayerStats(
-    mcPlayer
-) {
+function syncPlayerStats(mcPlayer) {
     try {
-        NetworkHandler
-            .sendToTrackingEntityAndSelf(
-                new StatsSyncS2C(
-                    mcPlayer
-                ),
-                mcPlayer
-            );
-
+        NetworkHandler.sendToTrackingEntityAndSelf(
+            new StatsSyncS2C(mcPlayer),
+            mcPlayer
+        );
         return;
     } catch (err1) {}
 
     try {
         NetworkHandler.sendToPlayer(
-            new StatsSyncS2C(
-                mcPlayer
-            ),
+            new StatsSyncS2C(mcPlayer),
             mcPlayer
         );
     } catch (err2) {}
@@ -279,9 +254,50 @@ function syncPlayerStats(
 
 /*
  * ============================================================
- * ACTIVE DUMMY UUID
+ * ENTITY HELPERS
  * ============================================================
  */
+
+function resolveMcPlayer(player) {
+    try {
+        if (player.getMCEntity) {
+            return player.getMCEntity();
+        }
+    } catch (err) {}
+    return player;
+}
+
+function loadPlayerData(mcPlayer) {
+    try {
+        return StatsProvider
+            .get(StatsCapability.INSTANCE, mcPlayer)
+            .orElse(null);
+    } catch (err) {
+        return null;
+    }
+}
+
+function isShadowDummyEntity(entity) {
+    try {
+        return entity != null &&
+            ShadowDummyEntity.class.isInstance(entity);
+    } catch (err) {
+        return false;
+    }
+}
+
+function isPlayerShadowDummy(entity) {
+    if (!isShadowDummyEntity(entity)) {
+        return false;
+    }
+
+    try {
+        return entity.getPersistentData()
+            .m_128471_(TAG_PLAYER_SHADOW) === true;
+    } catch (err) {
+        return false;
+    }
+}
 
 function getActiveDummyUUID(status) {
     try {
@@ -291,420 +307,645 @@ function getActiveDummyUUID(status) {
         ) {
             return null;
         }
-
-        return status
-            .getActiveShadowDummyUUID();
-
+        return status.getActiveShadowDummyUUID();
     } catch (err) {
         return null;
     }
 }
 
-
-/*
- * ============================================================
- * FIND SHADOW DUMMY ENTITY
- * ============================================================
- */
-
-function findShadowDummy(
-    mcPlayer,
-    dummyUUID
-) {
-    if (
-        mcPlayer == null ||
-        dummyUUID == null
-    ) {
+function findShadowDummy(mcPlayer, dummyUUID) {
+    if (mcPlayer == null || dummyUUID == null) {
         return null;
     }
 
     try {
-        var server =
-            mcPlayer.m_20194_();
-
+        var server = mcPlayer.m_20194_();
         if (server == null) {
             return null;
         }
 
-        var levels =
-            server.m_129785_();
+        var levels = server.m_129785_();
+        var iterator = levels.iterator();
 
-        var iterator =
-            levels.iterator();
-
-        while (
-            iterator.hasNext()
-        ) {
-            var level =
-                iterator.next();
-
+        while (iterator.hasNext()) {
+            var level = iterator.next();
             if (level == null) {
                 continue;
             }
 
-            var entity =
-                level.m_8791_(
-                    dummyUUID
-                );
-
-            if (
-                entity != null &&
-                ShadowDummyEntity.class
-                    .isInstance(entity)
-            ) {
+            var entity = level.m_8791_(dummyUUID);
+            if (isShadowDummyEntity(entity)) {
                 return entity;
             }
         }
-
     } catch (err) {}
 
     return null;
 }
 
-
-/*
- * ============================================================
- * CLEAR TEMP STATE
- * ============================================================
- */
-
-function clearActiveDummyTempState(
-    player
-) {
+function resolveVictimEntity(event) {
     try {
-        var temp =
-            player.getTempdata();
-
-        temp.remove(
-            KEY_LAST_SEEN_UUID
-        );
-
-        temp.remove(
-            KEY_PROCESSING_UUID
-        );
-
-        temp.remove(
-            KEY_PROTECT_UNTIL
-        );
-
-        temp.remove(
-            KEY_PROTECT_UUID
-        );
-
-    } catch (err) {}
-}
-
-
-/*
- * ============================================================
- * SPAWN PROTECTION
- * ============================================================
- *
- * Dummies spawn with default monster HP. Until copyStats + heal
- * finish (and briefly after), keep them unkillable.
- */
-
-function setDummyInvulnerable(
-    dummy,
-    enabled
-) {
-    if (dummy == null) {
-        return;
-    }
-
-    try {
-        dummy.setInvulnerable(
-            enabled === true
-        );
-        return;
-    } catch (err1) {}
-
-    try {
-        dummy.m_20331_(
-            enabled === true
-        );
-    } catch (err2) {}
-}
-
-
-function bumpDummyHurtInvuln(
-    dummy
-) {
-    if (dummy == null) {
-        return;
-    }
-
-    try {
-        dummy.invulnerableTime =
-            40;
-        return;
-    } catch (err1) {}
-
-    try {
-        dummy.f_19802_ =
-            40;
-    } catch (err2) {}
-}
-
-
-function fullyHealDummy(
-    dummy
-) {
-    if (dummy == null) {
-        return;
-    }
-
-    try {
-        dummy.m_21153_(
-            dummy.m_21233_()
-        );
-        return;
-    } catch (err1) {}
-
-    try {
-        dummy.setHealth(
-            dummy.getMaxHealth()
-        );
-    } catch (err2) {}
-}
-
-
-function grantSpawnProtection(
-    player,
-    dummy,
-    dummyUUID,
-    now
-) {
-    if (
-        dummy == null ||
-        now == null
-    ) {
-        return;
-    }
-
-    var until =
-        Number(now) +
-        SPAWN_PROTECT_MS;
-
-    setDummyInvulnerable(
-        dummy,
-        true
-    );
-
-    bumpDummyHurtInvuln(
-        dummy
-    );
-
-    fullyHealDummy(
-        dummy
-    );
-
-    try {
-        var persistent =
-            dummy.getPersistentData();
-
-        persistent.m_128379_(
-            TAG_SPAWN_PROTECT,
-            true
-        );
-
-        persistent.m_128356_(
-            TAG_SPAWN_PROTECT_UNTIL,
-            until
-        );
-
-    } catch (tagErr) {}
-
-    try {
-        var temp =
-            player.getTempdata();
-
-        temp.put(
-            KEY_PROTECT_UNTIL,
-            "" + until
-        );
-
-        if (dummyUUID != null) {
-            temp.put(
-                KEY_PROTECT_UUID,
-                "" + dummyUUID
-            );
+        if (event.target != null) {
+            return event.target;
         }
+    } catch (e1) {}
+    try {
+        if (event.entity != null) {
+            return event.entity;
+        }
+    } catch (e2) {}
+    return null;
+}
 
-    } catch (tempErr) {}
+function resolveVictimMc(event) {
+    try {
+        var wrapped = resolveVictimEntity(event);
+        if (wrapped == null) {
+            return null;
+        }
+        if (wrapped.getMCEntity) {
+            return wrapped.getMCEntity();
+        }
+        return wrapped;
+    } catch (err) {
+        return null;
+    }
 }
 
 
-function clearSpawnProtection(
-    dummy
-) {
+/*
+ * ============================================================
+ * SPAWN PROTECTION / HARDEN
+ * ============================================================
+ */
+
+function setDummyInvulnerable(dummy, enabled) {
     if (dummy == null) {
         return;
     }
 
-    setDummyInvulnerable(
-        dummy,
-        false
-    );
+    try {
+        dummy.m_20331_(enabled === true);
+        return;
+    } catch (err1) {}
 
     try {
-        var persistent =
-            dummy.getPersistentData();
+        dummy.setInvulnerable(enabled === true);
+    } catch (err2) {}
+}
 
-        persistent.m_128379_(
-            TAG_SPAWN_PROTECT,
-            false
-        );
+function bumpDummyHurtInvuln(dummy) {
+    if (dummy == null) {
+        return;
+    }
 
-        persistent.m_128356_(
-            TAG_SPAWN_PROTECT_UNTIL,
-            0
-        );
+    try {
+        dummy.f_19802_ = 40;
+        return;
+    } catch (err1) {}
 
+    try {
+        dummy.invulnerableTime = 40;
+    } catch (err2) {}
+}
+
+function setDummyNoAi(dummy, enabled) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.m_21557_(enabled === true);
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.setNoAi(enabled === true);
+    } catch (err2) {}
+}
+
+function clearDummyTarget(dummy) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.m_6710_(null);
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.setTarget(null);
+    } catch (err2) {}
+}
+
+function fullyHealDummy(dummy) {
+    if (dummy == null) {
+        return;
+    }
+
+    try {
+        dummy.m_21153_(dummy.m_21233_());
+        return;
+    } catch (err1) {}
+
+    try {
+        dummy.setHealth(dummy.getMaxHealth());
+    } catch (err2) {}
+}
+
+function grantSpawnProtection(dummy, untilMs) {
+    if (dummy == null) {
+        return;
+    }
+
+    var until = Number(untilMs);
+    if (isNaN(until) || !isFinite(until)) {
+        until = System.currentTimeMillis() + SPAWN_PROTECT_MS;
+    }
+
+    setDummyInvulnerable(dummy, true);
+    bumpDummyHurtInvuln(dummy);
+    setDummyNoAi(dummy, true);
+    clearDummyTarget(dummy);
+    fullyHealDummy(dummy);
+
+    try {
+        var persistent = dummy.getPersistentData();
+        persistent.m_128379_(TAG_SPAWN_PROTECT, true);
+        persistent.m_128356_(TAG_SPAWN_PROTECT_UNTIL, until);
+        persistent.m_128379_(NBT_LIMITER_LOCKED, true);
     } catch (tagErr) {}
 }
 
+function clearSpawnProtection(dummy) {
+    if (dummy == null) {
+        return;
+    }
 
-function isDummySpawnProtected(
-    dummy,
-    now
-) {
+    setDummyInvulnerable(dummy, false);
+    setDummyNoAi(dummy, false);
+
+    try {
+        var persistent = dummy.getPersistentData();
+        persistent.m_128379_(TAG_SPAWN_PROTECT, false);
+        persistent.m_128356_(TAG_SPAWN_PROTECT_UNTIL, 0);
+        persistent.m_128379_(NBT_LIMITER_LOCKED, false);
+    } catch (tagErr) {}
+}
+
+function isDummySpawnProtected(dummy, now) {
     if (dummy == null) {
         return false;
     }
 
     try {
-        var persistent =
-            dummy.getPersistentData();
+        var persistent = dummy.getPersistentData();
 
-        if (
-            !persistent.m_128471_(
-                TAG_SPAWN_PROTECT
-            )
-        ) {
+        if (persistent.m_128471_(NBT_LIMITER_LOCKED) === true) {
+            return true;
+        }
+
+        if (!persistent.m_128471_(TAG_SPAWN_PROTECT)) {
             return false;
         }
 
-        var until =
-            Number(
-                persistent.m_128454_(
-                    TAG_SPAWN_PROTECT_UNTIL
-                )
-            );
+        var until = Number(
+            persistent.m_128454_(TAG_SPAWN_PROTECT_UNTIL)
+        );
 
-        if (
-            isNaN(until) ||
-            !isFinite(until)
-        ) {
+        if (isNaN(until) || !isFinite(until)) {
             return false;
         }
 
         return Number(now) < until;
-
     } catch (err) {
         return false;
     }
 }
 
+function rememberPlayerProtect(player, dummyUUID, until) {
+    if (player == null) {
+        return;
+    }
 
-function maintainSpawnProtection(
+    try {
+        var temp = player.getTempdata();
+        temp.put(KEY_PROTECT_UNTIL, "" + until);
+        if (dummyUUID != null) {
+            temp.put(KEY_PROTECT_UUID, uuidText(dummyUUID));
+        }
+    } catch (err) {}
+}
+
+function protectJoinedShadowDummy(dummy) {
+    if (!isPlayerShadowDummy(dummy)) {
+        return false;
+    }
+
+    var until = System.currentTimeMillis() + SPAWN_PROTECT_MS;
+    grantSpawnProtection(dummy, until);
+    return true;
+}
+
+function cancelDamageOnProtectedDummy(dummy, forgeEvent) {
+    if (!isPlayerShadowDummy(dummy)) {
+        return false;
+    }
+
+    var now = System.currentTimeMillis();
+    if (!isDummySpawnProtected(dummy, now)) {
+        /*
+         * Brand-new join may race tag reads; if still unmarked
+         * protect but only for player-shadow dummies under 3s
+         * of age if we can read tick count, else skip.
+         */
+        return false;
+    }
+
+    grantSpawnProtection(
+        dummy,
+        dummy.getPersistentData().m_128454_(TAG_SPAWN_PROTECT_UNTIL)
+    );
+
+    try {
+        if (forgeEvent.setAmount) {
+            forgeEvent.setAmount(0);
+        }
+    } catch (amtErr) {}
+
+    try {
+        if (forgeEvent.setCanceled) {
+            forgeEvent.setCanceled(true);
+        }
+    } catch (cancelErr) {}
+
+    return true;
+}
+
+
+/*
+ * ============================================================
+ * FORGE HOOKS (registered from Player init)
+ * ============================================================
+ *
+ * These fire inside addFreshEntity / hurt, so they beat the
+ * player-tick race. Also paste the named functions below into
+ * a CNPC Forge script tab if bus registration fails on your
+ * build (enable EntityJoinLevelEvent, LivingHurtEvent,
+ * LivingDamageEvent).
+ */
+
+function registerForgeProtectHooks() {
+    if (FORGE_HOOKS_REGISTERED) {
+        return true;
+    }
+
+    try {
+        var MinecraftForge = Java.type(
+            "net.minecraftforge.common.MinecraftForge"
+        );
+        var EventPriority = Java.type(
+            "net.minecraftforge.eventbus.api.EventPriority"
+        );
+        var EntityJoinLevelEvent = Java.type(
+            "net.minecraftforge.event.entity.EntityJoinLevelEvent"
+        );
+        var LivingHurtEvent = Java.type(
+            "net.minecraftforge.event.entity.living.LivingHurtEvent"
+        );
+        var LivingDamageEvent = Java.type(
+            "net.minecraftforge.event.entity.living.LivingDamageEvent"
+        );
+        var Consumer = Java.type(
+            "java.util.function.Consumer"
+        );
+
+        function isClientLevel(level) {
+            try {
+                if (level == null) {
+                    return true;
+                }
+                if (level.m_5776_) {
+                    return level.m_5776_() === true;
+                }
+                if (level.isClientSide != null) {
+                    return level.isClientSide === true;
+                }
+            } catch (sideErr) {}
+            return false;
+        }
+
+        var joinConsumer = new Consumer({
+            accept: function (event) {
+                try {
+                    if (event == null || event.getEntity == null) {
+                        return;
+                    }
+                    if (isClientLevel(event.getLevel())) {
+                        return;
+                    }
+                    protectJoinedShadowDummy(event.getEntity());
+                } catch (joinErr) {}
+            }
+        });
+
+        var hurtConsumer = new Consumer({
+            accept: function (event) {
+                try {
+                    if (event == null || event.getEntity == null) {
+                        return;
+                    }
+                    var living = event.getEntity();
+                    if (isClientLevel(living.m_9236_())) {
+                        return;
+                    }
+                    cancelDamageOnProtectedDummy(living, event);
+                } catch (hurtErr) {}
+            }
+        });
+
+        var damageConsumer = new Consumer({
+            accept: function (event) {
+                try {
+                    if (event == null || event.getEntity == null) {
+                        return;
+                    }
+                    var living = event.getEntity();
+                    if (isClientLevel(living.m_9236_())) {
+                        return;
+                    }
+                    cancelDamageOnProtectedDummy(living, event);
+                } catch (dmgErr) {}
+            }
+        });
+
+        MinecraftForge.EVENT_BUS.addListener(
+            EventPriority.HIGHEST,
+            false,
+            EntityJoinLevelEvent.class,
+            joinConsumer
+        );
+
+        MinecraftForge.EVENT_BUS.addListener(
+            EventPriority.HIGHEST,
+            false,
+            LivingHurtEvent.class,
+            hurtConsumer
+        );
+
+        MinecraftForge.EVENT_BUS.addListener(
+            EventPriority.HIGHEST,
+            false,
+            LivingDamageEvent.class,
+            damageConsumer
+        );
+
+        FORGE_HOOKS_REGISTERED = true;
+        return true;
+    } catch (regErr) {
+        /*
+         * Fallback: Rhino may prefer a plain JS function.
+         */
+        try {
+            var MinecraftForge2 = Java.type(
+                "net.minecraftforge.common.MinecraftForge"
+            );
+            var EventPriority2 = Java.type(
+                "net.minecraftforge.eventbus.api.EventPriority"
+            );
+            var EntityJoinLevelEvent2 = Java.type(
+                "net.minecraftforge.event.entity.EntityJoinLevelEvent"
+            );
+            var LivingHurtEvent2 = Java.type(
+                "net.minecraftforge.event.entity.living.LivingHurtEvent"
+            );
+            var LivingDamageEvent2 = Java.type(
+                "net.minecraftforge.event.entity.living.LivingDamageEvent"
+            );
+
+            function skipClientEntity(entity) {
+                try {
+                    var level = entity.m_9236_();
+                    if (level != null && level.m_5776_) {
+                        return level.m_5776_() === true;
+                    }
+                } catch (sideErr) {}
+                return false;
+            }
+
+            MinecraftForge2.EVENT_BUS.addListener(
+                EventPriority2.HIGHEST,
+                false,
+                EntityJoinLevelEvent2.class,
+                function (event) {
+                    try {
+                        if (
+                            event.getLevel != null &&
+                            event.getLevel().m_5776_ &&
+                            event.getLevel().m_5776_()
+                        ) {
+                            return;
+                        }
+                        protectJoinedShadowDummy(event.getEntity());
+                    } catch (e) {}
+                }
+            );
+
+            MinecraftForge2.EVENT_BUS.addListener(
+                EventPriority2.HIGHEST,
+                false,
+                LivingHurtEvent2.class,
+                function (event) {
+                    try {
+                        var living = event.getEntity();
+                        if (skipClientEntity(living)) {
+                            return;
+                        }
+                        cancelDamageOnProtectedDummy(living, event);
+                    } catch (e) {}
+                }
+            );
+
+            MinecraftForge2.EVENT_BUS.addListener(
+                EventPriority2.HIGHEST,
+                false,
+                LivingDamageEvent2.class,
+                function (event) {
+                    try {
+                        var living = event.getEntity();
+                        if (skipClientEntity(living)) {
+                            return;
+                        }
+                        cancelDamageOnProtectedDummy(living, event);
+                    } catch (e) {}
+                }
+            );
+
+            FORGE_HOOKS_REGISTERED = true;
+            return true;
+        } catch (regErr2) {
+            return false;
+        }
+    }
+}
+
+/*
+ * Optional CNPC Forge-tab entry points (same file / copy).
+ * Function names match ForgeEventHandler.getEventName().
+ */
+function entityJoinLevelEvent(e) {
+    try {
+        var entity = null;
+        if (e != null && e.entity != null) {
+            entity = e.entity.getMCEntity
+                ? e.entity.getMCEntity()
+                : e.entity;
+        } else if (
+            e != null &&
+            e.event != null &&
+            e.event.getEntity
+        ) {
+            entity = e.event.getEntity();
+        }
+        protectJoinedShadowDummy(entity);
+    } catch (err) {}
+}
+
+function livingHurtEvent(e) {
+    try {
+        var forge = e != null ? e.event : null;
+        if (forge == null || forge.getEntity == null) {
+            return;
+        }
+        if (cancelDamageOnProtectedDummy(forge.getEntity(), forge)) {
+            try {
+                if (e.setCanceled) {
+                    e.setCanceled(true);
+                }
+            } catch (cErr) {}
+        }
+    } catch (err) {}
+}
+
+function livingDamageEvent(e) {
+    livingHurtEvent(e);
+}
+
+
+/*
+ * ============================================================
+ * TEMP STATE
+ * ============================================================
+ */
+
+function clearActiveDummyTempState(player) {
+    try {
+        var temp = player.getTempdata();
+        temp.remove(KEY_LAST_SEEN_UUID);
+        temp.remove(KEY_PROCESSING_UUID);
+        temp.remove(KEY_PROTECT_UNTIL);
+        temp.remove(KEY_PROTECT_UUID);
+    } catch (err) {}
+}
+
+function clearPendingDeny(player) {
+    try {
+        var temp = player.getTempdata();
+        temp.remove(KEY_PENDING_DENY_UUID);
+        temp.remove(KEY_PENDING_DENY_UNTIL);
+        temp.remove(KEY_KILLCOUNT_SNAPSHOT);
+    } catch (err) {}
+}
+
+function markPendingDeny(player, dummyUUID, now) {
+    try {
+        var temp = player.getTempdata();
+        temp.put(KEY_PENDING_DENY_UUID, uuidText(dummyUUID));
+        temp.put(
+            KEY_PENDING_DENY_UNTIL,
+            "" + (now + PENDING_DENY_TTL_MS)
+        );
+    } catch (err) {}
+}
+
+function snapshotKillCount(player, status) {
+    try {
+        var temp = player.getTempdata();
+        var count = 0;
+        try {
+            count = Number(status.getShadowDummyKillCount());
+        } catch (e) {
+            count = 0;
+        }
+        temp.put(KEY_KILLCOUNT_SNAPSHOT, "" + count);
+    } catch (err) {}
+}
+
+function revertKillCountIfNeeded(
     player,
     mcPlayer,
-    now
+    playerData,
+    status
 ) {
     try {
-        var temp =
-            player.getTempdata();
+        if (status == null) {
+            return false;
+        }
 
-        var until =
-            readNumber(
-                temp,
-                KEY_PROTECT_UNTIL,
-                0
-            );
+        var temp = player.getTempdata();
+        var snapshot = readNumber(
+            temp,
+            KEY_KILLCOUNT_SNAPSHOT,
+            -1
+        );
+        if (snapshot < 0) {
+            return false;
+        }
 
-        var protectUUID =
-            readString(
-                temp,
-                KEY_PROTECT_UUID,
-                ""
-            );
+        var current = Number(status.getShadowDummyKillCount());
+        if (current > snapshot) {
+            status.setShadowDummyKillCount(snapshot);
+            syncPlayerStats(mcPlayer);
+            return true;
+        }
+    } catch (err) {}
+    return false;
+}
 
-        if (
-            until <= 0 ||
-            protectUUID === ""
-        ) {
+function maintainSpawnProtection(player, mcPlayer, now) {
+    try {
+        var temp = player.getTempdata();
+        var until = readNumber(temp, KEY_PROTECT_UNTIL, 0);
+        var protectUUID = readString(temp, KEY_PROTECT_UUID, "");
+
+        if (until <= 0 || protectUUID === "") {
             return;
         }
 
-        var uuidObj =
-            null;
-
+        var uuidObj = protectUUID;
         try {
-            var UUID =
-                Java.type(
-                    "java.util.UUID"
-                );
+            var UUID = Java.type("java.util.UUID");
+            uuidObj = UUID.fromString(protectUUID);
+        } catch (uuidErr) {}
 
-            uuidObj =
-                UUID.fromString(
-                    protectUUID
-                );
-
-        } catch (uuidErr) {
-            uuidObj =
-                protectUUID;
-        }
-
-        var dummy =
-            findShadowDummy(
-                mcPlayer,
-                uuidObj
-            );
-
+        var dummy = findShadowDummy(mcPlayer, uuidObj);
         if (dummy == null) {
             if (Number(now) >= until) {
-                temp.remove(
-                    KEY_PROTECT_UNTIL
-                );
-
-                temp.remove(
-                    KEY_PROTECT_UUID
-                );
+                temp.remove(KEY_PROTECT_UNTIL);
+                temp.remove(KEY_PROTECT_UUID);
             }
-
             return;
         }
 
         if (Number(now) >= until) {
-            clearSpawnProtection(
-                dummy
-            );
-
-            temp.remove(
-                KEY_PROTECT_UNTIL
-            );
-
-            temp.remove(
-                KEY_PROTECT_UUID
-            );
-
+            clearSpawnProtection(dummy);
+            temp.remove(KEY_PROTECT_UNTIL);
+            temp.remove(KEY_PROTECT_UUID);
             return;
         }
 
-        setDummyInvulnerable(
-            dummy,
-            true
-        );
-
-        bumpDummyHurtInvuln(
-            dummy
-        );
-
-        fullyHealDummy(
-            dummy
-        );
-
+        grantSpawnProtection(dummy, until);
     } catch (err) {}
 }
 
@@ -715,53 +956,140 @@ function maintainSpawnProtection(
  * ============================================================
  */
 
+function discardDummyEntity(dummy) {
+    if (dummy == null) {
+        return false;
+    }
+
+    try {
+        grantSpawnProtection(
+            dummy,
+            System.currentTimeMillis() + 1000
+        );
+        dummy.m_146870_();
+        return true;
+    } catch (err1) {
+        try {
+            dummy.discard();
+            return true;
+        } catch (err2) {
+            try {
+                ShadowDummyPacket.dismissByDummy(dummy);
+                return true;
+            } catch (err3) {
+                return false;
+            }
+        }
+    }
+}
+
 function denyShadowDummySummon(
     player,
     mcPlayer,
     playerData,
+    dummyUUID,
     remainingMs,
     now
 ) {
     try {
-        /*
-         * Use DragonMineZ's cleanup method so the blocked
-         * dummy and its owner penalties are both removed.
-         */
-        ShadowDummyPacket
-            .clearPlayerShadowDummy(
+        markPendingDeny(player, dummyUUID, now);
+        snapshotKillCount(player, playerData.getStatus());
+
+        var dummy = findShadowDummy(mcPlayer, dummyUUID);
+        if (dummy != null) {
+            discardDummyEntity(dummy);
+        }
+
+        try {
+            ShadowDummyPacket.clearPlayerShadowDummy(
                 mcPlayer,
                 playerData
             );
+        } catch (clearErr) {}
 
-        syncPlayerStats(
-            mcPlayer
-        );
+        syncPlayerStats(mcPlayer);
+        clearActiveDummyTempState(player);
 
-        clearActiveDummyTempState(
-            player
-        );
+        var leftover = findShadowDummy(mcPlayer, dummyUUID);
+        if (leftover == null) {
+            clearPendingDeny(player);
+        } else {
+            discardDummyEntity(leftover);
+        }
 
         sendLimitedMessage(
             player,
-            "§5[Shadow Dummy] §cYou can only summon one Shadow Dummy every 30 seconds. §eTime remaining: §f" +
-            formatRemainingTime(
-                remainingMs
-            ) +
-            "§e.",
+            C + "5[Shadow Dummy] " +
+            C + "cYou can only summon one Shadow Dummy every 30 seconds. " +
+            C + "eTime remaining: " +
+            C + "f" +
+            formatRemainingTime(remainingMs) +
+            C + "e.",
             now
         );
 
         if (DEBUG) {
             player.message(
-                "§8[Shadow Dummy Debug] Blocked summon removed."
+                C + "8[Shadow Dummy Debug] Blocked summon removed."
             );
         }
-
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Error] Could not remove the blocked dummy: " +
+            C + "c[Shadow Dummy Error] Could not remove the blocked dummy: " +
             err
         );
+    }
+}
+
+function processPendingDeny(player, mcPlayer, playerData, now) {
+    try {
+        var temp = player.getTempdata();
+        var pending = readString(temp, KEY_PENDING_DENY_UUID, "");
+        if (pending === "") {
+            return false;
+        }
+
+        var until = readNumber(temp, KEY_PENDING_DENY_UNTIL, 0);
+        if (now > until) {
+            clearPendingDeny(player);
+            return false;
+        }
+
+        var dummy = findShadowDummy(mcPlayer, pending);
+        if (dummy != null) {
+            discardDummyEntity(dummy);
+        }
+
+        try {
+            var status = playerData.getStatus();
+            var active = getActiveDummyUUID(status);
+            if (
+                active != null &&
+                uuidText(active) === pending
+            ) {
+                ShadowDummyPacket.clearPlayerShadowDummy(
+                    mcPlayer,
+                    playerData
+                );
+                syncPlayerStats(mcPlayer);
+            }
+        } catch (clearErr) {}
+
+        revertKillCountIfNeeded(
+            player,
+            mcPlayer,
+            playerData,
+            playerData.getStatus()
+        );
+
+        if (findShadowDummy(mcPlayer, pending) == null) {
+            clearPendingDeny(player);
+            clearActiveDummyTempState(player);
+        }
+
+        return true;
+    } catch (err) {
+        return false;
     }
 }
 
@@ -782,193 +1110,118 @@ function configureShadowDummy(
     now
 ) {
     try {
+        var protectUntil = Number(now) + SPAWN_PROTECT_MS;
+
         /*
-         * Lock the dummy before any stat rewrite so it cannot
-         * die mid-configure on default spawn HP.
+         * Stay locked through the whole rewrite + for the
+         * post-spawn protect window. Do not unlock on accept.
          */
-        grantSpawnProtection(
-            player,
-            dummy,
-            dummyUUID,
-            now
+        grantSpawnProtection(dummy, protectUntil);
+        rememberPlayerProtect(player, dummyUUID, protectUntil);
+
+        ShadowDummyPacket.removePenalties(
+            mcPlayer,
+            playerData
         );
 
-        /*
-         * Remove the original penalties before applying the
-         * fixed 50% minigame configuration.
-         */
-        ShadowDummyPacket
-            .removePenalties(
-                mcPlayer,
-                playerData
-            );
-
-        /*
-         * Copy 50% of the player's health, defense, battle
-         * power, melee damage, and Ki damage to the dummy.
-         */
         dummy.copyStatsFromPlayerWithPercent(
             mcPlayer,
             SHADOW_DUMMY_PERCENT
         );
 
-        /*
-         * Apply the matching owner penalties.
-         */
-        ShadowDummyPacket
-            .applyPenalties(
-                mcPlayer,
-                playerData,
-                SHADOW_DUMMY_PERCENT
-            );
-
-        status.setShadowDummyPercent(
+        ShadowDummyPacket.applyPenalties(
+            mcPlayer,
+            playerData,
             SHADOW_DUMMY_PERCENT
         );
 
-        status.setActiveShadowDummyUUID(
-            dummyUUID
-        );
+        status.setShadowDummyPercent(SHADOW_DUMMY_PERCENT);
+        status.setActiveShadowDummyUUID(dummyUUID);
 
         try {
-            var persistent =
-                dummy.getPersistentData();
-
-            persistent.m_128379_(
-                "dmz_player_shadow",
-                true
-            );
-
+            var persistent = dummy.getPersistentData();
+            persistent.m_128379_(TAG_PLAYER_SHADOW, true);
             persistent.m_128405_(
                 "dmz_shadow_percent",
                 SHADOW_DUMMY_PERCENT
             );
-
             persistent.m_128359_(
                 "dmz_quest_owner",
                 "" + mcPlayer.m_20148_()
             );
-
         } catch (tagErr) {}
 
-        /*
-         * Fully heal the dummy to its recalculated maximum,
-         * then refresh spawn protection on the new max HP.
-         */
-        fullyHealDummy(
-            dummy
-        );
+        fullyHealDummy(dummy);
+        grantSpawnProtection(dummy, protectUntil);
+        rememberPlayerProtect(player, dummyUUID, protectUntil);
+        syncPlayerStats(mcPlayer);
 
-        grantSpawnProtection(
-            player,
-            dummy,
-            dummyUUID,
-            now
-        );
+        var stored = player.getStoreddata();
+        var temp = player.getTempdata();
 
-        syncPlayerStats(
-            mcPlayer
-        );
-
-        var stored =
-            player.getStoreddata();
-
-        var temp =
-            player.getTempdata();
-
-        /*
-         * Begin the cooldown only after the dummy has been
-         * found and successfully configured.
-         */
         stored.put(
             KEY_COOLDOWN_UNTIL,
-            "" +
-            (
-                now +
-                SHADOW_DUMMY_COOLDOWN_MS
-            )
+            "" + (now + SHADOW_DUMMY_COOLDOWN_MS)
         );
-
         stored.put(
             KEY_LAST_ACCEPTED_UUID,
-            "" + dummyUUID
+            uuidText(dummyUUID)
         );
 
-        temp.put(
-            KEY_LAST_SEEN_UUID,
-            "" + dummyUUID
-        );
-
-        temp.remove(
-            KEY_PROCESSING_UUID
-        );
+        temp.put(KEY_LAST_SEEN_UUID, uuidText(dummyUUID));
+        temp.remove(KEY_PROCESSING_UUID);
+        clearPendingDeny(player);
 
         player.message(
-            "§5[Shadow Dummy] §dShadow Dummy summoned."
+            C + "5[Shadow Dummy] " +
+            C + "dShadow Dummy summoned."
         );
-
         player.message(
-            "§7Its maximum health and copied power are fixed at §f50%§7 of your normal stats."
+            C + "7Its maximum health and copied power are fixed at " +
+            C + "f50%" +
+            C + "7 of your normal stats."
         );
-
         player.message(
-            "§7You may summon another Shadow Dummy in §f30 seconds§7."
+            C + "7You may summon another Shadow Dummy in " +
+            C + "f30 seconds" +
+            C + "7."
         );
 
         if (DEBUG) {
-            var dummyMaxHealth =
-                0;
-
-            var ownerMaxHealth =
-                0;
-
+            var dummyMaxHealth = 0;
+            var ownerMaxHealth = 0;
             try {
-                dummyMaxHealth =
-                    Number(
-                        dummy.m_21233_()
-                    );
-
-                ownerMaxHealth =
-                    Number(
-                        mcPlayer.m_21233_()
-                    );
-
+                dummyMaxHealth = Number(dummy.m_21233_());
+                ownerMaxHealth = Number(mcPlayer.m_21233_());
             } catch (healthDebugErr) {}
 
             player.message(
-                "§8[Shadow Dummy Debug] Owner max health: " +
+                C + "8[Shadow Dummy Debug] Owner max health: " +
                 ownerMaxHealth +
                 " | Dummy max health: " +
                 dummyMaxHealth +
                 " | Percent: " +
-                SHADOW_DUMMY_PERCENT
+                SHADOW_DUMMY_PERCENT +
+                " | Forge hooks: " +
+                FORGE_HOOKS_REGISTERED
             );
         }
 
         return true;
-
     } catch (err) {
-        /*
-         * Never leave a partially configured dummy active.
-         */
         try {
-            ShadowDummyPacket
-                .clearPlayerShadowDummy(
-                    mcPlayer,
-                    playerData
-                );
-
+            discardDummyEntity(dummy);
+            ShadowDummyPacket.clearPlayerShadowDummy(
+                mcPlayer,
+                playerData
+            );
         } catch (cleanupErr) {}
 
-        clearActiveDummyTempState(
-            player
-        );
-
+        clearActiveDummyTempState(player);
         player.message(
-            "§c[Shadow Dummy Error] Could not configure the dummy: " +
+            C + "c[Shadow Dummy Error] Could not configure the dummy: " +
             err
         );
-
         return false;
     }
 }
@@ -989,105 +1242,68 @@ function processNewShadowDummy(
     now
 ) {
     try {
-        var stored =
-            player.getStoreddata();
+        var stored = player.getStoreddata();
+        var temp = player.getTempdata();
+        var id = uuidText(dummyUUID);
 
-        var temp =
-            player.getTempdata();
-
-        var uuidText =
-            "" + dummyUUID;
-
-        var lastSeen =
-            readString(
-                temp,
-                KEY_LAST_SEEN_UUID,
-                ""
-            );
-
-        /*
-         * This exact dummy has already been accepted.
-         */
-        if (
-            lastSeen ==
-            uuidText
-        ) {
+        var lastSeen = readString(temp, KEY_LAST_SEEN_UUID, "");
+        if (lastSeen === id) {
             return;
         }
 
-        var processingUUID =
-            readString(
-                temp,
-                KEY_PROCESSING_UUID,
-                ""
-            );
-
-        if (
-            processingUUID !=
-            uuidText
-        ) {
-            temp.put(
-                KEY_PROCESSING_UUID,
-                uuidText
-            );
+        var processingUUID = readString(
+            temp,
+            KEY_PROCESSING_UUID,
+            ""
+        );
+        if (processingUUID !== id) {
+            temp.put(KEY_PROCESSING_UUID, id);
+            snapshotKillCount(player, status);
         }
 
-        var cooldownUntil =
-            readNumber(
-                stored,
-                KEY_COOLDOWN_UNTIL,
-                0
-            );
+        var dummy = findShadowDummy(mcPlayer, dummyUUID);
+        if (dummy != null) {
+            var until = Number(now) + SPAWN_PROTECT_MS;
+            grantSpawnProtection(dummy, until);
+            rememberPlayerProtect(player, dummyUUID, until);
+        }
 
-        /*
-         * Any newly created dummy during the cooldown is
-         * immediately removed.
-         */
-        if (
-            now <
-            cooldownUntil
-        ) {
+        var cooldownUntil = readNumber(
+            stored,
+            KEY_COOLDOWN_UNTIL,
+            0
+        );
+
+        if (now < cooldownUntil) {
             denyShadowDummySummon(
                 player,
                 mcPlayer,
                 playerData,
+                dummyUUID,
                 cooldownUntil - now,
                 now
             );
-
             return;
         }
-
-        /*
-         * The UUID may become active before the entity enters
-         * the world, so retry on later ticks until it exists.
-         */
-        var dummy =
-            findShadowDummy(
-                mcPlayer,
-                dummyUUID
-            );
 
         if (dummy == null) {
             if (DEBUG) {
                 sendLimitedMessage(
                     player,
-                    "§8[Shadow Dummy Debug] Waiting for the dummy entity.",
+                    C + "8[Shadow Dummy Debug] Waiting for the dummy entity.",
                     now
                 );
             }
-
             return;
         }
 
         /*
-         * Protect immediately on first sight — before stats copy.
+         * Arm cooldown before configure finishes so a mid-setup
+         * death cannot be instantly re-summoned.
          */
-        grantSpawnProtection(
-            player,
-            dummy,
-            dummyUUID,
-            now
+        stored.put(
+            KEY_COOLDOWN_UNTIL,
+            "" + (now + SHADOW_DUMMY_COOLDOWN_MS)
         );
 
         configureShadowDummy(
@@ -1099,126 +1315,202 @@ function processNewShadowDummy(
             dummyUUID,
             now
         );
-
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Error] Processing failed: " +
+            C + "c[Shadow Dummy Error] Processing failed: " +
             err
         );
+    }
+}
+
+function isCurrentlyAccepting(player, dummyUUID) {
+    try {
+        var temp = player.getTempdata();
+        var id = uuidText(dummyUUID);
+        var processing = readString(temp, KEY_PROCESSING_UUID, "");
+        var lastSeen = readString(temp, KEY_LAST_SEEN_UUID, "");
+        return processing === id && lastSeen !== id;
+    } catch (err) {
+        return false;
+    }
+}
+
+function shouldBlockDummyCombat(player, dummy) {
+    if (!isShadowDummyEntity(dummy)) {
+        return false;
+    }
+
+    var now = System.currentTimeMillis();
+    if (isDummySpawnProtected(dummy, now)) {
+        return true;
+    }
+
+    try {
+        var stored = player.getStoreddata();
+        var temp = player.getTempdata();
+        var id = uuidText(dummy.m_20148_());
+        var pending = readString(temp, KEY_PENDING_DENY_UUID, "");
+        if (pending !== "" && pending === id) {
+            return true;
+        }
+
+        if (isCurrentlyAccepting(player, id)) {
+            return true;
+        }
+
+        var lastAccepted = readString(
+            stored,
+            KEY_LAST_ACCEPTED_UUID,
+            ""
+        );
+        var cooldownUntil = readNumber(
+            stored,
+            KEY_COOLDOWN_UNTIL,
+            0
+        );
+        if (now < cooldownUntil && id !== lastAccepted) {
+            return true;
+        }
+    } catch (err) {}
+
+    return false;
+}
+
+function shouldForceDenyOnHit(player, dummy) {
+    if (!isShadowDummyEntity(dummy)) {
+        return false;
+    }
+
+    try {
+        var id = uuidText(dummy.m_20148_());
+        if (isCurrentlyAccepting(player, id)) {
+            return false;
+        }
+
+        var temp = player.getTempdata();
+        var pending = readString(temp, KEY_PENDING_DENY_UUID, "");
+        if (pending === id) {
+            return true;
+        }
+
+        var stored = player.getStoreddata();
+        var lastAccepted = readString(
+            stored,
+            KEY_LAST_ACCEPTED_UUID,
+            ""
+        );
+        var now = System.currentTimeMillis();
+        var cooldownUntil = readNumber(
+            stored,
+            KEY_COOLDOWN_UNTIL,
+            0
+        );
+        return now < cooldownUntil && id !== lastAccepted;
+    } catch (err) {
+        return false;
     }
 }
 
 
 /*
  * ============================================================
- * MAIN PLAYER TICK
+ * PLAYER SCRIPT ENTRY POINTS
  * ============================================================
  *
- * Install this as a CustomNPCs PLAYER script.
- * Enable events: Tick, DamagedEntity
+ * Install as a CustomNPCs PLAYER script (own tab).
+ * Enable: Init, Tick, DamagedEntity, Kill (and/or KilledEntity)
+ *
+ * Optional: also paste this file into a Forge script tab and
+ * enable entityJoinLevelEvent / livingHurtEvent / livingDamageEvent
+ * if the Init bus registration does not stick after reload.
  */
 
-function tick(event) {
-    var player =
-        event.player;
+function init(event) {
+    try {
+        var ok = registerForgeProtectHooks();
+        if (DEBUG && event != null && event.player != null) {
+            event.player.message(
+                C + "8[Shadow Dummy Debug] Forge protect hooks: " +
+                (ok ? "registered" : "FAILED - use Forge script tab")
+            );
+        }
+    } catch (err) {}
+}
 
+function tick(event) {
+    var player = event.player;
     if (player == null) {
         return;
     }
 
     try {
-        var temp =
-            player.getTempdata();
+        if (!FORGE_HOOKS_REGISTERED) {
+            registerForgeProtectHooks();
+        }
 
-        var now =
-            System.currentTimeMillis();
-
-        var mcPlayer =
-            player.getMCEntity
-                ? player.getMCEntity()
-                : player;
-
+        var temp = player.getTempdata();
+        var now = System.currentTimeMillis();
+        var mcPlayer = resolveMcPlayer(player);
         if (mcPlayer == null) {
             return;
         }
 
-        /*
-         * Keep protected dummies topped up every tick while
-         * the spawn window is active (not throttled).
-         */
-        maintainSpawnProtection(
-            player,
-            mcPlayer,
-            now
+        maintainSpawnProtection(player, mcPlayer, now);
+
+        var playerData = loadPlayerData(mcPlayer);
+        if (playerData == null) {
+            return;
+        }
+
+        var status = playerData.getStatus();
+        if (status == null) {
+            return;
+        }
+
+        var dummyUUID = getActiveDummyUUID(status);
+        var pendingDeny = readString(
+            temp,
+            KEY_PENDING_DENY_UUID,
+            ""
         );
+        var protectUntil = readNumber(temp, KEY_PROTECT_UNTIL, 0);
+        var busy =
+            dummyUUID != null ||
+            pendingDeny !== "" ||
+            Number(now) < protectUntil;
 
-        var nextCheck =
-            readNumber(
-                temp,
-                KEY_NEXT_CHECK,
-                0
-            );
-
-        var pendingUUID =
-            readString(
-                temp,
-                KEY_PROCESSING_UUID,
-                ""
-            );
-
-        var checkInterval =
-            pendingUUID !== ""
-                ? FAST_CHECK_WHILE_PENDING_MS
-                : CHECK_INTERVAL_MS;
-
-        if (
-            now <
-            nextCheck
-        ) {
+        var nextCheck = readNumber(temp, KEY_NEXT_CHECK, 0);
+        var interval = busy ? CHECK_ACTIVE_MS : CHECK_IDLE_MS;
+        if (now < nextCheck) {
             return;
         }
 
         temp.put(
             KEY_NEXT_CHECK,
-            "" +
-            (
-                now +
-                checkInterval
-            )
+            "" + (now + interval)
         );
 
-        var playerData =
-            StatsProvider
-                .get(
-                    StatsCapability.INSTANCE,
-                    mcPlayer
-                )
-                .orElse(null);
-
-        if (playerData == null) {
-            return;
-        }
-
-        var status =
-            playerData.getStatus();
-
-        if (status == null) {
-            return;
-        }
-
-        var dummyUUID =
-            getActiveDummyUUID(
-                status
+        if (pendingDeny !== "") {
+            processPendingDeny(
+                player,
+                mcPlayer,
+                playerData,
+                now
             );
+        }
 
-        /*
-         * No active player-created Shadow Dummy.
-         */
+        dummyUUID = getActiveDummyUUID(status);
         if (dummyUUID == null) {
-            clearActiveDummyTempState(
-                player
-            );
-
+            if (pendingDeny === "") {
+                /*
+                 * Keep protect UUID cleanup on its own timer via
+                 * maintainSpawnProtection; only clear process keys.
+                 */
+                try {
+                    temp.remove(KEY_LAST_SEEN_UUID);
+                    temp.remove(KEY_PROCESSING_UUID);
+                } catch (clearErr) {}
+            }
             return;
         }
 
@@ -1230,93 +1522,157 @@ function tick(event) {
             dummyUUID,
             now
         );
-
     } catch (err) {
         player.message(
-            "§c[Shadow Dummy Tick Error] " +
+            C + "c[Shadow Dummy Tick Error] " +
             err
         );
     }
 }
 
-
-/*
- * Cancel damage the player deals to a spawn-protected dummy.
- * Enable DamagedEntity on this Player script tab.
- */
 function damagedEntity(event) {
+    var player = event.player;
+    if (player == null) {
+        return;
+    }
+
     try {
-        if (event == null) {
+        var dummy = resolveVictimMc(event);
+        if (!shouldBlockDummyCombat(player, dummy)) {
             return;
         }
 
-        var target =
-            event.target;
-
-        if (target == null) {
-            return;
-        }
-
-        var mcTarget =
-            null;
-
+        var until = System.currentTimeMillis() + SPAWN_PROTECT_MS;
         try {
-            mcTarget =
-                target.getMCEntity
-                    ? target.getMCEntity()
-                    : null;
-        } catch (mcErr) {}
-
-        if (
-            mcTarget == null ||
-            !ShadowDummyEntity.class
-                .isInstance(
-                    mcTarget
-                )
-        ) {
-            return;
-        }
-
-        var now =
-            System.currentTimeMillis();
-
-        if (
-            !isDummySpawnProtected(
-                mcTarget,
-                now
-            )
-        ) {
-            return;
-        }
-
-        try {
-            event.damage =
-                0;
-        } catch (dmgErr) {}
-
-        try {
+            var persistent = dummy.getPersistentData();
+            var taggedUntil = Number(
+                persistent.m_128454_(TAG_SPAWN_PROTECT_UNTIL)
+            );
             if (
-                typeof event.setCanceled ===
-                "function"
+                !isNaN(taggedUntil) &&
+                isFinite(taggedUntil) &&
+                taggedUntil > until
             ) {
-                event.setCanceled(
-                    true
+                until = taggedUntil;
+            }
+        } catch (tagErr) {}
+
+        grantSpawnProtection(dummy, until);
+
+        try {
+            event.damage = 0;
+        } catch (e1) {}
+
+        try {
+            if (event.setCanceled) {
+                event.setCanceled(true);
+            }
+        } catch (e2) {}
+
+        if (shouldForceDenyOnHit(player, dummy)) {
+            var mcPlayer = resolveMcPlayer(player);
+            var playerData = loadPlayerData(mcPlayer);
+            if (playerData != null) {
+                var stored = player.getStoreddata();
+                var now = System.currentTimeMillis();
+                var cooldownUntil = readNumber(
+                    stored,
+                    KEY_COOLDOWN_UNTIL,
+                    0
+                );
+                denyShadowDummySummon(
+                    player,
+                    mcPlayer,
+                    playerData,
+                    dummy.m_20148_(),
+                    Math.max(0, cooldownUntil - now),
+                    now
                 );
             }
-        } catch (cancelErr) {}
-
-        setDummyInvulnerable(
-            mcTarget,
-            true
-        );
-
-        bumpDummyHurtInvuln(
-            mcTarget
-        );
-
-        fullyHealDummy(
-            mcTarget
-        );
-
+        }
     } catch (err) {}
+}
+
+function handleBlockedDummyKill(event) {
+    var player = event.player;
+    if (player == null) {
+        return;
+    }
+
+    try {
+        var dummy = resolveVictimMc(event);
+        if (!isShadowDummyEntity(dummy)) {
+            return;
+        }
+
+        var shouldRevert = shouldBlockDummyCombat(player, dummy);
+        if (!shouldRevert) {
+            /*
+             * Also revert if the dummy still carried protect tags
+             * at death (script saw the corpse after protect ended).
+             */
+            try {
+                shouldRevert = dummy.getPersistentData()
+                    .m_128471_(TAG_SPAWN_PROTECT) === true;
+            } catch (tagErr) {}
+        }
+
+        if (!shouldRevert) {
+            return;
+        }
+
+        var mcPlayer = resolveMcPlayer(player);
+        var playerData = loadPlayerData(mcPlayer);
+        if (playerData == null) {
+            return;
+        }
+
+        var status = playerData.getStatus();
+        var id = uuidText(dummy.m_20148_());
+
+        try {
+            var temp = player.getTempdata();
+            var snapshot = readNumber(
+                temp,
+                KEY_KILLCOUNT_SNAPSHOT,
+                -1
+            );
+            var current = Number(status.getShadowDummyKillCount());
+            if (snapshot >= 0 && current > snapshot) {
+                status.setShadowDummyKillCount(snapshot);
+            } else if (current > 0) {
+                status.setShadowDummyKillCount(current - 1);
+            }
+        } catch (countErr) {}
+
+        try {
+            ShadowDummyPacket.clearPlayerShadowDummy(
+                mcPlayer,
+                playerData
+            );
+        } catch (clearErr) {}
+
+        syncPlayerStats(mcPlayer);
+        clearActiveDummyTempState(player);
+        markPendingDeny(
+            player,
+            id,
+            System.currentTimeMillis()
+        );
+
+        sendLimitedMessage(
+            player,
+            C + "5[Shadow Dummy] " +
+            C + "cBlocked Shadow Dummy kills do not count.",
+            System.currentTimeMillis()
+        );
+    } catch (err) {}
+}
+
+function kill(event) {
+    handleBlockedDummyKill(event);
+}
+
+function killedEntity(event) {
+    handleBlockedDummyKill(event);
 }
