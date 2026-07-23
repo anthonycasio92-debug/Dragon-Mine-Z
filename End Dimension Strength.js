@@ -2131,7 +2131,10 @@ function queueCmdSpawnRequest(player) {
     return wrote > 0;
 }
 
-function cmdSpawnDragon(player) {
+function cmdSpawnDragon(player, opts) {
+    if (opts == null) opts = {};
+    var allowQueueRetry = opts.queueRetry !== false;
+
     if (!isRealOnlinePlayer(player) && !isPlayer(player)) {
         try { print("[EndStrength] cmdSpawnDragon: invalid player"); } catch (e0) {}
         return;
@@ -2174,12 +2177,17 @@ function cmdSpawnDragon(player) {
             notifyDragonAlreadyAlive(player, existing);
             return;
         }
-        /* Pending buff may still land — tell the player clearly. */
-        /* Queue a short retry — tick will re-attempt once End finishes loading. */
-        try { queueCmdSpawnRequest(player); } catch (eQ) {}
-        msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
-        msg(player, COLOR + "7[The End] Retrying automatically — or stand in The End and run /enddragon again.");
-        try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
+        /* One automatic tick retry if End was still loading (trigger path only). */
+        if (allowQueueRetry) {
+            try { queueCmdSpawnRequest(player); } catch (eQ) {}
+            msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
+            msg(player, COLOR + "7[The End] Retrying automatically once — or stand in The End and run /enddragon again.");
+            try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName()) + " (queued retry)"); } catch (e3) {}
+        } else {
+            msg(player, COLOR + "c[The End] Failed to spawn the dragon through EndDragonFight.");
+            msg(player, COLOR + "7[The End] Stand in The End and run /enddragon again.");
+            try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e4) {}
+        }
         return;
     }
 
