@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.8.3
+ Version: 2.8.4
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -189,27 +189,44 @@ var TEMP_TP_CLAWBACK = "end.strength.tpClawback";
 var TEMP_CMD_SPAWN_LOCK = "end.strength.cmdSpawnLock";
 
 /*
- * End kill TP settle (Sparring / Rival style):
+ * End kill TP settle (Sparring-inspired, dampened):
  * DMZ still awards health-based kill TP first (tiny on TP-safe HP).
  * A few ticks later we REPLACE that with a fair payout:
- *   base * sparring BP multiplier * DMZ kill TP boosts
+ *   base * dampened BP multiplier * DMZ kill TP boosts
  *
- * Bases ≈ Sparring BASE_TP_PER_INTERVAL (1500) chunks / Rival win lumps:
- *   dragon   ~ 8 spar intervals (or a strong Rival challenge win)
- *   shulker  ~ 3 spar intervals
- *   enderman ~ 2 spar intervals
- *   phantom  ~ ~1.3 spar intervals
- *   endermite ~ 1 spar interval
+ * Full Sparring BP curve is too hot for a one-time End kill (lv~4k was
+ * hitting ~1M dragon TP). End uses the same shape but dampened, plus a
+ * soft level cap so mid-game lands near ~200k for the dragon.
+ *
+ * Bases (pre BP / boosts):
+ *   dragon   ~ strong Rival-style lump
+ *   shulker / enderman / phantom / endermite — smaller fractions
  */
 var END_TP_SETTLE_ENABLED = true;
 var END_TP_SETTLE_DELAY_TICKS = 6;
-var END_TP_FAIR_DRAGON = 12000;
+var END_TP_FAIR_DRAGON = 10000;
 var END_TP_FAIR_MOB = {
-    endermite: 1500,
-    phantom: 2000,
-    enderman: 3000,
-    shulker: 4500
+    endermite: 1200,
+    phantom: 1600,
+    enderman: 2400,
+    shulker: 3600
 };
+/*
+ * Sparring BP mult is for repeating 5s payouts. End kills are lump sums,
+ * so only keep a fraction of (mult - 1). 0.18 ≈ lv4k dragon near ~200k
+ * after typical kill boosts (was ~1M on the full curve).
+ */
+var END_TP_BP_DAMPEN = 0.18;
+/* Soft-cap final settled TP by killer level (dragon). Mobs use fractions. */
+var END_TP_DRAGON_SOFTCAP_BY_LEVEL = [
+    { level: 1000, cap: 80000 },
+    { level: 2500, cap: 140000 },
+    { level: 4000, cap: 220000 },
+    { level: 7000, cap: 350000 },
+    { level: 10000, cap: 500000 },
+    { level: 20000, cap: 750000 }
+];
+var END_TP_DRAGON_SOFTCAP_MAX = 1000000;
 
 /* ========================= HELPERS ========================= */
 
@@ -1405,8 +1422,8 @@ function fairEndKillTpBase(kind) {
 }
 
 /*
- * Same logarithmic BP curve as Sparring Tp System.js (getBattlePowerMultiplier).
- * Keeps End lump-sum kills on the same progression track as spar intervals.
+ * Same logarithmic BP curve shape as Sparring Tp System.js, then dampened
+ * for End lump-sum kills (see END_TP_BP_DAMPEN).
  */
 function getSparringStyleBpMultiplier(bp) {
     var battlePower = Math.max(1, num(bp, 1));
@@ -1437,6 +1454,44 @@ function getSparringStyleBpMultiplier(bp) {
     return finalMultiplier + Math.max(0, extraDecades) * 200.0;
 }
 
+function getEndBpMultiplier(bp) {
+    var raw = getSparringStyleBpMultiplier(bp);
+    var dampen = num(END_TP_BP_DAMPEN, 0.18);
+    if (dampen < 0) dampen = 0;
+    if (dampen > 1) dampen = 1;
+    /* Keep 1.0 floor; only scale the bonus above 1x. */
+    return Math.max(1.0, 1.0 + (raw - 1.0) * dampen);
+}
+
+function getEndDragonTpSoftCap(level) {
+    level = Math.max(1, Math.floor(num(level, 1)));
+    var table = END_TP_DRAGON_SOFTCAP_BY_LEVEL;
+    if (table == null || table.length <= 0) {
+        return Math.floor(num(END_TP_DRAGON_SOFTCAP_MAX, 1000000));
+    }
+    if (level <= table[0].level) return Math.floor(num(table[0].cap, 80000));
+    for (var i = 0; i < table.length - 1; i++) {
+        var a = table[i];
+        var b = table[i + 1];
+        if (level <= b.level) {
+            var t = (level - a.level) / Math.max(1, b.level - a.level);
+            return Math.floor(num(a.cap, 0) + (num(b.cap, 0) - num(a.cap, 0)) * t);
+        }
+    }
+    return Math.floor(num(END_TP_DRAGON_SOFTCAP_MAX, table[table.length - 1].cap));
+}
+
+function getEndKillTpSoftCap(level, kind) {
+    var dragonCap = getEndDragonTpSoftCap(level);
+    if (kind === "dragon") return dragonCap;
+    var frac = 0.25;
+    if (kind === "shulker") frac = 0.35;
+    else if (kind === "enderman") frac = 0.25;
+    else if (kind === "phantom") frac = 0.18;
+    else if (kind === "endermite") frac = 0.12;
+    return Math.max(1000, Math.floor(dragonCap * frac));
+}
+
 function estimateDmzKillTpAward(player, maxHp) {
     maxHp = Math.max(0, num(maxHp, 0));
     var ratio = 0.25;
@@ -1464,19 +1519,26 @@ function estimateDmzKillTpAward(player, maxHp) {
 function estimateFairEndKillTp(player, kind) {
     var fairBase = fairEndKillTpBase(kind);
     var power = readPlayerPower(player);
-    var bpMult = getSparringStyleBpMultiplier(power.bp);
+    var bpMult = getEndBpMultiplier(power.bp);
     fairBase = Math.max(1, Math.floor(fairBase * bpMult));
     var data = getDmz(player);
-    if (data == null) return fairBase;
-    try {
-        if (TpSource != null && TpSource.KILL != null) {
-            return Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, fairBase), fairBase)));
+    var awarded = fairBase;
+    if (data != null) {
+        try {
+            if (TpSource != null && TpSource.KILL != null) {
+                awarded = Math.max(0, Math.floor(num(data.applyTpBoosts(TpSource.KILL, fairBase), fairBase)));
+            } else {
+                awarded = Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
+            }
+        } catch (e1) {
+            try {
+                awarded = Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
+            } catch (e2) {}
         }
-    } catch (e1) {}
-    try {
-        return Math.max(0, Math.floor(num(data.calculateTPGain(fairBase), fairBase)));
-    } catch (e2) {}
-    return fairBase;
+    }
+    var cap = getEndKillTpSoftCap(power.level, kind);
+    if (awarded > cap) awarded = cap;
+    return awarded;
 }
 
 function getPlayerTrainingPoints(player) {
