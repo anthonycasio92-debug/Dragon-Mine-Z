@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.7.2
+ Version: 2.7.3
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -25,19 +25,17 @@
  - End crystals destroyed after each dragon kill
  - Kill announce fires once (no chat spam)
 
- INSTALL (BOTH required for /enddragon from console or CMI):
- 1) Global Player — End Dimension Strength.js (OWN tab)
-    events: tick, kill, trigger, damagedEntity
- 2) Global Forge — EndDragon-Forge-Trigger.js (OWN tab)
-    event: trigger
-    Forwards trigger 50 when the command source is console/FakePlayer.
-    Without this, `noppes script trigger 50 <name>` from console does nothing.
+ PLACE AS:
+ CustomNPCs Global Player Script — OWN tab
+ events: tick, kill, trigger, damagedEntity
 
  COMMAND:
    noppes script trigger 50 <playerName>
 
- CMI alias (see EndDragon-Alias.yml):
-   Prefer asOp!. asFakeOp! needs the Forge bridge above.
+ CMI (EndDragon-Alias.yml):
+   asFakeOp! noppes script trigger 50 [playerName]
+   Trigger resolves the REAL player from arguments[0] (not event.entity,
+   which is the FakeOp source and breaks spawn/messages).
 ============================================================
 */
 
@@ -233,6 +231,27 @@ function broadcastOnce(world, lockKey, text) {
 
 function isPlayer(entity) {
     try { return entity != null && entity.getType() == 1; } catch (e) { return false; }
+}
+
+/* CMI asFakeOp / Forge FakePlayer — type 1 but not a real online player. */
+function isFakePlayerEntity(entity) {
+    if (entity == null) return false;
+    try {
+        var mc = entity.getMCEntity();
+        if (mc == null) return false;
+        var FakePlayer = Java.type("net.minecraftforge.common.util.FakePlayer");
+        if (mc instanceof FakePlayer) return true;
+    } catch (e1) {}
+    try {
+        var n = str(entity.getName()).toLowerCase();
+        if (n.indexOf("fake") >= 0) return true;
+        if (n.indexOf("[cmi]") >= 0) return true;
+    } catch (e2) {}
+    return false;
+}
+
+function isRealOnlinePlayer(entity) {
+    return isPlayer(entity) && !isFakePlayerEntity(entity);
 }
 
 function getEndWorld() {
@@ -2061,51 +2080,56 @@ function trigger(event) {
         if (event == null) return;
 
         /*
-         * Coerce id — some callers pass string "50".
-         * CNPC also drops player-script triggers when the command source is a
-         * FakePlayer (CMI asFakeOp!). Alias must use asOp! / asPlayer!.
+         * Same pattern as Global TP Boost / Android conversion:
+         * resolve the target from arguments[0], NOT event.entity.
+         * With CMI asFakeOp!, event.entity is the FakePlayer — using it
+         * makes spawn/messages hit the fake source and look like "nothing happened".
          */
         var id = -1;
-        try { id = Math.floor(Number(event.id)); } catch (eId) { id = -1; }
-        if (id !== TRIGGER_ID) return;
+        try { id = Number(event.id); } catch (eId) { id = -1; }
+        if (id != TRIGGER_ID) return;
 
         var playerName = "";
         try {
             if (event.arguments != null && event.arguments.length > 0) {
-                playerName = str(event.arguments[0]);
+                playerName = str(event.arguments[0]).trim();
             }
         } catch (e1) {}
         try {
             if (playerName === "" && event.args != null && event.args.length > 0) {
-                playerName = str(event.args[0]);
+                playerName = str(event.args[0]).trim();
             }
         } catch (e2) {}
 
         var player = null;
-
-        /* Prefer the real command-source player when present. */
-        try {
-            if (event.entity != null && isPlayer(event.entity)) player = event.entity;
-        } catch (e3) {}
-        try {
-            if (player == null && event.player != null && isPlayer(event.player)) {
-                player = event.player;
-            }
-        } catch (e4) {}
-
-        if (player == null && playerName !== "") {
+        if (playerName !== "") {
             player = findOnlinePlayer(playerName);
+        }
+
+        /* Fallback only for a real online player source (not FakeOp). */
+        if (player == null) {
+            try {
+                if (isRealOnlinePlayer(event.entity)) player = event.entity;
+            } catch (e3) {}
+        }
+        if (player == null) {
+            try {
+                if (isRealOnlinePlayer(event.player)) player = event.player;
+            } catch (e4) {}
         }
 
         if (player == null) {
             try {
-                print("[EndStrength] trigger 50: player not found (" + playerName +
-                    "). If using CMI, replace asFakeOp! with asOp! — FakePlayer sources are ignored by CNPC player scripts.");
+                print("[EndStrength] trigger 50: online player not found (" + playerName +
+                    "). Use: noppes script trigger 50 <PlayerName>");
             } catch (e5) {}
             return;
         }
 
-        try { print("[EndStrength] trigger 50 ok for " + str(player.getName())); } catch (e6) {}
+        try {
+            print("[EndStrength] trigger 50 -> cmdSpawnDragon for " + str(player.getName()));
+        } catch (e6) {}
+        msg(player, COLOR + "7[The End] Trigger 50 received — spawning dragon...");
         cmdSpawnDragon(player);
     } catch (error) {
         try { print("[EndStrength] trigger: " + error); } catch (e) {}

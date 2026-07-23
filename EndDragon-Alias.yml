@@ -1,26 +1,22 @@
 #
 # End Dimension Strength - CMI alias
+# Requires End Dimension Strength.js in Global Player
+# (events: tick, kill, trigger, damagedEntity) — OWN tab.
 #
-# Requires BOTH:
-#   1) End Dimension Strength.js  → Global Player (tick, kill, trigger, damagedEntity)
-#   2) EndDragon-Forge-Trigger.js → Global Forge  (trigger)
+# /enddragon  -> noppes script trigger 50 [playerName]
 #
-# /enddragon  -> summons a stat-scaled Ender Dragon (trigger 50)
-#
-# Notes:
-#   - Console / asFakeOp sources do not run Global Player triggers in CNPC.
-#     The Forge bridge forwards trigger 50 to the named player.
-#   - asOp! still works and avoids FakePlayer when possible.
+# The script resolves the real player from [playerName] / arguments[0].
+# asFakeOp! is fine — do not use event.entity as the spawn target.
 #
 
 CustomAlias:
   enddragon:
     Cmds:
-    - asOp! noppes script trigger 50 [playerName]
+    - asFakeOp! noppes script trigger 50 [playerName]
     AddTabs: true
     ExactMatch: true
   spawndragon:
     Cmds:
-    - asOp! noppes script trigger 50 [playerName]
+    - asFakeOp! noppes script trigger 50 [playerName]
     AddTabs: true
     ExactMatch: true
