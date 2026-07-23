@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.7.4
+ Version: 2.8.0
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -12,6 +12,8 @@
  - DMZ kill TP = entity.getMaxHealth() * tpHealthRatio (default 0.25) then
    TP boosts. Absurd vanilla HP → billions of TP. So HP stays modest and
    DEF carries the fight (flat absorb + % reduction like DMZ).
+ - End kill TP is SETTLED to Sparring/Rival-scale payouts (BP curve), not
+   left at the tiny health-based DMZ award from TP-safe HP pools.
  - Per-hit damage caps remain as a safety net vs one-shot skills.
  - Dragon max_health is applied ONCE (spawn / real HP change only). Constant
    attribute rewrites break EndDragonFight phase AI. No orphan /summon.
@@ -23,6 +25,7 @@
  - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
  - End mobs ~10–22 matched hits
  - /enddragon command spawn (CMI alias -> trigger 50)
+ - Also accepts queued spawn from EndDragon-Command.js (tiny trigger tab)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
@@ -31,6 +34,9 @@
  PLACE AS:
  CustomNPCs Global Player Script — OWN tab
  events: tick, kill, trigger, damagedEntity
+
+ ALSO INSTALL (recommended):
+   EndDragon-Command.js — separate Global Player tab, event: trigger only
 
  COMMAND:
    noppes script trigger 50 <playerName>
@@ -182,20 +188,31 @@ var WORLD_LAST_NATURAL = "end.strength.lastNaturalSpawn";
 var WORLD_NATURAL_LOCK = "end.strength.naturalLock";
 var WORLD_ANNOUNCE_LOCK = "end.strength.announce.";
 var WORLD_PENDING_DRAGON_BUFF = "end.strength.pendingDragonBuff";
+var WORLD_CMD_SPAWN_REQUEST = "end.strength.cmdSpawnRequest";
 var TEMP_TP_CLAWBACK = "end.strength.tpClawback";
+var TEMP_CMD_SPAWN_LOCK = "end.strength.cmdSpawnLock";
 
 /*
- * After DMZ awards kill TP from maxHealth, claw back anything above a fair
- * End-content payout (boosts still apply to the fair base). Safety net if
- * an old inflated entity is killed before it gets rebuffed.
+ * End kill TP settle (Sparring / Rival style):
+ * DMZ still awards health-based kill TP first (tiny on TP-safe HP).
+ * A few ticks later we REPLACE that with a fair payout:
+ *   base * sparring BP multiplier * DMZ kill TP boosts
+ *
+ * Bases ≈ Sparring BASE_TP_PER_INTERVAL (1500) chunks / Rival win lumps:
+ *   dragon   ~ 8 spar intervals (or a strong Rival challenge win)
+ *   shulker  ~ 3 spar intervals
+ *   enderman ~ 2 spar intervals
+ *   phantom  ~ ~1.3 spar intervals
+ *   endermite ~ 1 spar interval
  */
-var END_TP_CLAWBACK_ENABLED = true;
-var END_TP_FAIR_DRAGON = 5000;
+var END_TP_SETTLE_ENABLED = true;
+var END_TP_SETTLE_DELAY_TICKS = 6;
+var END_TP_FAIR_DRAGON = 12000;
 var END_TP_FAIR_MOB = {
-    endermite: 400,
-    phantom: 700,
-    enderman: 1100,
-    shulker: 1600
+    endermite: 1500,
+    phantom: 2000,
+    enderman: 3000,
+    shulker: 4500
 };
 
 /* ========================= HELPERS ========================= */
@@ -272,6 +289,51 @@ function getEndWorld() {
         }
     } catch (e2) {}
     return null;
+}
+
+/* Force-load The End so EndDragonFight exists even when nobody is there yet. */
+function forceLoadEndWorld() {
+    var world = getEndWorld();
+    try {
+        var ServerLifecycleHooks = Java.type("net.minecraftforge.server.ServerLifecycleHooks");
+        var server = ServerLifecycleHooks.getCurrentServer();
+        if (server != null) {
+            var Level = Java.type("net.minecraft.world.level.Level");
+            var endLevel = null;
+            try { endLevel = server.getLevel(Level.END); } catch (e1) {
+                try { endLevel = server.m_129880_(Level.f_46430_); } catch (e2) {}
+            }
+            if (endLevel != null) {
+                try {
+                    var ChunkPos = Java.type("net.minecraft.world.level.ChunkPos");
+                    var TicketType = Java.type("net.minecraft.server.level.TicketType");
+                    var pos = new ChunkPos(0, 0);
+                    endLevel.getChunkSource().addRegionTicket(TicketType.PLAYER, pos, 3, pos);
+                } catch (e3) {
+                    try { endLevel.getChunk(0, 0); } catch (e4) {
+                        try { endLevel.m_6325_(0, 0); } catch (e5) {}
+                    }
+                }
+                try {
+                    var wrapped = NpcAPI.Instance().getIWorld(endLevel);
+                    if (wrapped != null) world = wrapped;
+                } catch (e6) {}
+            }
+        }
+    } catch (e) {}
+
+    if (world == null) world = getEndWorld();
+    if (world != null) {
+        try {
+            var level = getMcServerLevel(world);
+            if (level != null) {
+                try { level.getChunk(0, 0); } catch (e7) {
+                    try { level.m_6325_(0, 0); } catch (e8) {}
+                }
+            }
+        } catch (e9) {}
+    }
+    return world;
 }
 
 function isInTheEnd(world) {
@@ -975,7 +1037,40 @@ function storeDmzHpSource(entity, playerDmzHp) {
 function fairEndKillTpBase(kind) {
     if (kind === "dragon") return END_TP_FAIR_DRAGON;
     if (kind != null && END_TP_FAIR_MOB[kind] != null) return END_TP_FAIR_MOB[kind];
-    return 500;
+    return 1200;
+}
+
+/*
+ * Same logarithmic BP curve as Sparring Tp System.js (getBattlePowerMultiplier).
+ * Keeps End lump-sum kills on the same progression track as spar intervals.
+ */
+function getSparringStyleBpMultiplier(bp) {
+    var battlePower = Math.max(1, num(bp, 1));
+    var bpAnchors = [
+        1, 100000, 1000000, 10000000, 100000000, 1000000000,
+        10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000
+    ];
+    var multiplierAnchors = [
+        1.0, 2.0, 5.0, 12.0, 25.0, 50.0, 100.0, 150.0, 250.0, 400.0, 600.0
+    ];
+    if (battlePower <= bpAnchors[0]) return multiplierAnchors[0];
+    for (var i = 0; i < bpAnchors.length - 1; i++) {
+        var lowerBP = bpAnchors[i];
+        var upperBP = bpAnchors[i + 1];
+        if (battlePower <= upperBP) {
+            var lowerMultiplier = multiplierAnchors[i];
+            var upperMultiplier = multiplierAnchors[i + 1];
+            var lowerLog = Math.log(lowerBP) / Math.log(10);
+            var upperLog = Math.log(upperBP) / Math.log(10);
+            var currentLog = Math.log(battlePower) / Math.log(10);
+            var progress = (currentLog - lowerLog) / (upperLog - lowerLog);
+            return lowerMultiplier + (upperMultiplier - lowerMultiplier) * progress;
+        }
+    }
+    var finalBP = bpAnchors[bpAnchors.length - 1];
+    var finalMultiplier = multiplierAnchors[multiplierAnchors.length - 1];
+    var extraDecades = (Math.log(battlePower) - Math.log(finalBP)) / Math.log(10);
+    return finalMultiplier + Math.max(0, extraDecades) * 200.0;
 }
 
 function estimateDmzKillTpAward(player, maxHp) {
@@ -1004,6 +1099,9 @@ function estimateDmzKillTpAward(player, maxHp) {
 
 function estimateFairEndKillTp(player, kind) {
     var fairBase = fairEndKillTpBase(kind);
+    var power = readPlayerPower(player);
+    var bpMult = getSparringStyleBpMultiplier(power.bp);
+    fairBase = Math.max(1, Math.floor(fairBase * bpMult));
     var data = getDmz(player);
     if (data == null) return fairBase;
     try {
@@ -1017,19 +1115,50 @@ function estimateFairEndKillTp(player, kind) {
     return fairBase;
 }
 
+function getPlayerTrainingPoints(player) {
+    try {
+        var data = getDmz(player);
+        if (data == null) return 0;
+        return Math.max(0, num(data.getResources().getTrainingPoints(), 0));
+    } catch (e) { return 0; }
+}
+
+function adjustPlayerTrainingPoints(player, delta) {
+    delta = Math.floor(num(delta, 0));
+    if (delta === 0) return false;
+    var data = getDmz(player);
+    if (data == null) return false;
+    try {
+        if (delta > 0) {
+            data.getResources().addTrainingPoints(delta);
+            return true;
+        }
+        data.getResources().removeTrainingPoints(-delta);
+        return true;
+    } catch (e1) {
+        try {
+            var cur = getPlayerTrainingPoints(player);
+            data.getResources().setTrainingPoints(Math.max(0, cur + delta));
+            return true;
+        } catch (e2) {}
+    }
+    return false;
+}
+
 function scheduleEndKillTpClawback(player, kind, maxHp) {
-    if (END_TP_CLAWBACK_ENABLED !== true || !isPlayer(player)) return;
+    if (END_TP_SETTLE_ENABLED !== true || !isPlayer(player)) return;
     try {
         var temp = player.getTempdata();
         if (temp == null) return;
-        /* delay|kind|maxHp|startedAt — wait a few ticks so DMZ LivingDeath TP lands first */
-        var payload = "4|" + str(kind) + "|" + Math.floor(num(maxHp, 0)) + "|" + nowMs();
+        /* delay|kind|maxHp|startedAt — wait so DMZ LivingDeath TP lands first */
+        var delay = Math.max(1, Math.floor(num(END_TP_SETTLE_DELAY_TICKS, 6)));
+        var payload = delay + "|" + str(kind) + "|" + Math.floor(num(maxHp, 0)) + "|" + nowMs();
         temp.put(TEMP_TP_CLAWBACK, payload);
     } catch (e) {}
 }
 
 function processEndKillTpClawback(player) {
-    if (END_TP_CLAWBACK_ENABLED !== true || !isPlayer(player)) return false;
+    if (END_TP_SETTLE_ENABLED !== true || !isPlayer(player)) return false;
     var temp = null;
     var payload = null;
     try {
@@ -1047,7 +1176,10 @@ function processEndKillTpClawback(player) {
 
     var delay = Math.floor(num(parts[0], 0));
     if (delay > 0) {
-        try { temp.put(TEMP_TP_CLAWBACK, (delay - 1) + "|" + parts[1] + "|" + parts[2] + "|" + (parts[3] || "0")); } catch (eD) {}
+        try {
+            temp.put(TEMP_TP_CLAWBACK,
+                (delay - 1) + "|" + parts[1] + "|" + parts[2] + "|" + (parts[3] || "0"));
+        } catch (eD) {}
         return false;
     }
 
@@ -1057,25 +1189,25 @@ function processEndKillTpClawback(player) {
     var maxHp = num(parts[2], 0);
     var awarded = estimateDmzKillTpAward(player, maxHp);
     var fair = estimateFairEndKillTp(player, kind);
-    var excess = awarded - fair;
-    if (!(excess > 1)) return false;
-
-    var data = getDmz(player);
-    if (data == null) return false;
-    try {
-        data.getResources().removeTrainingPoints(excess);
-        msg(player, COLOR + "7[End] Kill TP adjusted to fair End payout (" +
-            formatHpLabel(fair) + " TP after boosts).");
-        return true;
-    } catch (e2) {
-        try {
-            data.getResources().setTrainingPoints(
-                Math.max(0, num(data.getResources().getTrainingPoints(), 0) - excess)
-            );
-            return true;
-        } catch (e3) {}
+    var delta = fair - awarded;
+    if (Math.abs(delta) <= 1) {
+        msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
+            COLOR + "7 TP" + COLOR + "8 (Sparring-scale End payout)");
+        return false;
     }
-    return false;
+
+    if (!adjustPlayerTrainingPoints(player, delta)) return false;
+
+    var label = kind === "dragon" ? "Ender Dragon" : str(kind);
+    if (delta > 0) {
+        msg(player, COLOR + "6[End] " + COLOR + "e+" + formatHpLabel(fair) +
+            COLOR + "7 TP for defeating " + COLOR + "d" + label +
+            COLOR + "8 (Sparring-scale payout; was " + formatHpLabel(awarded) + ")");
+    } else {
+        msg(player, COLOR + "7[End] Kill TP settled to Sparring-scale payout (" +
+            formatHpLabel(fair) + " TP after boosts).");
+    }
+    return true;
 }
 
 function setAttackDamage(entity, targetDmg) {
@@ -1541,11 +1673,23 @@ function restoreTowerCrystals(world) {
  * Raw /summon or createEntity orphans break perch/charge/crystal phase AI.
  */
 function spawnDragonViaFight(world) {
+    if (world == null) {
+        world = forceLoadEndWorld();
+    } else {
+        try { forceLoadEndWorld(); } catch (eForce) {}
+    }
     if (world == null) return null;
     clearAllDragons(world);
 
     var fight = getEndDragonFight(world);
-    if (fight == null) return null;
+    if (fight == null) {
+        try { world = forceLoadEndWorld() || world; } catch (eLoad) {}
+        fight = getEndDragonFight(world);
+    }
+    if (fight == null) {
+        try { print("[EndStrength] EndDragonFight is null (End not loaded?)"); } catch (eNull) {}
+        return null;
+    }
 
     try { fight.skipArenaLoadedCheck(); } catch (e1) {
         try { invokeFightMethod(fight, ["skipArenaLoadedCheck", "m_287277_", "setSkipChunksLoadedCheck"]); } catch (e2) {}
@@ -1911,11 +2055,100 @@ function tryNaturalDragonSpawn(player) {
     }
 }
 
+function clearCmdSpawnRequests() {
+    try {
+        var worlds = NpcAPI.Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var stored = worlds[i].getStoreddata();
+                if (stored.has(WORLD_CMD_SPAWN_REQUEST)) stored.remove(WORLD_CMD_SPAWN_REQUEST);
+            } catch (e1) {}
+        }
+    } catch (e2) {}
+}
+
+function readCmdSpawnRequest() {
+    var best = null;
+    try {
+        var worlds = NpcAPI.Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var stored = worlds[i].getStoreddata();
+                if (!stored.has(WORLD_CMD_SPAWN_REQUEST)) continue;
+                var raw = str(stored.get(WORLD_CMD_SPAWN_REQUEST));
+                if (raw === "" || raw.indexOf("|") < 0) continue;
+                var parts = raw.split("|");
+                var at = parts.length > 1 ? num(parts[1], 0) : 0;
+                if (best == null || at >= best.at) {
+                    best = { name: str(parts[0]), at: at, raw: raw };
+                }
+            } catch (e1) {}
+        }
+    } catch (e2) {}
+    return best;
+}
+
+function processCmdSpawnRequest(player) {
+    if (!isPlayer(player)) return false;
+    var req = readCmdSpawnRequest();
+    if (req == null) return false;
+
+    /* Expire stale requests (2 minutes). */
+    if (req.at > 0 && nowMs() - req.at > 120000) {
+        clearCmdSpawnRequests();
+        return false;
+    }
+
+    /* Only the named player (or any player if name blank) should process. */
+    var myName = str(player.getName());
+    if (req.name !== "" && req.name.toLowerCase() !== myName.toLowerCase()) return false;
+
+    try {
+        var temp = player.getTempdata();
+        var last = temp.has(TEMP_CMD_SPAWN_LOCK) ? num(temp.get(TEMP_CMD_SPAWN_LOCK), 0) : 0;
+        if (nowMs() - last < 3000) return false;
+        temp.put(TEMP_CMD_SPAWN_LOCK, "" + nowMs());
+    } catch (eLock) {}
+
+    clearCmdSpawnRequests();
+    try {
+        print("[EndStrength] Processing queued /enddragon for " + myName);
+    } catch (eLog) {}
+    msg(player, COLOR + "7[The End] Processing dragon spawn request...");
+    cmdSpawnDragon(player);
+    return true;
+}
+
+function queueCmdSpawnRequest(player) {
+    if (player == null) return false;
+    var payload = str(player.getName()) + "|" + nowMs() + "|command";
+    var wrote = 0;
+    try {
+        var worlds = NpcAPI.Instance().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                worlds[i].getStoreddata().put(WORLD_CMD_SPAWN_REQUEST, payload);
+                wrote++;
+            } catch (e1) {}
+        }
+    } catch (e2) {}
+    return wrote > 0;
+}
+
 function cmdSpawnDragon(player) {
-    if (!isRealOnlinePlayer(player) && !isPlayer(player)) return;
-    var world = getEndWorld();
+    if (!isRealOnlinePlayer(player) && !isPlayer(player)) {
+        try { print("[EndStrength] cmdSpawnDragon: invalid player"); } catch (e0) {}
+        return;
+    }
+
+    /* Consume any queued request so tick does not double-run this. */
+    try { clearCmdSpawnRequests(); } catch (eClr) {}
+
+    var world = forceLoadEndWorld();
+    if (world == null) world = getEndWorld();
     if (world == null) {
-        msg(player, COLOR + "c[The End] Could not find The End world.");
+        msg(player, COLOR + "c[The End] Could not find / load The End world.");
+        try { print("[EndStrength] cmdSpawnDragon: End world null"); } catch (e1) {}
         return;
     }
 
@@ -1934,8 +2167,9 @@ function cmdSpawnDragon(player) {
             y = Math.floor(player.getY() + 12);
             z = Math.floor(player.getZ());
         }
-    } catch (e1) {}
+    } catch (e2) {}
 
+    msg(player, COLOR + "7[The End] Spawning through EndDragonFight...");
     var result = spawnScaledDragon(world, player, "command", x, y, z);
     if (result == null) {
         /* Race / scan miss: dragon appeared (or was always there). */
@@ -1944,7 +2178,10 @@ function cmdSpawnDragon(player) {
             notifyDragonAlreadyAlive(player, existing);
             return;
         }
-        msg(player, COLOR + "c[The End] Failed to spawn the dragon through EndDragonFight.");
+        /* Pending buff may still land — tell the player clearly. */
+        msg(player, COLOR + "c[The End] EndDragonFight spawn did not return a dragon yet.");
+        msg(player, COLOR + "7[The End] If none appears in a few seconds, stand in The End and retry /enddragon.");
+        try { print("[EndStrength] cmdSpawnDragon failed for " + str(player.getName())); } catch (e3) {}
         return;
     }
 
@@ -1984,6 +2221,9 @@ function tick(event) {
 
         /* Runs in any dimension — DMZ kill TP may land a few ticks after death. */
         try { processEndKillTpClawback(player); } catch (eClaw) {}
+
+        /* /enddragon queue from EndDragon-Command.js (or this script's trigger). */
+        try { processCmdSpawnRequest(player); } catch (eCmd) {}
 
         var world = player.getWorld();
         if (!isInTheEnd(world)) return;

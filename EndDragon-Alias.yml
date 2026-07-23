@@ -1,12 +1,15 @@
 #
 # End Dimension Strength - CMI alias
-# Requires End Dimension Strength.js in Global Player
-# (events: tick, kill, trigger, damagedEntity) — OWN tab.
+#
+# INSTALL BOTH scripts (separate Global Player tabs):
+#   1) EndDragon-Command.js     — event: trigger only  (reliable /enddragon)
+#   2) End Dimension Strength.js — events: tick, kill, trigger, damagedEntity
 #
 # /enddragon  -> noppes script trigger 50 [playerName]
 #
-# The script resolves the real player from [playerName] / arguments[0].
-# asFakeOp! is fine — do not use event.entity as the spawn target.
+# The command script queues a spawn; End Strength processes it on tick
+# (and also handles trigger 50 itself as a backup).
+# asFakeOp! is fine — player is resolved from [playerName] / arguments[0].
 #
 
 CustomAlias:
