@@ -1755,6 +1755,19 @@ function tick(event) {
 
         enforceRaceLockWipe(player, temp);
 
+        try {
+            var lazyVerify = StatsProvider.get(
+                StatsCapability.INSTANCE,
+                mcPlayer
+            );
+            if (lazyVerify != null) {
+                var verifyData = lazyVerify.orElse(null);
+                if (verifyData != null) {
+                    dmzData = verifyData;
+                }
+            }
+        } catch (verifyErr) {}
+
         if (isDmzResetComplete(dmzData)) {
             clearStuckSagaDifficulty(
                 player,
