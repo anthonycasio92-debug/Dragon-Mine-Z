@@ -5,8 +5,8 @@
  *
  * Fixes vs broken paste:
  * - Unicode colors (\u00A7) — literal section signs break CNPC
- * - dmzstats reset via console (NPC executeCommand often has
- *   no permission, so reset silently fails)
+ * - Resets via DMZ Java API first, then command fallbacks
+ * - Verifies stats wiped before counting prestige
  * - Verified command: dmzstats reset <player> 0 false
  * - Clears stuck saga difficultyChosen after reset
  * - Confirms stored prestige count after success
@@ -113,78 +113,211 @@ function readStoredNumber(stored, key, fallback) {
 
 /*
  * ============================================================
- * COMMAND EXECUTION
- * Prefer console dispatch so Forge commands have permission.
+ * COMMAND EXECUTION / DMZ RESET
  * ============================================================
+ *
+ * Primary path = direct DMZ Java API.
+ * Commands are secondary. Bukkit.dispatchCommand often returns
+ * true on hybrid servers without actually running Forge cmds.
  */
 
-function runServerCommand(command, npc) {
+function runServerCommand(command, npc, api) {
     var cmd = ("" + command).replace(/^\//, "");
+    var ran = false;
 
     try {
-        var Bukkit = Java.type("org.bukkit.Bukkit");
-        var ok = Bukkit.dispatchCommand(
-            Bukkit.getConsoleSender(),
-            cmd
-        );
-        if (ok === true) {
-            return true;
-        }
-    } catch (bukkitErr) {}
-
-    try {
-        if (npc != null && npc.executeCommand) {
-            npc.executeCommand(cmd);
-            return true;
-        }
-    } catch (npcErr) {}
-
-    return false;
-}
-
-function resetDmzPlayer(player, npc) {
-    var name = "" + player.getName();
-    var resetCommand =
-        "dmzstats reset " + name + " 0 false";
-
-    var ran = runServerCommand(resetCommand, npc);
-
-    /*
-     * Direct API fallback if command dispatch failed.
-     */
-    try {
-        var mcPlayer = player.getMCEntity
-            ? player.getMCEntity()
-            : null;
-        if (mcPlayer != null) {
-            var data = StatsProvider
-                .get(StatsCapability.INSTANCE, mcPlayer)
-                .orElse(null);
-            if (data != null) {
-                data.resetPlayerProgress(
-                    mcPlayer,
-                    java.lang.Integer.valueOf(0),
-                    false,
-                    false
-                );
-                try {
-                    var NetworkHandler = Java.type(
-                        "com.dragonminez.common.network.NetworkHandler"
-                    );
-                    var StatsSyncS2C = Java.type(
-                        "com.dragonminez.common.network.S2C.StatsSyncS2C"
-                    );
-                    NetworkHandler.sendToTrackingEntityAndSelf(
-                        new StatsSyncS2C(mcPlayer),
-                        mcPlayer
-                    );
-                } catch (syncErr) {}
+        if (api != null && api.executeCommand) {
+            var world = null;
+            try {
+                if (npc != null && npc.getWorld) {
+                    world = npc.getWorld();
+                }
+            } catch (wErr) {}
+            if (world != null) {
+                api.executeCommand(world, cmd);
                 ran = true;
             }
         }
     } catch (apiErr) {}
 
+    try {
+        var Bukkit = Java.type("org.bukkit.Bukkit");
+        Bukkit.dispatchCommand(
+            Bukkit.getConsoleSender(),
+            cmd
+        );
+        ran = true;
+    } catch (bukkitErr) {}
+
+    try {
+        if (npc != null && npc.executeCommand) {
+            npc.executeCommand(cmd);
+            ran = true;
+        }
+    } catch (npcErr) {}
+
     return ran;
+}
+
+function syncDmzStats(mcPlayer) {
+    if (mcPlayer == null) {
+        return;
+    }
+    try {
+        var NetworkHandler = Java.type(
+            "com.dragonminez.common.network.NetworkHandler"
+        );
+        var StatsSyncS2C = Java.type(
+            "com.dragonminez.common.network.S2C.StatsSyncS2C"
+        );
+        NetworkHandler.sendToTrackingEntityAndSelf(
+            new StatsSyncS2C(mcPlayer),
+            mcPlayer
+        );
+    } catch (err1) {}
+    try {
+        var NetworkHandler2 = Java.type(
+            "com.dragonminez.common.network.NetworkHandler"
+        );
+        var ProgressionSyncS2C = Java.type(
+            "com.dragonminez.common.network.S2C.ProgressionSyncS2C"
+        );
+        NetworkHandler2.sendToPlayer(
+            new ProgressionSyncS2C(mcPlayer),
+            mcPlayer
+        );
+    } catch (err2) {}
+}
+
+function forceWipeDmzStats(data, mcPlayer) {
+    if (data == null || mcPlayer == null) {
+        return false;
+    }
+
+    var Integer = Java.type("java.lang.Integer");
+    var wiped = false;
+
+    try {
+        data.resetPlayerProgress(
+            mcPlayer,
+            Integer.valueOf(0),
+            false,
+            false
+        );
+        wiped = true;
+    } catch (err0) {}
+
+    if (!wiped) {
+        try {
+            data.resetPlayerProgress(
+                mcPlayer,
+                null,
+                false,
+                false
+            );
+            wiped = true;
+        } catch (errNull) {}
+    }
+
+    try {
+        var stats = data.getStats();
+        if (stats != null) {
+            stats.setStrength(0);
+            stats.setStrikePower(0);
+            stats.setResistance(0);
+            stats.setVitality(0);
+            stats.setKiPower(0);
+            stats.setEnergy(0);
+            wiped = true;
+        }
+    } catch (statsErr) {}
+
+    try {
+        var resources = data.getResources();
+        if (resources != null) {
+            resources.setTrainingPoints(0.0);
+            try { resources.setPendingAttributePoints(0); } catch (e1) {}
+            try { resources.setPowerRelease(0); } catch (e2) {}
+        }
+    } catch (resErr) {}
+
+    try {
+        var status = data.getStatus();
+        if (status != null) {
+            status.setHasCreatedCharacter(false);
+        }
+    } catch (statusErr) {}
+
+    try { data.getBonusStats().clearAllStats(); } catch (bonusErr) {}
+    try { data.getCooldowns().clearCooldowns(); } catch (cdErr) {}
+    try { data.getSkills().removeAllSkills(); } catch (skErr) {}
+    try { data.getEffects().removeAllEffects(); } catch (fxErr) {}
+    try { data.getTechniques().clearAllTechniques(); } catch (techErr) {}
+    try { data.getPlayerQuestData().resetAll(); } catch (questErr) {}
+
+    syncDmzStats(mcPlayer);
+    return wiped;
+}
+
+function getDmzSnapshot(player) {
+    try {
+        var mcPlayer = player.getMCEntity
+            ? player.getMCEntity()
+            : null;
+        if (mcPlayer == null) {
+            return null;
+        }
+        var data = StatsProvider
+            .get(StatsCapability.INSTANCE, mcPlayer)
+            .orElse(null);
+        if (data == null) {
+            return null;
+        }
+        var stats = data.getStats();
+        return {
+            mcPlayer: mcPlayer,
+            data: data,
+            level: Number(data.getLevel()),
+            str: stats != null ? Number(stats.getStrength()) : -1,
+            created: data.getStatus() != null
+                ? data.getStatus().isHasCreatedCharacter() === true
+                : true
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
+function resetDmzPlayer(player, npc, api) {
+    var before = getDmzSnapshot(player);
+    if (before == null) {
+        return false;
+    }
+
+    var name = "" + player.getName();
+    var resetCommand =
+        "dmzstats reset " + name + " 0 false";
+
+    forceWipeDmzStats(before.data, before.mcPlayer);
+    runServerCommand(resetCommand, npc, api);
+
+    var mid = getDmzSnapshot(player);
+    if (mid != null) {
+        forceWipeDmzStats(mid.data, mid.mcPlayer);
+    }
+
+    var after = getDmzSnapshot(player);
+    if (after == null) {
+        return false;
+    }
+
+    var strOk = after.str <= 0;
+    var createdOk = after.created === false;
+    var levelOk =
+        after.level <= 1 ||
+        after.level < before.level;
+
+    return strOk || createdOk || levelOk;
 }
 
 function clearStuckSagaDifficulty(player) {
@@ -731,54 +864,34 @@ function interact(event) {
                 return;
             }
 
-            var rewardWorked =
-                awardBackendPrestigeLevel(player);
-
-            if (!rewardWorked) {
-                sendSeparator(player);
-                sendMessage(
-                    player,
-                    RED + "Prestige could not be processed."
-                );
-                sendMessage(
-                    player,
-                    GRAY + "Your stats were not reset."
-                );
-                sendMessage(
-                    player,
-                    GRAY + "Please contact a staff member."
-                );
-                sendSeparator(player);
-                return;
-            }
-
             var name = "" + player.getName();
+            var api = null;
+            try {
+                api = event.API;
+            } catch (apiErr) {}
 
             /*
-             * Fabled Prestige class +1 via console.
+             * Reset DMZ FIRST and verify wipe before awarding.
              */
-            runServerCommand(
-                "class level " + name +
-                " add 1 " + FABLED_PRESTIGE_CLASS,
-                npc
+            var resetWorked = resetDmzPlayer(
+                player,
+                npc,
+                api
             );
 
-            /*
-             * DMZ reset — must use console / API.
-             * npc.executeCommand alone often has no permission.
-             */
-            var resetWorked = resetDmzPlayer(player, npc);
             if (!resetWorked) {
                 sendSeparator(player);
                 sendMessage(
                     player,
-                    RED +
-                    "Prestige reward was given, but DMZ reset failed."
+                    RED + "DMZ stat reset failed."
                 );
                 sendMessage(
                     player,
                     GRAY +
-                    "Tell staff to run: " +
+                    "Prestige was NOT counted. Tell staff to run:"
+                );
+                sendMessage(
+                    player,
                     WHITE +
                     "dmzstats reset " + name + " 0 false"
                 );
@@ -788,6 +901,31 @@ function interact(event) {
 
             clearStuckSagaDifficulty(player);
             resetPrestigeProgress(player);
+
+            var rewardWorked =
+                awardBackendPrestigeLevel(player);
+
+            if (!rewardWorked) {
+                sendSeparator(player);
+                sendMessage(
+                    player,
+                    YELLOW +
+                    "Stats were reset, but the Prestige Level reward failed."
+                );
+                sendMessage(
+                    player,
+                    GRAY + "Please contact a staff member."
+                );
+                sendSeparator(player);
+                return;
+            }
+
+            runServerCommand(
+                "class level " + name +
+                " add 1 " + FABLED_PRESTIGE_CLASS,
+                npc,
+                api
+            );
 
             var newPrestigeLevel =
                 currentPrestigeLevel + 1;
