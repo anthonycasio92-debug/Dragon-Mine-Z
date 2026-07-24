@@ -181,7 +181,7 @@ function clearStuckSagaDifficulty(player, dmzData) {
 
         if (DEBUG && wasChosen && player != null) {
             player.message(
-                "§6[Race Lock Debug] §7Cleared stuck saga difficultyChosen so the picker can open again."
+                "\u00A76[Race Lock Debug] \u00A77Cleared stuck saga difficultyChosen so the picker can open again."
             );
         }
 
