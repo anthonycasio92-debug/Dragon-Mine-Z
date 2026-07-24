@@ -17,7 +17,10 @@
 //
 // Also clears stuck saga difficultyChosen after resets so the
 // Quest Tree difficulty picker works again. No extra script.
-// Enable Tick (required) and Chat (for !unlockdifficulty).
+// Enable Tick (required) and Trigger (for unlock command).
+// Chat is optional and often broken on hybrid servers.
+// Unlock without chat:
+//   /noppes script trigger 120
 // Also leaves DMZ party if you are a non-leader, because DMZ
 // blocks difficulty selection for party members.
 // ============================================================
@@ -473,6 +476,38 @@ function maybeAutoUnlockStuckDifficulty(player, dmzData, temp) {
     );
 }
 
+var SAGA_TRIGGER_ID = 120;
+
+function runManualSagaDifficultyUnlock(player, sourceLabel) {
+    if (player == null) {
+        return false;
+    }
+
+    try {
+        player.message(
+            "\u00A76[Race Lock] Running saga difficulty unlock" +
+            (sourceLabel ? " (" + sourceLabel + ")" : "") +
+            "..."
+        );
+    } catch (msgErr) {}
+
+    var dmzData = loadDmzData(player);
+    if (dmzData == null) {
+        try {
+            player.message(
+                "\u00A7c[Race Lock] Could not read DMZ data."
+            );
+        } catch (err2) {}
+        return false;
+    }
+
+    return clearStuckSagaDifficulty(player, dmzData, true);
+}
+
+/*
+ * Chat often does nothing on hybrid / plugin chat bridges.
+ * Keep it, but prefer Trigger or the login/tick session check.
+ */
 function chat(event) {
     try {
         var message = "" + event.message;
@@ -492,24 +527,7 @@ function chat(event) {
             event.setCanceled(true);
         } catch (cancelErr) {}
 
-        var player = event.player;
-        if (player == null) {
-            return;
-        }
-
-        player.message(
-            "\u00A76[Race Lock] Running saga difficulty unlock..."
-        );
-
-        var dmzData = loadDmzData(player);
-        if (dmzData == null) {
-            player.message(
-                "\u00A7c[Race Lock] Could not read DMZ data."
-            );
-            return;
-        }
-
-        clearStuckSagaDifficulty(player, dmzData, true);
+        runManualSagaDifficultyUnlock(event.player, "chat");
     } catch (err) {
         try {
             event.player.message(
@@ -520,11 +538,121 @@ function chat(event) {
     }
 }
 
+function trigger(event) {
+    try {
+        if (
+            event.id != null &&
+            Number(event.id) !== SAGA_TRIGGER_ID
+        ) {
+            return;
+        }
+    } catch (idErr) {}
+
+    try {
+        runManualSagaDifficultyUnlock(
+            event.player,
+            "trigger " + SAGA_TRIGGER_ID
+        );
+    } catch (err) {
+        try {
+            event.player.message(
+                "\u00A7c[Race Lock] Difficulty unlock error: " +
+                err
+            );
+        } catch (msgErr) {}
+    }
+}
+
+function login(event) {
+    try {
+        runSessionSagaDifficultyCheck(event.player, true);
+    } catch (err) {}
+}
+
+/*
+ * Once per login session (Tick or Login): prove Race Lock is
+ * alive, and unlock if difficulty/party is blocking selection.
+ * Works with only Tick enabled — no Chat needed.
+ */
+function runSessionSagaDifficultyCheck(player, fromLogin) {
+    if (player == null) {
+        return;
+    }
+
+    var temp = player.getTempdata();
+    var doneKey = "race_lock_saga_session_check";
+    try {
+        if (temp.get(doneKey) != null) {
+            return;
+        }
+    } catch (err) {}
+
+    try {
+        temp.put(doneKey, "1");
+    } catch (putErr) {}
+
+    var dmzData = loadDmzData(player);
+    if (dmzData == null) {
+        try {
+            player.message(
+                "\u00A7c[Race Lock] Saga check failed: no DMZ data."
+            );
+        } catch (err2) {}
+        return;
+    }
+
+    var questData = null;
+    var status = null;
+    try {
+        questData = dmzData.getPlayerQuestData();
+    } catch (qErr) {}
+    try {
+        status = dmzData.getStatus();
+    } catch (sErr) {}
+
+    var chosen = isDifficultyChosen(questData);
+    var created = hasCreatedCharacter(status);
+    var inParty = isInDmzParty(questData);
+    var leader = isDmzPartyLeader(
+        questData,
+        getMcPlayer(player)
+    );
+
+    try {
+        player.message(
+            "\u00A76[Race Lock] Saga check: " +
+            "\u00A78chosen=" + chosen +
+            " created=" + created +
+            " party=" + inParty +
+            " leader=" + leader
+        );
+    } catch (msgErr) {}
+
+    if (chosen || (inParty && !leader)) {
+        clearStuckSagaDifficulty(player, dmzData, true);
+        return;
+    }
+
+    try {
+        player.message(
+            "\u00A7a[Race Lock] Saga difficulty is already selectable."
+        );
+        player.message(
+            "\u00A77If the menu still fails, close/reopen Quest Tree or run: " +
+            "\u00A7f/noppes script trigger " + SAGA_TRIGGER_ID
+        );
+    } catch (msgErr2) {}
+}
+
 function tryEarlySagaDifficultyUnlock(player) {
     try {
         if (player == null) {
             return;
         }
+
+        /* Session check first so Tick-only installs still unlock. */
+        runSessionSagaDifficultyCheck(player, false);
+
         var temp = player.getTempdata();
         var dmzData = loadDmzData(player);
         if (dmzData == null) {
@@ -537,11 +665,6 @@ function tryEarlySagaDifficultyUnlock(player) {
         );
     } catch (err) {}
 }
-
-
-// ============================================================
-// GLOBAL PLAYER TICK
-// ============================================================
 
 function tick(event) {
     try {
