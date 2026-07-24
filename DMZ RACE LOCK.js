@@ -9,8 +9,13 @@
 // method used by the working Fabled attribute script.
 //
 // If the required Fabled skill is below level 1, the script
-// wipes DMZ progress via resetPlayerProgress (Java API), then
-// also runs: dmzstats reset <player> 0 false as a fallback.
+// wipes DMZ progress via:
+//   1) MainAttributes setBaseValue(0) + clearModifiers (direct)
+//   2) resetPlayerProgress(null keep%) Java API
+//   3) Stats setters as backup
+//   4) dmzstats reset command fallback
+// Race matching ignores spaces/underscores/hyphens.
+// Bukkit/Fabled failures never silently skip a locked race wipe.
 //
 // Also clears stuck saga difficultyChosen after resets so the
 // Quest Tree difficulty picker works again. No extra script.
@@ -759,9 +764,92 @@ function tryEarlySagaDifficultyUnlock(player) {
  * DMZ STAT RESET (Java API)
  * ============================================================
  *
+ * Verified against dragonminez-2.1.3 bytecode + mappings.dev:
+ *   Stats.getStrength()  -> AttributeInstance.getBaseValue (m_22115_)
+ *   Stats.setStrength(v) -> AttributeInstance.setBaseValue (m_22100_)
+ *   resetPlayerProgress zeros those bases then status.reset()
+ *   createCharacter KEEPS non-zero bases (does not re-roll)
+ *
  * Hybrid Bukkit.dispatchCommand often returns true without
- * running Forge dmzstats. Wipe through DMZ's own API first.
+ * running Forge dmzstats. Wipe through attributes + DMZ API.
  */
+
+function normalizeRaceKey(value) {
+    try {
+        return ("" + value)
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+    } catch (err) {
+        return "";
+    }
+}
+
+function readStatSnapshot(dmzData) {
+    var snap = {
+        str: -1,
+        skp: -1,
+        res: -1,
+        vit: -1,
+        pwr: -1,
+        ene: -1,
+        created: true,
+        race: "?"
+    };
+
+    if (dmzData == null) {
+        return snap;
+    }
+
+    try {
+        var status = dmzData.getStatus();
+        snap.created =
+            status != null &&
+            status.isHasCreatedCharacter() === true;
+    } catch (err1) {}
+
+    try {
+        var character = dmzData.getCharacter();
+        if (character != null) {
+            try {
+                snap.race = "" + character.getRace();
+            } catch (r1) {
+                try {
+                    snap.race = "" + character.getRaceName();
+                } catch (r2) {}
+            }
+        }
+    } catch (err2) {}
+
+    try {
+        var stats = dmzData.getStats();
+        if (stats != null) {
+            snap.str = Number(stats.getStrength());
+            snap.skp = Number(stats.getStrikePower());
+            snap.res = Number(stats.getResistance());
+            snap.vit = Number(stats.getVitality());
+            snap.pwr = Number(stats.getKiPower());
+            snap.ene = Number(stats.getEnergy());
+        }
+    } catch (err3) {}
+
+    return snap;
+}
+
+function formatStatSnapshot(snap) {
+    if (snap == null) {
+        return "no-data";
+    }
+    return (
+        "race=[" + snap.race + "]" +
+        " created=" + snap.created +
+        " STR=" + snap.str +
+        " SKP=" + snap.skp +
+        " RES=" + snap.res +
+        " VIT=" + snap.vit +
+        " PWR=" + snap.pwr +
+        " ENE=" + snap.ene
+    );
+}
 
 function syncDmzFull(mcPlayer) {
     if (mcPlayer == null) {
@@ -786,48 +874,131 @@ function syncDmzFull(mcPlayer) {
     } catch (err2) {}
 }
 
-function forceWipeDmzData(dmzData, mcPlayer) {
-    if (dmzData == null || mcPlayer == null) {
+/*
+ * Direct MainAttributes wipe. Confirmed SRG (1.20.1):
+ *   m_22100_ = setBaseValue
+ *   m_22132_ = removeModifiers / clearModifiers
+ *   m_22115_ = getBaseValue
+ */
+function zeroMainAttributeBases(mcPlayer) {
+    if (mcPlayer == null) {
         return false;
     }
 
-    var wiped = false;
-    var Integer = Java.type("java.lang.Integer");
+    var changed = false;
 
     try {
-        dmzData.resetPlayerProgress(
-            mcPlayer,
-            Integer.valueOf(0),
-            false,
-            false
+        var MainAttributes = Java.type(
+            "com.dragonminez.common.init.MainAttributes"
         );
-        wiped = true;
-    } catch (err0) {}
+        var attrs = [
+            MainAttributes.STRENGTH.get(),
+            MainAttributes.STRIKE_POWER.get(),
+            MainAttributes.RESISTANCE.get(),
+            MainAttributes.VITALITY.get(),
+            MainAttributes.KI_POWER.get(),
+            MainAttributes.ENERGY.get()
+        ];
 
-    if (!wiped) {
-        try {
-            dmzData.resetPlayerProgress(
-                mcPlayer,
-                null,
-                false,
-                false
-            );
-            wiped = true;
-        } catch (errNull) {}
+        for (var i = 0; i < attrs.length; i++) {
+            try {
+                var inst = mcPlayer.m_21051_
+                    ? mcPlayer.m_21051_(attrs[i])
+                    : null;
+                if (inst == null) {
+                    continue;
+                }
+                try {
+                    inst.m_22132_();
+                } catch (clearErr) {}
+                try {
+                    inst.m_22100_(0.0);
+                    changed = true;
+                } catch (setErr) {}
+            } catch (attrErr) {}
+        }
+    } catch (err) {
+        return false;
+    }
+
+    return changed;
+}
+
+function zeroDmzStatsObject(dmzData) {
+    if (dmzData == null) {
+        return false;
     }
 
     try {
         var stats = dmzData.getStats();
-        if (stats != null) {
-            stats.setStrength(0);
-            stats.setStrikePower(0);
-            stats.setResistance(0);
-            stats.setVitality(0);
-            stats.setKiPower(0);
-            stats.setEnergy(0);
-            wiped = true;
+        if (stats == null) {
+            return false;
         }
-    } catch (statsErr) {}
+        stats.setStrength(0);
+        stats.setStrikePower(0);
+        stats.setResistance(0);
+        stats.setVitality(0);
+        stats.setKiPower(0);
+        stats.setEnergy(0);
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function forceWipeDmzData(dmzData, mcPlayer) {
+    if (dmzData == null) {
+        return false;
+    }
+
+    var wiped = false;
+
+    /*
+     * Attribute bases first — does not require resetPlayerProgress
+     * signature / ServerPlayer cast to succeed.
+     */
+    if (zeroMainAttributeBases(mcPlayer)) {
+        wiped = true;
+    }
+    if (zeroDmzStatsObject(dmzData)) {
+        wiped = true;
+    }
+
+    if (mcPlayer != null) {
+            try {
+                var ServerPlayer = Java.type(
+                    "net.minecraft.server.level.ServerPlayer"
+                );
+                if (mcPlayer instanceof ServerPlayer) {
+                    /*
+                     * Official /dmzstats reset with empty keep% uses null,
+                     * which zeros every base stat then status.reset().
+                     */
+                    dmzData.resetPlayerProgress(
+                        mcPlayer,
+                        null,
+                        false,
+                        false
+                    );
+                    wiped = true;
+                }
+            } catch (errNull) {
+                try {
+                    var Integer = Java.type("java.lang.Integer");
+                    dmzData.resetPlayerProgress(
+                        mcPlayer,
+                        Integer.valueOf(0),
+                        false,
+                        false
+                    );
+                    wiped = true;
+                } catch (err0) {}
+            }
+
+        /* resetPlayerProgress can throw after partial work — re-zero */
+        zeroMainAttributeBases(mcPlayer);
+        zeroDmzStatsObject(dmzData);
+    }
 
     try {
         var resources = dmzData.getResources();
@@ -866,6 +1037,10 @@ function forceWipeDmzData(dmzData, mcPlayer) {
     } catch (fxErr) {}
 
     try {
+        dmzData.getSecondaryStatEffects().clear();
+    } catch (secErr) {}
+
+    try {
         dmzData.getTechniques().clearAllTechniques();
     } catch (techErr) {}
 
@@ -878,19 +1053,24 @@ function forceWipeDmzData(dmzData, mcPlayer) {
     } catch (dgErr) {}
 
     /*
-     * Clear restricted race so leftover progress cannot stick
-     * to ancient_saiyan / locked races after wipe.
+     * Clear restricted race AFTER bases are zeroed so a failed
+     * attribute wipe cannot leave high stats on a non-restricted
+     * race that Race Lock will stop checking.
      */
-    try {
-        var character = dmzData.getCharacter();
-        if (character != null) {
-            try { character.setRace("human"); } catch (r1) {}
-            try { character.setCharacterClass("warrior"); } catch (r2) {}
-            try { character.clearActiveForm(mcPlayer); } catch (r3) {}
-            try { character.clearActiveStackForm(mcPlayer); } catch (r4) {}
-            try { character.clearInteractedMasters(); } catch (r5) {}
-        }
-    } catch (charErr) {}
+    if (!hasLeftoverDmzStats(dmzData)) {
+        try {
+            var character = dmzData.getCharacter();
+            if (character != null) {
+                try { character.setRace("human"); } catch (r1) {}
+                try { character.setCharacterClass("warrior"); } catch (r2) {}
+                if (mcPlayer != null) {
+                    try { character.clearActiveForm(mcPlayer); } catch (r3) {}
+                    try { character.clearActiveStackForm(mcPlayer); } catch (r4) {}
+                }
+                try { character.clearInteractedMasters(); } catch (r5) {}
+            }
+        } catch (charErr) {}
+    }
 
     try {
         var status2 = dmzData.getStatus();
@@ -899,14 +1079,30 @@ function forceWipeDmzData(dmzData, mcPlayer) {
         }
     } catch (st2) {}
 
-    syncDmzFull(mcPlayer);
+    if (mcPlayer != null) {
+        syncDmzFull(mcPlayer);
 
-    try {
-        var StorageManager = Java.type(
-            "com.dragonminez.server.storage.StorageManager"
-        );
-        StorageManager.savePlayer(mcPlayer);
-    } catch (saveErr) {}
+        try {
+            var StorageManager = Java.type(
+                "com.dragonminez.server.storage.StorageManager"
+            );
+            /*
+             * StorageManager.savePlayer skips when
+             * !isDataLoaded && !hasCreatedCharacter. After wipe
+             * created=false, so ensure data is marked loaded via
+             * a no-op copyFrom of self when needed.
+             */
+            try {
+                if (
+                    dmzData.isDataLoaded &&
+                    dmzData.isDataLoaded() !== true
+                ) {
+                    dmzData.copyFrom(dmzData);
+                }
+            } catch (markErr) {}
+            StorageManager.savePlayer(mcPlayer);
+        } catch (saveErr) {}
+    }
 
     return wiped;
 }
@@ -916,38 +1112,16 @@ function isDmzResetComplete(dmzData) {
         return false;
     }
 
-    var created = true;
-    try {
-        var status = dmzData.getStatus();
-        created =
-            status != null &&
-            status.isHasCreatedCharacter() === true;
-    } catch (err1) {
-        created = true;
-    }
-
-    var str = -1;
-    var vit = -1;
-    var ene = -1;
-    try {
-        var stats = dmzData.getStats();
-        if (stats != null) {
-            str = Number(stats.getStrength());
-            vit = Number(stats.getVitality());
-            ene = Number(stats.getEnergy());
-        }
-    } catch (err2) {}
-
-    /*
-     * Must wipe base stats. Character-created=false alone is NOT
-     * enough — that used to stop Race Lock while stats remained.
-     */
+    var snap = readStatSnapshot(dmzData);
     var statsWiped =
-        str <= 0 &&
-        vit <= 0 &&
-        ene <= 0;
+        snap.str <= 0 &&
+        snap.skp <= 0 &&
+        snap.res <= 0 &&
+        snap.vit <= 0 &&
+        snap.pwr <= 0 &&
+        snap.ene <= 0;
 
-    return statsWiped && created !== true;
+    return statsWiped && snap.created !== true;
 }
 
 function hasLeftoverDmzStats(dmzData) {
@@ -970,6 +1144,28 @@ function hasLeftoverDmzStats(dmzData) {
     } catch (err) {
         return false;
     }
+}
+
+function findRestrictedRaceIndex(raceId) {
+    var normalized = normalizeRaceKey(raceId);
+    if (normalized == "") {
+        return -1;
+    }
+
+    var raceIndex;
+    for (
+        raceIndex = 0;
+        raceIndex < RESTRICTED_RACE_IDS.length;
+        raceIndex++
+    ) {
+        var configured = normalizeRaceKey(
+            RESTRICTED_RACE_IDS[raceIndex]
+        );
+        if (configured != "" && configured == normalized) {
+            return raceIndex;
+        }
+    }
+    return -1;
 }
 
 
@@ -1176,16 +1372,8 @@ function tick(event) {
 
 
         // ====================================================
-        // JAVA CLASSES
+        // GET DMZ DATA (Forge only — never gated on Bukkit)
         // ====================================================
-
-        var Bukkit = Java.type(
-            "org.bukkit.Bukkit"
-        );
-
-        var UUID = Java.type(
-            "java.util.UUID"
-        );
 
         var StatsProvider = Java.type(
             "com.dragonminez.common.stats.StatsProvider"
@@ -1195,85 +1383,44 @@ function tick(event) {
             "com.dragonminez.common.stats.StatsCapability"
         );
 
-
-        // ====================================================
-        // GET THE BUKKIT PLAYER
-        //
-        // This is copied from the working Fabled attribute
-        // script's approach.
-        // ====================================================
-
-        var bukkitPlayer =
-            Bukkit.getPlayer(
-                UUID.fromString(
-                    "" + player.getUUID()
-                )
-            );
-
-        if (bukkitPlayer == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] Bukkit player was unavailable."
-                );
-            }
-
-            return;
+        var mcPlayer = null;
+        try {
+            mcPlayer = player.getMCEntity
+                ? player.getMCEntity()
+                : null;
+        } catch (mcErr) {
+            mcPlayer = null;
         }
 
-
-        // ====================================================
-        // GET DMZ DATA
-        // ====================================================
+        if (mcPlayer == null) {
+            return;
+        }
 
         var lazy = StatsProvider.get(
             StatsCapability.INSTANCE,
-            player.getMCEntity()
+            mcPlayer
         );
 
         if (lazy == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] DMZ LazyOptional was unavailable."
-                );
-            }
-
             return;
         }
 
-        var dmzData =
-            lazy.orElse(null);
+        var dmzData = lazy.orElse(null);
 
         if (dmzData == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] DMZ player data was unavailable."
-                );
-            }
-
             return;
         }
 
-        var status =
-            dmzData.getStatus();
+        var status = dmzData.getStatus();
 
         if (status == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] DMZ status data was unavailable."
-                );
-            }
-
             return;
         }
 
 
         // After a successful reset, DMZ marks the character as
-        // not created. Stop checking until the player creates
-        // another character.
-        //
-        // Also unlock stuck saga difficulty once — dmzstats
-        // reset leaves difficultyChosen true, which blocks the
-        // picker until requestDifficultyReselect runs.
+        // not created. Keep wiping leftovers — createCharacter
+        // keeps non-zero bases if wipe was incomplete.
 
         if (!status.isHasCreatedCharacter()) {
             maybeAutoUnlockStuckDifficulty(
@@ -1282,10 +1429,6 @@ function tick(event) {
                 temp
             );
 
-            /*
-             * Character flag can clear while base stats remain.
-             * Keep wiping leftovers so Race Lock actually strips power.
-             */
             if (hasLeftoverDmzStats(dmzData)) {
                 enforceRaceLockWipe(player, temp);
             }
@@ -1297,16 +1440,9 @@ function tick(event) {
             return;
         }
 
-        var character =
-            dmzData.getCharacter();
+        var character = dmzData.getCharacter();
 
         if (character == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] DMZ character data was unavailable."
-                );
-            }
-
             return;
         }
 
@@ -1315,115 +1451,86 @@ function tick(event) {
         // READ THE EXACT DMZ RACE ID
         // ====================================================
 
-        var rawRaceId =
-            character.getRace();
+        var rawRaceId = null;
+        try {
+            rawRaceId = character.getRace();
+        } catch (raceErr) {
+            try {
+                rawRaceId = character.getRaceName();
+            } catch (raceNameErr) {
+                rawRaceId = null;
+            }
+        }
 
         if (rawRaceId == null) {
             return;
         }
 
-        var raceId =
-            ("" + rawRaceId).trim();
+        var raceId = ("" + rawRaceId).trim();
 
-        if (
-            raceId == "" ||
-            raceId == "null"
-        ) {
+        if (raceId == "" || raceId == "null") {
             return;
         }
 
-        var lowerRaceId =
-            raceId.toLowerCase();
-
-
-        // ====================================================
-        // FIND THE RACE IN THE RESTRICTED LIST
-        // ====================================================
-
-        var restrictedIndex = -1;
-
-        var raceIndex;
-
-        for (
-            raceIndex = 0;
-            raceIndex <
-                RESTRICTED_RACE_IDS.length;
-            raceIndex++
-        ) {
-            var configuredRaceId =
-                "" +
-                RESTRICTED_RACE_IDS[
-                    raceIndex
-                ];
-
-            configuredRaceId =
-                configuredRaceId
-                    .trim()
-                    .toLowerCase();
-
-            if (
-                lowerRaceId ==
-                configuredRaceId
-            ) {
-                restrictedIndex =
-                    raceIndex;
-
-                break;
-            }
-        }
+        var restrictedIndex =
+            findRestrictedRaceIndex(raceId);
 
 
         // The player's current race is not restricted.
 
         if (restrictedIndex == -1) {
-            if (DEBUG) {
-                var unrestrictedState =
-                    "unrestricted|" +
-                    lowerRaceId;
-
-                var oldUnrestrictedState =
-                    temp.get(
-                        "restricted_race_command_last_state"
-                    );
-
+            /*
+             * One-time notice when the live race looks like the
+             * configured lock target but the exact id differs.
+             * Stops silent "race lock does nothing" from a typo.
+             */
+            try {
+                var wantKey = normalizeRaceKey(
+                    RESTRICTED_RACE_IDS[0]
+                );
+                var haveKey = normalizeRaceKey(raceId);
+                var mismatchKey =
+                    "race_lock_id_mismatch_notice";
                 if (
-                    oldUnrestrictedState == null ||
-                    ("" + oldUnrestrictedState) !=
-                        unrestrictedState
+                    wantKey != "" &&
+                    haveKey != "" &&
+                    wantKey != haveKey &&
+                    temp.get(mismatchKey) == null &&
+                    (
+                        haveKey.indexOf("ancient") >= 0 ||
+                        haveKey.indexOf("saiyan") >= 0
+                    ) &&
+                    (
+                        wantKey.indexOf("ancient") >= 0 ||
+                        wantKey.indexOf("saiyan") >= 0
+                    )
                 ) {
-                    temp.put(
-                        "restricted_race_command_last_state",
-                        unrestrictedState
-                    );
-
+                    temp.put(mismatchKey, "1");
                     player.message(
-                        "\u00A76[Race Lock Debug] \u00A77Actual race ID: \u00A7f[" +
+                        "\u00A7e[Race Lock] Your DMZ race id is \u00A7f[" +
                         raceId +
-                        "]"
-                    );
-
-                    player.message(
-                        "\u00A76[Race Lock Debug] \u00A77This race is not restricted."
+                        "]\u00A7e but this script locks \u00A7f[" +
+                        RESTRICTED_RACE_IDS[0] +
+                        "]\u00A7e. Update RESTRICTED_RACE_IDS to match."
                     );
                 }
-            }
+            } catch (noticeErr) {}
 
             return;
         }
 
 
         // ====================================================
-        // READ THE REQUIRED FABLED SKILL
+        // FABLED UNLOCK CHECK
+        //
+        // Bukkit/Fabled are only needed for the unlock skill.
+        // If they are unavailable, the race stays LOCKED and
+        // we wipe — never silently skip.
         // ====================================================
 
         var requiredSkill =
-            "" +
-            REQUIRED_FABLED_SKILLS[
-                restrictedIndex
-            ];
-
-        requiredSkill =
-            requiredSkill.trim();
+            ("" + REQUIRED_FABLED_SKILLS[restrictedIndex])
+                .trim();
 
         if (requiredSkill == "") {
             throw (
@@ -1434,294 +1541,154 @@ function tick(event) {
         }
 
         var raceDisplayName =
-            "" +
-            RESTRICTED_RACE_DISPLAY_NAMES[
-                restrictedIndex
-            ];
-
-        raceDisplayName =
-            raceDisplayName.trim();
+            ("" + RESTRICTED_RACE_DISPLAY_NAMES[restrictedIndex])
+                .trim();
 
         if (raceDisplayName == "") {
-            raceDisplayName =
-                raceId;
+            raceDisplayName = raceId;
         }
-
-
-        // ====================================================
-        // GET THE FABLED PLUGIN
-        //
-        // This follows the working script exactly:
-        //
-        // 1. Get plugin from Bukkit.
-        // 2. Get the plugin's own classloader.
-        // 3. Load studio.magemonkey.fabled.Fabled through it.
-        // 4. Find getData.
-        // 5. Invoke getData for the Bukkit player.
-        // ====================================================
-
-        var plugin =
-            Bukkit
-                .getPluginManager()
-                .getPlugin("Fabled");
-
-        if (
-            plugin == null ||
-            !plugin.isEnabled()
-        ) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] Fabled is not loaded or enabled."
-                );
-            }
-
-            return;
-        }
-
-        var loader =
-            plugin
-                .getClass()
-                .getClassLoader();
-
-        var fabledClass =
-            loader.loadClass(
-                "studio.magemonkey.fabled.Fabled"
-            );
-
-        var getDataMethod = null;
-
-        var methods =
-            fabledClass.getMethods();
-
-        var methodIndex;
-
-        for (
-            methodIndex = 0;
-            methodIndex <
-                methods.length;
-            methodIndex++
-        ) {
-            if (
-                String(
-                    methods[
-                        methodIndex
-                    ].getName()
-                ) == "getData" &&
-                methods[
-                    methodIndex
-                ].getParameterTypes().length == 1
-            ) {
-                getDataMethod =
-                    methods[
-                        methodIndex
-                    ];
-
-                break;
-            }
-        }
-
-        if (getDataMethod == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] Fabled getData method was not found."
-                );
-            }
-
-            return;
-        }
-
-        var fabledData =
-            getDataMethod.invoke(
-                null,
-                bukkitPlayer
-            );
-
-        if (fabledData == null) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] Fabled player data was unavailable."
-                );
-            }
-
-            return;
-        }
-
-
-        // ====================================================
-        // CHECK THE REQUIRED FABLED SKILL
-        // ====================================================
-        //
-        // Verified Fabled method:
-        //
-        // PlayerData.getSkillLevel(String)
-        //
-        // This accepts a skill key or displayed skill name.
-        // ====================================================
 
         var skillLevel = 0;
+        var fabledOk = false;
+        var fabledBlockReason = null;
 
         try {
-            skillLevel =
-                Number(
-                    fabledData.getSkillLevel(
-                        requiredSkill
-                    )
-                );
+            var Bukkit = Java.type("org.bukkit.Bukkit");
+            var UUID = Java.type("java.util.UUID");
 
-        } catch (skillError) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] getSkillLevel failed: \u00A7f" +
-                    skillError
-                );
+            var bukkitPlayer = Bukkit.getPlayer(
+                UUID.fromString("" + player.getUUID())
+            );
+
+            if (bukkitPlayer == null) {
+                fabledBlockReason =
+                    "Bukkit player unavailable — treating race as locked";
+            } else {
+                var plugin = Bukkit
+                    .getPluginManager()
+                    .getPlugin("Fabled");
+
+                if (plugin == null || !plugin.isEnabled()) {
+                    fabledBlockReason =
+                        "Fabled unavailable — treating race as locked";
+                } else {
+                    var loader =
+                        plugin.getClass().getClassLoader();
+                    var fabledClass = loader.loadClass(
+                        "studio.magemonkey.fabled.Fabled"
+                    );
+
+                    var getDataMethod = null;
+                    var methods = fabledClass.getMethods();
+                    var methodIndex;
+
+                    for (
+                        methodIndex = 0;
+                        methodIndex < methods.length;
+                        methodIndex++
+                    ) {
+                        if (
+                            String(
+                                methods[methodIndex].getName()
+                            ) == "getData" &&
+                            methods[methodIndex]
+                                .getParameterTypes().length == 1
+                        ) {
+                            getDataMethod =
+                                methods[methodIndex];
+                            break;
+                        }
+                    }
+
+                    if (getDataMethod == null) {
+                        fabledBlockReason =
+                            "Fabled getData missing — treating race as locked";
+                    } else {
+                        var fabledData = getDataMethod.invoke(
+                            null,
+                            bukkitPlayer
+                        );
+
+                        if (fabledData == null) {
+                            fabledBlockReason =
+                                "Fabled player data missing — treating race as locked";
+                        } else {
+                            skillLevel = Number(
+                                fabledData.getSkillLevel(
+                                    requiredSkill
+                                )
+                            );
+                            if (isNaN(skillLevel)) {
+                                skillLevel = 0;
+                            }
+                            fabledOk = true;
+                        }
+                    }
+                }
             }
-
-            return;
-        }
-
-        if (isNaN(skillLevel)) {
+        } catch (fabledErr) {
+            fabledBlockReason =
+                "Fabled check error — treating race as locked";
             skillLevel = 0;
-        }
-
-
-        // ====================================================
-        // DEBUG THE RACE AND FABLED RESULT
-        // ====================================================
-
-        if (DEBUG) {
-            var restrictedState =
-                "restricted|" +
-                lowerRaceId +
-                "|" +
-                requiredSkill.toLowerCase() +
-                "|" +
-                skillLevel;
-
-            var oldRestrictedState =
-                temp.get(
-                    "restricted_race_command_last_state"
-                );
-
-            if (
-                oldRestrictedState == null ||
-                ("" + oldRestrictedState) !=
-                    restrictedState
-            ) {
-                temp.put(
-                    "restricted_race_command_last_state",
-                    restrictedState
-                );
-
-                player.message(
-                    "\u00A76[Race Lock Debug] \u00A77Actual race ID: \u00A7f[" +
-                    raceId +
-                    "]"
-                );
-
-                player.message(
-                    "\u00A76[Race Lock Debug] \u00A77Restricted race matched: \u00A7f" +
-                    raceId
-                );
-
-                player.message(
-                    "\u00A76[Race Lock Debug] \u00A77Required Fabled skill: \u00A7f" +
-                    requiredSkill
-                );
-
-                player.message(
-                    "\u00A76[Race Lock Debug] \u00A77Current skill level: \u00A7f" +
-                    skillLevel
-                );
-            }
         }
 
 
         // The player has purchased the required race unlock.
 
-        if (skillLevel >= 1) {
+        if (fabledOk && skillLevel >= 1) {
             return;
         }
 
 
         // ====================================================
-        // BUILD THE EXACT DMZ RESET COMMAND
+        // WIPE DMZ PROGRESS (locked race, no unlock)
         // ====================================================
-        //
-        // Verified DMZ syntax:
-        //
-        // dmzstats reset <targets> <keepPercentage> <keepSkills>
-        //
-        // For a complete reset:
-        //
-        // dmzstats reset PlayerName 0 false
-        // ====================================================
+
+        var beforeSnap = readStatSnapshot(dmzData);
 
         var resetCommand =
             "dmzstats reset " +
             player.getName() +
             " 0 false";
 
-
-        player.message(
-            "\u00A7c\u00A7lRACE LOCKED"
-        );
-
+        player.message("\u00A7c\u00A7lRACE LOCKED");
         player.message(
             "\u00A77You have not unlocked the race \u00A7f" +
             raceDisplayName +
             "\u00A77."
         );
-
         player.message(
             "\u00A77Required Fabled skill: \u00A7f" +
-            requiredSkill
+            requiredSkill +
+            (fabledOk
+                ? " \u00A77(level " + skillLevel + ")"
+                : "")
         );
-
-        if (DEBUG) {
+        if (fabledBlockReason != null) {
             player.message(
-                "\u00A76[Race Lock Debug] \u00A77Running command: \u00A7f" +
-                resetCommand
+                "\u00A7e[Race Lock] " + fabledBlockReason
             );
         }
-
-
-        // ====================================================
-        // WIPE DMZ PROGRESS
-        // ====================================================
-        //
-        // 1) Direct Java API wipe (reliable on hybrid)
-        // 2) Command fallbacks (Bukkit / CNPC API)
-        // 3) Verify character-created / stats cleared
-        // ====================================================
-
-        var mcPlayer = null;
-        try {
-            mcPlayer = player.getMCEntity
-                ? player.getMCEntity()
-                : null;
-        } catch (mcErr) {}
+        player.message(
+            "\u00A78[Race Lock] Before wipe: " +
+            formatStatSnapshot(beforeSnap)
+        );
 
         var wiped = forceWipeDmzData(dmzData, mcPlayer);
 
-        var dispatchedThroughBukkit = false;
-        var customNpcCommandOutput = null;
+        try {
+            var Bukkit2 = Java.type("org.bukkit.Bukkit");
+            Bukkit2.dispatchCommand(
+                Bukkit2.getConsoleSender(),
+                resetCommand
+            );
+        } catch (bukkitCommandError) {}
 
         try {
-            dispatchedThroughBukkit =
-                Bukkit.dispatchCommand(
-                    Bukkit.getConsoleSender(),
-                    resetCommand
-                ) === true;
-        } catch (bukkitCommandError) {
-            dispatchedThroughBukkit = false;
-        }
-
-        try {
-            customNpcCommandOutput =
-                event.API.executeCommand(
-                    player.getWorld(),
-                    resetCommand
-                );
+            event.API.executeCommand(
+                player.getWorld(),
+                resetCommand
+            );
         } catch (cnpcCommandError) {}
 
         try {
@@ -1747,12 +1714,7 @@ function tick(event) {
             "" + Math.max(RESET_RETRY_CHECKS, 40)
         );
 
-        clearStuckSagaDifficulty(
-            player,
-            dmzData,
-            true
-        );
-
+        clearStuckSagaDifficulty(player, dmzData, true);
         enforceRaceLockWipe(player, temp);
 
         try {
@@ -1768,17 +1730,18 @@ function tick(event) {
             }
         } catch (verifyErr) {}
 
+        var afterSnap = readStatSnapshot(dmzData);
+        player.message(
+            "\u00A78[Race Lock] After wipe: " +
+            formatStatSnapshot(afterSnap)
+        );
+
         if (isDmzResetComplete(dmzData)) {
-            clearStuckSagaDifficulty(
-                player,
-                dmzData,
-                true
-            );
+            clearStuckSagaDifficulty(player, dmzData, true);
 
             player.message(
                 "\u00A7a[Race Lock] Your DMZ character was reset."
             );
-
             player.message(
                 "\u00A77Purchase \u00A7f" +
                 requiredSkill +
@@ -1790,7 +1753,6 @@ function tick(event) {
             temp.remove(
                 "restricted_race_command_last_state"
             );
-
         } else {
             player.message(
                 "\u00A7e[Race Lock] Reset was attempted, but DMZ " +
