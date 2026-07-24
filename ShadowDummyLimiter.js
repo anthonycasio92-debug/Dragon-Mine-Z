@@ -45,8 +45,8 @@ var C = "\u00A7";
  * a Player source for damagedEntity).
  *
  * Fix:
- * 1) Register Forge EntityJoinLevel + LivingHurt/Damage hooks
- *    from init() so protect starts inside addFreshEntity
+ * 1) Optional Forge tab (ShadowDummyForgeProtect.js) locks the
+ *    dummy inside addFreshEntity and cancels hurt/damage
  * 2) Keep invulnerable + heal for SPAWN_PROTECT_MS after accept
  * 3) damagedEntity / kill still act as backups
  */
@@ -151,12 +151,6 @@ var TAG_SPAWN_PROTECT_UNTIL =
 
 var NBT_LIMITER_LOCKED =
     "dmz_shadow_limiter_locked";
-
-/*
- * Script-container flag so Forge bus listeners register once.
- */
-var FORGE_HOOKS_REGISTERED =
-    false;
 
 
 /*
@@ -586,215 +580,17 @@ function cancelDamageOnProtectedDummy(dummy, forgeEvent) {
 
 /*
  * ============================================================
- * FORGE HOOKS (registered from Player init)
+ * FORGE ENTRY POINTS (optional Forge script tab)
  * ============================================================
  *
- * These fire inside addFreshEntity / hurt, so they beat the
- * player-tick race. Also paste the named functions below into
- * a CNPC Forge script tab if bus registration fails on your
- * build (enable EntityJoinLevelEvent, LivingHurtEvent,
- * LivingDamageEvent).
+ * Do NOT register MinecraftForge.EVENT_BUS from Player scripts.
+ * That can interfere with other systems and is fragile under
+ * Nashorn. Install ShadowDummyForgeProtect.js as a CNPC Forge
+ * tab instead (or paste these handlers there).
  *
- * Nashorn strict mode forbids nested function declarations
- * inside try/blocks — keep helpers at top level only.
+ * Player-tab protect still runs via Tick / DamagedEntity.
  */
 
-function isClientLevel(level) {
-    try {
-        if (level == null) {
-            return true;
-        }
-        if (level.m_5776_) {
-            return level.m_5776_() === true;
-        }
-        if (level.isClientSide != null) {
-            return level.isClientSide === true;
-        }
-    } catch (sideErr) {}
-    return false;
-}
-
-function isClientEntity(entity) {
-    try {
-        if (entity == null) {
-            return true;
-        }
-        return isClientLevel(entity.m_9236_());
-    } catch (sideErr) {
-        return false;
-    }
-}
-
-function registerForgeProtectHooks() {
-    if (FORGE_HOOKS_REGISTERED) {
-        return true;
-    }
-
-    try {
-        var MinecraftForge = Java.type(
-            "net.minecraftforge.common.MinecraftForge"
-        );
-        var EventPriority = Java.type(
-            "net.minecraftforge.eventbus.api.EventPriority"
-        );
-        var EntityJoinLevelEvent = Java.type(
-            "net.minecraftforge.event.entity.EntityJoinLevelEvent"
-        );
-        var LivingHurtEvent = Java.type(
-            "net.minecraftforge.event.entity.living.LivingHurtEvent"
-        );
-        var LivingDamageEvent = Java.type(
-            "net.minecraftforge.event.entity.living.LivingDamageEvent"
-        );
-        var Consumer = Java.type(
-            "java.util.function.Consumer"
-        );
-
-        var joinConsumer = new Consumer({
-            accept: function (event) {
-                try {
-                    if (event == null || event.getEntity == null) {
-                        return;
-                    }
-                    if (isClientLevel(event.getLevel())) {
-                        return;
-                    }
-                    protectJoinedShadowDummy(event.getEntity());
-                } catch (joinErr) {}
-            }
-        });
-
-        var hurtConsumer = new Consumer({
-            accept: function (event) {
-                try {
-                    if (event == null || event.getEntity == null) {
-                        return;
-                    }
-                    var living = event.getEntity();
-                    if (isClientEntity(living)) {
-                        return;
-                    }
-                    cancelDamageOnProtectedDummy(living, event);
-                } catch (hurtErr) {}
-            }
-        });
-
-        var damageConsumer = new Consumer({
-            accept: function (event) {
-                try {
-                    if (event == null || event.getEntity == null) {
-                        return;
-                    }
-                    var living = event.getEntity();
-                    if (isClientEntity(living)) {
-                        return;
-                    }
-                    cancelDamageOnProtectedDummy(living, event);
-                } catch (dmgErr) {}
-            }
-        });
-
-        MinecraftForge.EVENT_BUS.addListener(
-            EventPriority.HIGHEST,
-            false,
-            EntityJoinLevelEvent.class,
-            joinConsumer
-        );
-
-        MinecraftForge.EVENT_BUS.addListener(
-            EventPriority.HIGHEST,
-            false,
-            LivingHurtEvent.class,
-            hurtConsumer
-        );
-
-        MinecraftForge.EVENT_BUS.addListener(
-            EventPriority.HIGHEST,
-            false,
-            LivingDamageEvent.class,
-            damageConsumer
-        );
-
-        FORGE_HOOKS_REGISTERED = true;
-        return true;
-    } catch (regErr) {
-        /*
-         * Fallback: Nashorn may prefer a plain JS function
-         * expression instead of java.util.function.Consumer.
-         */
-        try {
-            var MinecraftForge2 = Java.type(
-                "net.minecraftforge.common.MinecraftForge"
-            );
-            var EventPriority2 = Java.type(
-                "net.minecraftforge.eventbus.api.EventPriority"
-            );
-            var EntityJoinLevelEvent2 = Java.type(
-                "net.minecraftforge.event.entity.EntityJoinLevelEvent"
-            );
-            var LivingHurtEvent2 = Java.type(
-                "net.minecraftforge.event.entity.living.LivingHurtEvent"
-            );
-            var LivingDamageEvent2 = Java.type(
-                "net.minecraftforge.event.entity.living.LivingDamageEvent"
-            );
-
-            MinecraftForge2.EVENT_BUS.addListener(
-                EventPriority2.HIGHEST,
-                false,
-                EntityJoinLevelEvent2.class,
-                function (event) {
-                    try {
-                        if (isClientLevel(event.getLevel())) {
-                            return;
-                        }
-                        protectJoinedShadowDummy(event.getEntity());
-                    } catch (e) {}
-                }
-            );
-
-            MinecraftForge2.EVENT_BUS.addListener(
-                EventPriority2.HIGHEST,
-                false,
-                LivingHurtEvent2.class,
-                function (event) {
-                    try {
-                        var living = event.getEntity();
-                        if (isClientEntity(living)) {
-                            return;
-                        }
-                        cancelDamageOnProtectedDummy(living, event);
-                    } catch (e) {}
-                }
-            );
-
-            MinecraftForge2.EVENT_BUS.addListener(
-                EventPriority2.HIGHEST,
-                false,
-                LivingDamageEvent2.class,
-                function (event) {
-                    try {
-                        var living = event.getEntity();
-                        if (isClientEntity(living)) {
-                            return;
-                        }
-                        cancelDamageOnProtectedDummy(living, event);
-                    } catch (e) {}
-                }
-            );
-
-            FORGE_HOOKS_REGISTERED = true;
-            return true;
-        } catch (regErr2) {
-            return false;
-        }
-    }
-}
-
-/*
- * Optional CNPC Forge-tab entry points (same file / copy).
- * Function names match ForgeEventHandler.getEventName().
- */
 function entityJoinLevelEvent(e) {
     try {
         var entity = null;
@@ -1202,9 +998,7 @@ function configureShadowDummy(
                 " | Dummy max health: " +
                 dummyMaxHealth +
                 " | Percent: " +
-                SHADOW_DUMMY_PERCENT +
-                " | Forge hooks: " +
-                FORGE_HOOKS_REGISTERED
+                SHADOW_DUMMY_PERCENT
             );
         }
 
@@ -1419,24 +1213,11 @@ function shouldForceDenyOnHit(player, dummy) {
  * ============================================================
  *
  * Install as a CustomNPCs PLAYER script (own tab).
- * Enable: Init, Tick, DamagedEntity, Kill (and/or KilledEntity)
+ * Enable: Tick, DamagedEntity, Kill (and/or KilledEntity)
  *
- * Optional: also paste this file into a Forge script tab and
- * enable entityJoinLevelEvent / livingHurtEvent / livingDamageEvent
- * if the Init bus registration does not stick after reload.
+ * For same-tick Ki kill protection, also install
+ * ShadowDummyForgeProtect.js as a CNPC Forge script tab.
  */
-
-function init(event) {
-    try {
-        var ok = registerForgeProtectHooks();
-        if (DEBUG && event != null && event.player != null) {
-            event.player.message(
-                C + "8[Shadow Dummy Debug] Forge protect hooks: " +
-                (ok ? "registered" : "FAILED - use Forge script tab")
-            );
-        }
-    } catch (err) {}
-}
 
 function tick(event) {
     var player = event.player;
@@ -1445,10 +1226,6 @@ function tick(event) {
     }
 
     try {
-        if (!FORGE_HOOKS_REGISTERED) {
-            registerForgeProtectHooks();
-        }
-
         var temp = player.getTempdata();
         var now = System.currentTimeMillis();
         var mcPlayer = resolveMcPlayer(player);
