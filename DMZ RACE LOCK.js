@@ -21,6 +21,7 @@
 // Chat is optional and often broken on hybrid servers.
 // Unlock without chat:
 //   /noppes script trigger 120
+//   /noppes script trigger 120 <playerName>
 // Also leaves DMZ party if you are a non-leader, because DMZ
 // blocks difficulty selection for party members.
 // ============================================================
@@ -478,6 +479,140 @@ function maybeAutoUnlockStuckDifficulty(player, dmzData, temp) {
 
 var SAGA_TRIGGER_ID = 120;
 
+function resolveScriptPlayer(event) {
+    if (event == null) {
+        return null;
+    }
+
+    /*
+     * Player events (tick/login/chat) expose event.player.
+     * ScriptTriggerEvent exposes event.entity + event.arguments.
+     * Using only event.player makes /noppes script trigger do nothing.
+     */
+    try {
+        if (event.player != null) {
+            return event.player;
+        }
+    } catch (playerErr) {}
+
+    try {
+        if (event.entity != null) {
+            var ent = event.entity;
+            try {
+                if (ent.getMCEntity && ent.getMCEntity() != null) {
+                    var mc = ent.getMCEntity();
+                    if (
+                        mc != null &&
+                        (
+                            "" + mc.getClass().getName()
+                        ).indexOf("Player") >= 0
+                    ) {
+                        return ent;
+                    }
+                }
+            } catch (entTypeErr) {}
+
+            try {
+                if (ent.getName && ent.getUUID) {
+                    return ent;
+                }
+            } catch (entErr) {}
+        }
+    } catch (entityErr) {}
+
+    try {
+        if (
+            event.arguments != null &&
+            event.arguments.length > 0 &&
+            event.arguments[0] != null &&
+            ("" + event.arguments[0]).length > 0
+        ) {
+            var name = ("" + event.arguments[0]).trim();
+            var world = null;
+
+            try {
+                if (event.player != null) {
+                    world = event.player.getWorld();
+                }
+            } catch (w1) {}
+
+            try {
+                if (world == null && event.entity != null) {
+                    world = event.entity.getWorld();
+                }
+            } catch (w2) {}
+
+            try {
+                if (world == null && event.level != null) {
+                    /* some CNPC builds expose level/world on WorldEvent */
+                    var players = event.level.getAllPlayers
+                        ? event.level.getAllPlayers()
+                        : null;
+                    if (players != null) {
+                        for (var i = 0; i < players.length; i++) {
+                            if (
+                                ("" + players[i].getName())
+                                    .toLowerCase() ===
+                                name.toLowerCase()
+                            ) {
+                                return players[i];
+                            }
+                        }
+                    }
+                }
+            } catch (w3) {}
+
+            if (world != null) {
+                try {
+                    var found = world.getPlayer(name);
+                    if (found != null) {
+                        return found;
+                    }
+                } catch (getErr) {}
+
+                try {
+                    var all = world.getAllPlayers();
+                    for (var j = 0; j < all.length; j++) {
+                        if (
+                            ("" + all[j].getName())
+                                .toLowerCase() ===
+                            name.toLowerCase()
+                        ) {
+                            return all[j];
+                        }
+                    }
+                } catch (scanErr) {}
+            }
+
+            /* Bukkit fallback used by other scripts on this server */
+            try {
+                var Bukkit = Java.type("org.bukkit.Bukkit");
+                var bp = Bukkit.getPlayer(name);
+                if (bp == null) {
+                    bp = Bukkit.getPlayerExact(name);
+                }
+                if (bp != null) {
+                    var NPCAPI = Java.type(
+                        "noppes.npcs.api.NpcAPI"
+                    ).Instance();
+                    var mcBp = bp.getPlayer
+                        ? bp.getPlayer()
+                        : null;
+                    /* CraftBukkit player -> MC -> IPlayer */
+                    try {
+                        var handle = bp.getClass()
+                            .getMethod("getHandle")
+                            .invoke(bp);
+                        return NPCAPI.getIEntity(handle);
+                    } catch (handleErr) {}
+                }
+            } catch (bukkitErr) {}
+        }
+    } catch (argErr) {}
+
+    return null;
+}
+
 function runManualSagaDifficultyUnlock(player, sourceLabel) {
     if (player == null) {
         return false;
@@ -506,7 +641,9 @@ function runManualSagaDifficultyUnlock(player, sourceLabel) {
 
 /*
  * Chat often does nothing on hybrid / plugin chat bridges.
- * Keep it, but prefer Trigger or the login/tick session check.
+ * Keep it, but prefer Trigger:
+ *   /noppes script trigger 120
+ *   /noppes script trigger 120 <player>
  */
 function chat(event) {
     try {
@@ -527,13 +664,20 @@ function chat(event) {
             event.setCanceled(true);
         } catch (cancelErr) {}
 
-        runManualSagaDifficultyUnlock(event.player, "chat");
+        var player = resolveScriptPlayer(event);
+        if (player == null) {
+            return;
+        }
+        runManualSagaDifficultyUnlock(player, "chat");
     } catch (err) {
         try {
-            event.player.message(
-                "\u00A7c[Race Lock] Difficulty unlock error: " +
-                err
-            );
+            var p = resolveScriptPlayer(event);
+            if (p != null) {
+                p.message(
+                    "\u00A7c[Race Lock] Difficulty unlock error: " +
+                    err
+                );
+            }
         } catch (msgErr) {}
     }
 }
@@ -549,16 +693,34 @@ function trigger(event) {
     } catch (idErr) {}
 
     try {
+        var player = resolveScriptPlayer(event);
+        if (player == null) {
+            try {
+                print(
+                    "[Race Lock] trigger " +
+                    SAGA_TRIGGER_ID +
+                    " could not resolve a player. Use: /noppes script trigger " +
+                    SAGA_TRIGGER_ID +
+                    " <playerName>"
+                );
+            } catch (printErr) {}
+            return;
+        }
+
         runManualSagaDifficultyUnlock(
-            event.player,
+            player,
             "trigger " + SAGA_TRIGGER_ID
         );
     } catch (err) {
         try {
-            event.player.message(
-                "\u00A7c[Race Lock] Difficulty unlock error: " +
-                err
-            );
+            var p2 = resolveScriptPlayer(event);
+            if (p2 != null) {
+                p2.message(
+                    "\u00A7c[Race Lock] Difficulty unlock error: " +
+                    err
+                );
+            }
+            print("[Race Lock] trigger error: " + err);
         } catch (msgErr) {}
     }
 }
