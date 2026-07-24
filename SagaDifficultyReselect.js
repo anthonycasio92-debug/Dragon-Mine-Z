@@ -12,16 +12,21 @@
  * progression so the Quest Tree overlay works again.
  *
  * Install: CustomNPCs Player script tab (own tab)
- * Enable: Trigger
+ * Enable: Trigger, LoggedIn, Chat
  *
  * Usage:
  *   /noppes script trigger 120
  *   /noppes script trigger 120 <player>
+ *   Chat: !unlockdifficulty
+ *
+ * Also auto-unlocks on login when the character was reset
+ * (no created character) but difficultyChosen is still true.
  *
  * Trigger ID is configurable below.
  */
 
 var TRIGGER_ID = 120;
+var CHAT_COMMAND = "!unlockdifficulty";
 
 var C = "\u00A7";
 
@@ -102,9 +107,9 @@ function syncProgression(mcPlayer) {
     } catch (err2) {}
 }
 
-function reselectDifficulty(player) {
+function getDmzBundle(player) {
     if (player == null) {
-        return false;
+        return null;
     }
 
     var mcPlayer = player.getMCEntity
@@ -116,24 +121,65 @@ function reselectDifficulty(player) {
         .orElse(null);
 
     if (dmzData == null) {
-        player.message(
-            C + "c[Saga Difficulty] Could not read DMZ data."
-        );
-        return false;
+        return null;
     }
 
-    var questData = dmzData.getPlayerQuestData();
+    return {
+        mcPlayer: mcPlayer,
+        dmzData: dmzData,
+        questData: dmzData.getPlayerQuestData(),
+        status: dmzData.getStatus()
+    };
+}
+
+function isDifficultyChosen(questData) {
     if (questData == null) {
-        player.message(
-            C + "c[Saga Difficulty] Quest data missing."
-        );
+        return false;
+    }
+    try {
+        return questData.isDifficultyChosen() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function hasCreatedCharacter(status) {
+    if (status == null) {
+        return false;
+    }
+    try {
+        return status.isHasCreatedCharacter() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function reselectDifficulty(player, quiet) {
+    if (player == null) {
         return false;
     }
 
-    var before = false;
-    try {
-        before = questData.isDifficultyChosen() === true;
-    } catch (readErr) {}
+    var bundle = getDmzBundle(player);
+    if (bundle == null || bundle.dmzData == null) {
+        if (!quiet) {
+            player.message(
+                C + "c[Saga Difficulty] Could not read DMZ data."
+            );
+        }
+        return false;
+    }
+
+    var questData = bundle.questData;
+    if (questData == null) {
+        if (!quiet) {
+            player.message(
+                C + "c[Saga Difficulty] Quest data missing."
+            );
+        }
+        return false;
+    }
+
+    var before = isDifficultyChosen(questData);
 
     try {
         questData.requestDifficultyReselect();
@@ -141,31 +187,49 @@ function reselectDifficulty(player) {
         try {
             questData.setDifficultyChosen(false);
         } catch (setErr) {
-            player.message(
-                C + "c[Saga Difficulty] Reselect failed: " +
-                setErr
-            );
+            if (!quiet) {
+                player.message(
+                    C + "c[Saga Difficulty] Reselect failed: " +
+                    setErr
+                );
+            }
             return false;
         }
     }
 
-    syncProgression(mcPlayer);
+    syncProgression(bundle.mcPlayer);
 
-    player.message(
-        C + "5[Saga Difficulty] " +
-        C + "aDifficulty selection unlocked."
-    );
-    player.message(
-        C + "7Open the Saga / Quest Tree menu and choose Easy, Normal, or Hard."
-    );
-
-    if (before) {
+    if (!quiet) {
         player.message(
-            C + "8Previously locked (difficultyChosen was true)."
+            C + "5[Saga Difficulty] " +
+            C + "aDifficulty selection unlocked."
         );
+        player.message(
+            C + "7Open the Saga / Quest Tree menu and choose Easy, Normal, or Hard."
+        );
+
+        if (before) {
+            player.message(
+                C + "8Previously locked (difficultyChosen was true)."
+            );
+        }
     }
 
     return true;
+}
+
+function needsAutoUnlock(player) {
+    var bundle = getDmzBundle(player);
+    if (bundle == null || bundle.questData == null) {
+        return false;
+    }
+
+    /*
+     * Classic stuck state after dmzstats reset / Race Lock:
+     * character-created is false, but difficultyChosen stayed true.
+     */
+    return isDifficultyChosen(bundle.questData) &&
+        !hasCreatedCharacter(bundle.status);
 }
 
 function trigger(event) {
@@ -180,7 +244,53 @@ function trigger(event) {
 
     try {
         var target = resolveTargetPlayer(event);
-        reselectDifficulty(target);
+        reselectDifficulty(target, false);
+    } catch (err) {
+        try {
+            event.player.message(
+                C + "c[Saga Difficulty] Error: " + err
+            );
+        } catch (msgErr) {}
+    }
+}
+
+function loggedIn(event) {
+    try {
+        var player = event.player;
+        if (player == null) {
+            return;
+        }
+
+        var temp = player.getTempdata();
+        var key = "saga_diff_autounlock_done";
+        if (temp.has(key)) {
+            return;
+        }
+        temp.put(key, "1");
+
+        if (needsAutoUnlock(player)) {
+            reselectDifficulty(player, false);
+        }
+    } catch (err) {}
+}
+
+function chat(event) {
+    try {
+        var message = "" + event.message;
+        if (message == null) {
+            return;
+        }
+
+        var trimmed = message.trim().toLowerCase();
+        if (trimmed !== CHAT_COMMAND) {
+            return;
+        }
+
+        try {
+            event.setCanceled(true);
+        } catch (cancelErr) {}
+
+        reselectDifficulty(event.player, false);
     } catch (err) {
         try {
             event.player.message(
