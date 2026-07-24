@@ -14,6 +14,10 @@
 //
 // The reset is executed as a server command rather than by
 // directly calling DMZ's resetPlayerProgress method.
+//
+// Also clears stuck saga difficultyChosen after resets so the
+// Quest Tree difficulty picker works again. No extra script.
+// Enable Tick (required). Optional Chat for !unlockdifficulty.
 // ============================================================
 
 
@@ -139,7 +143,29 @@ function syncProgression(mcPlayer) {
     } catch (err2) {}
 }
 
-function clearStuckSagaDifficulty(player, dmzData) {
+function isDifficultyChosen(questData) {
+    if (questData == null) {
+        return false;
+    }
+    try {
+        return questData.isDifficultyChosen() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function hasCreatedCharacter(status) {
+    if (status == null) {
+        return false;
+    }
+    try {
+        return status.isHasCreatedCharacter() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function clearStuckSagaDifficulty(player, dmzData, notify) {
     if (dmzData == null) {
         return false;
     }
@@ -152,13 +178,7 @@ function clearStuckSagaDifficulty(player, dmzData) {
             return false;
         }
 
-        var wasChosen = false;
-        try {
-            wasChosen =
-                questData.isDifficultyChosen() === true;
-        } catch (readErr) {
-            wasChosen = false;
-        }
+        var wasChosen = isDifficultyChosen(questData);
 
         try {
             questData.requestDifficultyReselect();
@@ -179,7 +199,14 @@ function clearStuckSagaDifficulty(player, dmzData) {
 
         syncProgression(mcPlayer);
 
-        if (DEBUG && wasChosen && player != null) {
+        if (notify && wasChosen && player != null) {
+            player.message(
+                "\u00A75[Race Lock] \u00A7aSaga difficulty unlocked."
+            );
+            player.message(
+                "\u00A77Open the Saga / Quest Tree and choose Easy, Normal, or Hard."
+            );
+        } else if (DEBUG && wasChosen && player != null) {
             player.message(
                 "\u00A76[Race Lock Debug] \u00A77Cleared stuck saga difficultyChosen so the picker can open again."
             );
@@ -188,6 +215,107 @@ function clearStuckSagaDifficulty(player, dmzData) {
         return true;
     } catch (err) {
         return false;
+    }
+}
+
+/*
+ * After dmzstats reset, difficultyChosen can stay true while
+ * hasCreatedCharacter is false. Unlock once per session.
+ */
+function maybeAutoUnlockStuckDifficulty(player, dmzData, temp) {
+    if (player == null || dmzData == null || temp == null) {
+        return false;
+    }
+
+    var doneKey = "race_lock_saga_diff_autounlock";
+    try {
+        if (temp.has(doneKey)) {
+            return false;
+        }
+    } catch (hasErr) {
+        try {
+            if (temp.get(doneKey) != null) {
+                return false;
+            }
+        } catch (getErr) {}
+    }
+
+    try {
+        temp.put(doneKey, "1");
+    } catch (putErr) {}
+
+    var questData = null;
+    var status = null;
+    try {
+        questData = dmzData.getPlayerQuestData();
+    } catch (qErr) {}
+    try {
+        status = dmzData.getStatus();
+    } catch (sErr) {}
+
+    if (
+        !isDifficultyChosen(questData) ||
+        hasCreatedCharacter(status)
+    ) {
+        return false;
+    }
+
+    return clearStuckSagaDifficulty(
+        player,
+        dmzData,
+        true
+    );
+}
+
+function chat(event) {
+    try {
+        var message = "" + event.message;
+        if (message == null) {
+            return;
+        }
+
+        var trimmed = message.trim().toLowerCase();
+        if (trimmed !== "!unlockdifficulty") {
+            return;
+        }
+
+        try {
+            event.setCanceled(true);
+        } catch (cancelErr) {}
+
+        var player = event.player;
+        if (player == null) {
+            return;
+        }
+
+        var StatsProvider = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        );
+        var StatsCapability = Java.type(
+            "com.dragonminez.common.stats.StatsCapability"
+        );
+
+        var lazy = StatsProvider.get(
+            StatsCapability.INSTANCE,
+            player.getMCEntity()
+        );
+
+        if (lazy == null || !lazy.isPresent()) {
+            player.message(
+                "\u00A7c[Race Lock] Could not read DMZ data."
+            );
+            return;
+        }
+
+        var dmzData = lazy.orElse(null);
+        clearStuckSagaDifficulty(player, dmzData, true);
+    } catch (err) {
+        try {
+            event.player.message(
+                "\u00A7c[Race Lock] Difficulty unlock error: " +
+                err
+            );
+        } catch (msgErr) {}
     }
 }
 
@@ -400,8 +528,18 @@ function tick(event) {
         // After a successful reset, DMZ marks the character as
         // not created. Stop checking until the player creates
         // another character.
+        //
+        // Also unlock stuck saga difficulty once — dmzstats
+        // reset leaves difficultyChosen true, which blocks the
+        // picker until requestDifficultyReselect runs.
 
         if (!status.isHasCreatedCharacter()) {
+            maybeAutoUnlockStuckDifficulty(
+                player,
+                dmzData,
+                temp
+            );
+
             temp.remove(
                 "restricted_race_command_last_state"
             );
