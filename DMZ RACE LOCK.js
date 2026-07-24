@@ -89,17 +89,9 @@ var RESTRICTED_RACE_DISPLAY_NAMES = [
 ];
 
 
-// Keep this enabled until the test race resets correctly.
-//
-// It reports:
-// - Actual race ID
-// - Restricted-list match
-// - Required Fabled skill
-// - Fabled skill level
-// - Exact reset command
-// - Command-dispatch result
-// - Immediate reset verification
-var DEBUG = true;
+// Player-facing race lock messages stay on.
+// Verbose [Race Lock Debug] spam stays off.
+var DEBUG = false;
 
 
 /*
@@ -280,35 +272,6 @@ function leaveDmzParty(mcPlayer) {
     return false;
 }
 
-function diagnoseDifficulty(player, dmzData) {
-    var lines = [];
-    try {
-        var questData = dmzData.getPlayerQuestData();
-        var status = dmzData.getStatus();
-        var mcPlayer = getMcPlayer(player);
-        var chosen = isDifficultyChosen(questData);
-        var created = hasCreatedCharacter(status);
-        var inParty = isInDmzParty(questData);
-        var leader = isDmzPartyLeader(questData, mcPlayer);
-
-        lines.push(
-            "\u00A78chosen=" + chosen +
-            " created=" + created +
-            " party=" + inParty +
-            " leader=" + leader
-        );
-
-        if (inParty && !leader) {
-            lines.push(
-                "\u00A7cParty members cannot pick saga difficulty. Leave the party or become leader."
-            );
-        }
-    } catch (err) {
-        lines.push("\u00A7cDiagnose failed: " + err);
-    }
-    return lines;
-}
-
 function clearStuckSagaDifficulty(player, dmzData, notify) {
     if (dmzData == null) {
         return false;
@@ -392,10 +355,6 @@ function clearStuckSagaDifficulty(player, dmzData, notify) {
                 );
             }
 
-            var diag = diagnoseDifficulty(player, dmzData);
-            for (var i = 0; i < diag.length; i++) {
-                player.message(diag[i]);
-            }
         } else if (DEBUG && wasChosen && player != null) {
             player.message(
                 "\u00A76[Race Lock Debug] \u00A77Cleared stuck saga difficultyChosen so the picker can open again."
@@ -618,14 +577,6 @@ function runManualSagaDifficultyUnlock(player, sourceLabel) {
         return false;
     }
 
-    try {
-        player.message(
-            "\u00A76[Race Lock] Running saga difficulty unlock" +
-            (sourceLabel ? " (" + sourceLabel + ")" : "") +
-            "..."
-        );
-    } catch (msgErr) {}
-
     var dmzData = loadDmzData(player);
     if (dmzData == null) {
         try {
@@ -755,11 +706,6 @@ function runSessionSagaDifficultyCheck(player, fromLogin) {
 
     var dmzData = loadDmzData(player);
     if (dmzData == null) {
-        try {
-            player.message(
-                "\u00A7c[Race Lock] Saga check failed: no DMZ data."
-            );
-        } catch (err2) {}
         return;
     }
 
@@ -773,37 +719,19 @@ function runSessionSagaDifficultyCheck(player, fromLogin) {
     } catch (sErr) {}
 
     var chosen = isDifficultyChosen(questData);
-    var created = hasCreatedCharacter(status);
     var inParty = isInDmzParty(questData);
     var leader = isDmzPartyLeader(
         questData,
         getMcPlayer(player)
     );
 
-    try {
-        player.message(
-            "\u00A76[Race Lock] Saga check: " +
-            "\u00A78chosen=" + chosen +
-            " created=" + created +
-            " party=" + inParty +
-            " leader=" + leader
-        );
-    } catch (msgErr) {}
-
+    /*
+     * Silent unless something is actually stuck.
+     * No debug status spam on login/tick.
+     */
     if (chosen || (inParty && !leader)) {
         clearStuckSagaDifficulty(player, dmzData, true);
-        return;
     }
-
-    try {
-        player.message(
-            "\u00A7a[Race Lock] Saga difficulty is already selectable."
-        );
-        player.message(
-            "\u00A77If the menu still fails, close/reopen Quest Tree or run: " +
-            "\u00A7f/noppes script trigger " + SAGA_TRIGGER_ID
-        );
-    } catch (msgErr2) {}
 }
 
 function tryEarlySagaDifficultyUnlock(player) {
@@ -981,7 +909,7 @@ function tick(event) {
         if (bukkitPlayer == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] Bukkit player was unavailable."
+                    "\u00A7c[Race Lock Debug] Bukkit player was unavailable."
                 );
             }
 
@@ -1001,7 +929,7 @@ function tick(event) {
         if (lazy == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] DMZ LazyOptional was unavailable."
+                    "\u00A7c[Race Lock Debug] DMZ LazyOptional was unavailable."
                 );
             }
 
@@ -1014,7 +942,7 @@ function tick(event) {
         if (dmzData == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] DMZ player data was unavailable."
+                    "\u00A7c[Race Lock Debug] DMZ player data was unavailable."
                 );
             }
 
@@ -1027,7 +955,7 @@ function tick(event) {
         if (status == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] DMZ status data was unavailable."
+                    "\u00A7c[Race Lock Debug] DMZ status data was unavailable."
                 );
             }
 
@@ -1063,7 +991,7 @@ function tick(event) {
         if (character == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] DMZ character data was unavailable."
+                    "\u00A7c[Race Lock Debug] DMZ character data was unavailable."
                 );
             }
 
@@ -1157,13 +1085,13 @@ function tick(event) {
                     );
 
                     player.message(
-                        "§6[Race Lock Debug] §7Actual race ID: §f[" +
+                        "\u00A76[Race Lock Debug] \u00A77Actual race ID: \u00A7f[" +
                         raceId +
                         "]"
                     );
 
                     player.message(
-                        "§6[Race Lock Debug] §7This race is not restricted."
+                        "\u00A76[Race Lock Debug] \u00A77This race is not restricted."
                     );
                 }
             }
@@ -1231,7 +1159,7 @@ function tick(event) {
         ) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] Fabled is not loaded or enabled."
+                    "\u00A7c[Race Lock Debug] Fabled is not loaded or enabled."
                 );
             }
 
@@ -1283,7 +1211,7 @@ function tick(event) {
         if (getDataMethod == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] Fabled getData method was not found."
+                    "\u00A7c[Race Lock Debug] Fabled getData method was not found."
                 );
             }
 
@@ -1299,7 +1227,7 @@ function tick(event) {
         if (fabledData == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] Fabled player data was unavailable."
+                    "\u00A7c[Race Lock Debug] Fabled player data was unavailable."
                 );
             }
 
@@ -1331,7 +1259,7 @@ function tick(event) {
         } catch (skillError) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] getSkillLevel failed: §f" +
+                    "\u00A7c[Race Lock Debug] getSkillLevel failed: \u00A7f" +
                     skillError
                 );
             }
@@ -1373,23 +1301,23 @@ function tick(event) {
                 );
 
                 player.message(
-                    "§6[Race Lock Debug] §7Actual race ID: §f[" +
+                    "\u00A76[Race Lock Debug] \u00A77Actual race ID: \u00A7f[" +
                     raceId +
                     "]"
                 );
 
                 player.message(
-                    "§6[Race Lock Debug] §7Restricted race matched: §f" +
+                    "\u00A76[Race Lock Debug] \u00A77Restricted race matched: \u00A7f" +
                     raceId
                 );
 
                 player.message(
-                    "§6[Race Lock Debug] §7Required Fabled skill: §f" +
+                    "\u00A76[Race Lock Debug] \u00A77Required Fabled skill: \u00A7f" +
                     requiredSkill
                 );
 
                 player.message(
-                    "§6[Race Lock Debug] §7Current skill level: §f" +
+                    "\u00A76[Race Lock Debug] \u00A77Current skill level: \u00A7f" +
                     skillLevel
                 );
             }
@@ -1423,23 +1351,23 @@ function tick(event) {
 
 
         player.message(
-            "§c§lRACE LOCKED"
+            "\u00A7c\u00A7lRACE LOCKED"
         );
 
         player.message(
-            "§7You have not unlocked the race §f" +
+            "\u00A77You have not unlocked the race \u00A7f" +
             raceDisplayName +
-            "§7."
+            "\u00A77."
         );
 
         player.message(
-            "§7Required Fabled skill: §f" +
+            "\u00A77Required Fabled skill: \u00A7f" +
             requiredSkill
         );
 
         if (DEBUG) {
             player.message(
-                "§6[Race Lock Debug] §7Running command: §f" +
+                "\u00A76[Race Lock Debug] \u00A77Running command: \u00A7f" +
                 resetCommand
             );
         }
@@ -1470,7 +1398,7 @@ function tick(event) {
         } catch (bukkitCommandError) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Lock Debug] Bukkit command error: §f" +
+                    "\u00A7c[Race Lock Debug] Bukkit command error: \u00A7f" +
                     bukkitCommandError
                 );
             }
@@ -1490,12 +1418,12 @@ function tick(event) {
 
             } catch (cnpcCommandError) {
                 player.message(
-                    "§c[Race Lock] Both command execution methods failed."
+                    "\u00A7c[Race Lock] Both command execution methods failed."
                 );
 
                 if (DEBUG) {
                     player.message(
-                        "§c[Race Lock Debug] CNPC command error: §f" +
+                        "\u00A7c[Race Lock Debug] CNPC command error: \u00A7f" +
                         cnpcCommandError
                     );
                 }
@@ -1537,13 +1465,13 @@ function tick(event) {
 
         if (DEBUG) {
             player.message(
-                "§6[Race Lock Debug] §7Bukkit dispatch result: §f" +
+                "\u00A76[Race Lock Debug] \u00A77Bukkit dispatch result: \u00A7f" +
                 dispatchedThroughBukkit
             );
 
             if (customNpcCommandOutput != null) {
                 player.message(
-                    "§6[Race Lock Debug] §7CNPC command output: §f" +
+                    "\u00A76[Race Lock Debug] \u00A77CNPC command output: \u00A7f" +
                     customNpcCommandOutput
                 );
             }
@@ -1581,15 +1509,15 @@ function tick(event) {
             );
 
             player.message(
-                "§a[Race Lock] Your DMZ character was reset."
+                "\u00A7a[Race Lock] Your DMZ character was reset."
             );
 
             player.message(
-                "§7Purchase §f" +
+                "\u00A77Purchase \u00A7f" +
                 requiredSkill +
-                " §7before selecting §f" +
+                " \u00A77before selecting \u00A7f" +
                 raceDisplayName +
-                " §7again."
+                " \u00A77again."
             );
 
             temp.remove(
@@ -1598,13 +1526,13 @@ function tick(event) {
 
         } else {
             player.message(
-                "§e[Race Lock] The reset command was issued, but DMZ " +
+                "\u00A7e[Race Lock] The reset command was issued, but DMZ " +
                 "still reports the character as created."
             );
 
             if (DEBUG) {
                 player.message(
-                    "§e[Race Lock Debug] The script will retry after " +
+                    "\u00A7e[Race Lock Debug] The script will retry after " +
                     RESET_RETRY_CHECKS +
                     " checks."
                 );
@@ -1638,7 +1566,7 @@ function tick(event) {
                 );
 
                 playerForError.message(
-                    "§c[Race Lock Error] §f" +
+                    "\u00A7c[Race Lock Error] \u00A7f" +
                     errorText
                 );
 
