@@ -92,6 +92,106 @@ var RESTRICTED_RACE_DISPLAY_NAMES = [
 var DEBUG = true;
 
 
+/*
+ * ============================================================
+ * SAGA DIFFICULTY HELPERS
+ * ============================================================
+ *
+ * DMZ's SetStoryDifficultyC2S ignores clicks when
+ * PlayerQuestData.difficultyChosen is already true.
+ * dmzstats reset / resetPlayerProgress does NOT clear that
+ * flag, so Race Lock resets can permanently lock the saga
+ * difficulty picker until requestDifficultyReselect() runs.
+ */
+
+function syncProgression(mcPlayer) {
+    if (mcPlayer == null) {
+        return;
+    }
+
+    try {
+        var ProgressionSyncS2C = Java.type(
+            "com.dragonminez.common.network.S2C.ProgressionSyncS2C"
+        );
+        var NetworkHandler = Java.type(
+            "com.dragonminez.common.network.NetworkHandler"
+        );
+
+        NetworkHandler.sendToPlayer(
+            new ProgressionSyncS2C(mcPlayer),
+            mcPlayer
+        );
+        return;
+    } catch (err1) {}
+
+    try {
+        var StatsSyncS2C = Java.type(
+            "com.dragonminez.common.network.S2C.StatsSyncS2C"
+        );
+        var NetworkHandler2 = Java.type(
+            "com.dragonminez.common.network.NetworkHandler"
+        );
+
+        NetworkHandler2.sendToTrackingEntityAndSelf(
+            new StatsSyncS2C(mcPlayer),
+            mcPlayer
+        );
+    } catch (err2) {}
+}
+
+function clearStuckSagaDifficulty(player, dmzData) {
+    if (dmzData == null) {
+        return false;
+    }
+
+    try {
+        var questData =
+            dmzData.getPlayerQuestData();
+
+        if (questData == null) {
+            return false;
+        }
+
+        var wasChosen = false;
+        try {
+            wasChosen =
+                questData.isDifficultyChosen() === true;
+        } catch (readErr) {
+            wasChosen = false;
+        }
+
+        try {
+            questData.requestDifficultyReselect();
+        } catch (reselectErr) {
+            try {
+                questData.setDifficultyChosen(false);
+            } catch (setErr) {
+                return false;
+            }
+        }
+
+        var mcPlayer = null;
+        try {
+            mcPlayer = player.getMCEntity
+                ? player.getMCEntity()
+                : null;
+        } catch (mcErr) {}
+
+        syncProgression(mcPlayer);
+
+        if (DEBUG && wasChosen && player != null) {
+            player.message(
+                "§6[Race Lock Debug] §7Cleared stuck saga difficultyChosen so the picker can open again."
+            );
+        }
+
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+
 // ============================================================
 // GLOBAL PLAYER TICK
 // ============================================================
@@ -771,6 +871,16 @@ function tick(event) {
             "" + RESET_RETRY_CHECKS
         );
 
+        /*
+         * Clear stuck saga difficulty as soon as the reset
+         * command is issued. Do not wait for the character-
+         * created flag to flip — that is what blocks the picker.
+         */
+        clearStuckSagaDifficulty(
+            player,
+            dmzData
+        );
+
 
         // ====================================================
         // COMMAND RESULT DEBUGGING
@@ -809,6 +919,17 @@ function tick(event) {
             updatedStatus != null &&
             !updatedStatus.isHasCreatedCharacter()
         ) {
+            /*
+             * dmzstats reset clears quest progress but does NOT
+             * clear difficultyChosen. If that flag stays true,
+             * SetStoryDifficultyC2S rejects every click and the
+             * saga difficulty picker never works again.
+             */
+            clearStuckSagaDifficulty(
+                player,
+                dmzData
+            );
+
             player.message(
                 "§a[Race Lock] Your DMZ character was reset."
             );
