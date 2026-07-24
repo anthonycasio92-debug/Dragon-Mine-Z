@@ -8,12 +8,9 @@
 // configured Fabled skill using the same Fabled classloader
 // method used by the working Fabled attribute script.
 //
-// If the required Fabled skill is below level 1, the script runs:
-//
-//     dmzstats reset <player> 0 false
-//
-// The reset is executed as a server command rather than by
-// directly calling DMZ's resetPlayerProgress method.
+// If the required Fabled skill is below level 1, the script
+// wipes DMZ progress via resetPlayerProgress (Java API), then
+// also runs: dmzstats reset <player> 0 false as a fallback.
 //
 // Also clears stuck saga difficultyChosen after resets so the
 // Quest Tree difficulty picker works again. No extra script.
@@ -756,6 +753,166 @@ function tryEarlySagaDifficultyUnlock(player) {
     } catch (err) {}
 }
 
+
+/*
+ * ============================================================
+ * DMZ STAT RESET (Java API)
+ * ============================================================
+ *
+ * Hybrid Bukkit.dispatchCommand often returns true without
+ * running Forge dmzstats. Wipe through DMZ's own API first.
+ */
+
+function syncDmzFull(mcPlayer) {
+    if (mcPlayer == null) {
+        return;
+    }
+
+    try {
+        var NetworkHandler = Java.type(
+            "com.dragonminez.common.network.NetworkHandler"
+        );
+        var StatsSyncS2C = Java.type(
+            "com.dragonminez.common.network.S2C.StatsSyncS2C"
+        );
+        NetworkHandler.sendToTrackingEntityAndSelf(
+            new StatsSyncS2C(mcPlayer),
+            mcPlayer
+        );
+    } catch (err1) {}
+
+    try {
+        syncProgression(mcPlayer);
+    } catch (err2) {}
+}
+
+function forceWipeDmzData(dmzData, mcPlayer) {
+    if (dmzData == null || mcPlayer == null) {
+        return false;
+    }
+
+    var wiped = false;
+    var Integer = Java.type("java.lang.Integer");
+
+    try {
+        dmzData.resetPlayerProgress(
+            mcPlayer,
+            Integer.valueOf(0),
+            false,
+            false
+        );
+        wiped = true;
+    } catch (err0) {}
+
+    if (!wiped) {
+        try {
+            dmzData.resetPlayerProgress(
+                mcPlayer,
+                null,
+                false,
+                false
+            );
+            wiped = true;
+        } catch (errNull) {}
+    }
+
+    try {
+        var stats = dmzData.getStats();
+        if (stats != null) {
+            stats.setStrength(0);
+            stats.setStrikePower(0);
+            stats.setResistance(0);
+            stats.setVitality(0);
+            stats.setKiPower(0);
+            stats.setEnergy(0);
+            wiped = true;
+        }
+    } catch (statsErr) {}
+
+    try {
+        var resources = dmzData.getResources();
+        if (resources != null) {
+            resources.setTrainingPoints(0.0);
+            try {
+                resources.setPendingAttributePoints(0);
+            } catch (e1) {}
+            try {
+                resources.setPowerRelease(0);
+            } catch (e2) {}
+        }
+    } catch (resErr) {}
+
+    try {
+        var status = dmzData.getStatus();
+        if (status != null) {
+            status.setHasCreatedCharacter(false);
+        }
+    } catch (statusErr) {}
+
+    try {
+        dmzData.getBonusStats().clearAllStats();
+    } catch (bonusErr) {}
+
+    try {
+        dmzData.getCooldowns().clearCooldowns();
+    } catch (cdErr) {}
+
+    try {
+        dmzData.getSkills().removeAllSkills();
+    } catch (skErr) {}
+
+    try {
+        dmzData.getEffects().removeAllEffects();
+    } catch (fxErr) {}
+
+    try {
+        dmzData.getTechniques().clearAllTechniques();
+    } catch (techErr) {}
+
+    try {
+        dmzData.getPlayerQuestData().resetAll();
+    } catch (questErr) {}
+
+    syncDmzFull(mcPlayer);
+    return wiped;
+}
+
+function isDmzResetComplete(dmzData) {
+    if (dmzData == null) {
+        return false;
+    }
+
+    try {
+        var status = dmzData.getStatus();
+        if (
+            status != null &&
+            status.isHasCreatedCharacter() !== true
+        ) {
+            return true;
+        }
+    } catch (err1) {}
+
+    try {
+        var stats = dmzData.getStats();
+        if (
+            stats != null &&
+            Number(stats.getStrength()) <= 0 &&
+            Number(stats.getVitality()) <= 0 &&
+            Number(stats.getEnergy()) <= 0
+        ) {
+            return true;
+        }
+    } catch (err2) {}
+
+    try {
+        if (Number(dmzData.getLevel()) <= 1) {
+            return true;
+        }
+    } catch (err3) {}
+
+    return false;
+}
+
 function tick(event) {
     try {
         var player = event.player;
@@ -1374,16 +1531,22 @@ function tick(event) {
 
 
         // ====================================================
-        // EXECUTE THE COMMAND
+        // WIPE DMZ PROGRESS
         // ====================================================
         //
-        // First try Bukkit's console dispatcher. This gives the
-        // command full console permissions.
-        //
-        // If the Bukkit command bridge does not recognize the
-        // Forge command, fall back to CustomNPCs' command
-        // executor, which runs through Minecraft's dispatcher.
+        // 1) Direct Java API wipe (reliable on hybrid)
+        // 2) Command fallbacks (Bukkit / CNPC API)
+        // 3) Verify character-created / stats cleared
         // ====================================================
+
+        var mcPlayer = null;
+        try {
+            mcPlayer = player.getMCEntity
+                ? player.getMCEntity()
+                : null;
+        } catch (mcErr) {}
+
+        var wiped = forceWipeDmzData(dmzData, mcPlayer);
 
         var dispatchedThroughBukkit = false;
         var customNpcCommandOutput = null;
@@ -1393,115 +1556,45 @@ function tick(event) {
                 Bukkit.dispatchCommand(
                     Bukkit.getConsoleSender(),
                     resetCommand
-                );
-
+                ) === true;
         } catch (bukkitCommandError) {
-            if (DEBUG) {
-                player.message(
-                    "\u00A7c[Race Lock Debug] Bukkit command error: \u00A7f" +
-                    bukkitCommandError
-                );
-            }
-
-            dispatchedThroughBukkit =
-                false;
+            dispatchedThroughBukkit = false;
         }
 
-
-        if (!dispatchedThroughBukkit) {
-            try {
-                customNpcCommandOutput =
-                    event.API.executeCommand(
-                        player.getWorld(),
-                        resetCommand
-                    );
-
-            } catch (cnpcCommandError) {
-                player.message(
-                    "\u00A7c[Race Lock] Both command execution methods failed."
+        try {
+            customNpcCommandOutput =
+                event.API.executeCommand(
+                    player.getWorld(),
+                    resetCommand
                 );
+        } catch (cnpcCommandError) {}
 
-                if (DEBUG) {
-                    player.message(
-                        "\u00A7c[Race Lock Debug] CNPC command error: \u00A7f" +
-                        cnpcCommandError
-                    );
+        try {
+            var lazyAfter = StatsProvider.get(
+                StatsCapability.INSTANCE,
+                mcPlayer
+            );
+            if (lazyAfter != null) {
+                var afterData = lazyAfter.orElse(null);
+                if (afterData != null) {
+                    dmzData = afterData;
+                    forceWipeDmzData(dmzData, mcPlayer);
                 }
-
-                temp.put(
-                    retryKey,
-                    "" + RESET_RETRY_CHECKS
-                );
-
-                return;
             }
-        }
-
-
-        // Prevent command spam if the reset did not take effect
-        // immediately. The script will retry after the configured
-        // number of checks.
+        } catch (reloadErr) {}
 
         temp.put(
             retryKey,
             "" + RESET_RETRY_CHECKS
         );
 
-        /*
-         * Clear stuck saga difficulty as soon as the reset
-         * command is issued. Do not wait for the character-
-         * created flag to flip — that is what blocks the picker.
-         */
         clearStuckSagaDifficulty(
             player,
             dmzData,
             true
         );
 
-
-        // ====================================================
-        // COMMAND RESULT DEBUGGING
-        // ====================================================
-
-        if (DEBUG) {
-            player.message(
-                "\u00A76[Race Lock Debug] \u00A77Bukkit dispatch result: \u00A7f" +
-                dispatchedThroughBukkit
-            );
-
-            if (customNpcCommandOutput != null) {
-                player.message(
-                    "\u00A76[Race Lock Debug] \u00A77CNPC command output: \u00A7f" +
-                    customNpcCommandOutput
-                );
-            }
-        }
-
-
-        // ====================================================
-        // IMMEDIATE RESET VERIFICATION
-        // ====================================================
-        //
-        // Command execution is normally synchronous, so DMZ's
-        // character-created status should already be false.
-        //
-        // Even if the immediate check has not updated yet, the
-        // script will check again after the retry cooldown.
-        // ====================================================
-
-        var updatedStatus =
-            dmzData.getStatus();
-
-        if (
-            updatedStatus != null &&
-            !updatedStatus.isHasCreatedCharacter()
-        ) {
-            /*
-             * dmzstats reset clears quest progress but does NOT
-             * clear difficultyChosen. If that flag stays true,
-             * SetStoryDifficultyC2S rejects every click and the
-             * saga difficulty picker never works again.
-             */
+        if (isDmzResetComplete(dmzData)) {
             clearStuckSagaDifficulty(
                 player,
                 dmzData,
@@ -1526,15 +1619,14 @@ function tick(event) {
 
         } else {
             player.message(
-                "\u00A7e[Race Lock] The reset command was issued, but DMZ " +
-                "still reports the character as created."
+                "\u00A7e[Race Lock] Reset was attempted, but DMZ " +
+                "still reports progress. Retrying shortly."
             );
 
-            if (DEBUG) {
+            if (!wiped) {
                 player.message(
-                    "\u00A7e[Race Lock Debug] The script will retry after " +
-                    RESET_RETRY_CHECKS +
-                    " checks."
+                    "\u00A7c[Race Lock] Direct wipe failed. Staff can run: " +
+                    "\u00A7f" + resetCommand
                 );
             }
         }
