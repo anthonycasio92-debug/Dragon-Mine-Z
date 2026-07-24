@@ -14,6 +14,8 @@
  - Combo tier messages only appear when reaching a new tier.
  - No title or chat-prefix system was added.
  - Fixed Android/high-BP partners massively inflating sparring TP.
+ - Android upgraded flag makes DMZ return Float.MAX_VALUE BP; sparring
+   now computes real BP from stats for those players instead.
  - BP rewards now use the weaker fighter's BP instead of the pair average.
  - Fixed weight multiplier using the wrong maximum setting.
  - Replaced tiered BP rewards with smooth logarithmic interpolation.
@@ -402,11 +404,181 @@ function invokeNumberNoArgs(object, methodNames, fallback) {
 }
 
 /*
+ * DMZ StatsData.getBattlePowerExact() returns ~3.4e38 when
+ * status.isAndroidUpgraded() is true (intentional "unreadable" BP).
+ * That blows up sparring TP (two androids -> 600x BP mult every 5s).
+ * For sparring rewards, compute the normal stat-based BP instead.
+ */
+var ANDROID_FAKE_BP_THRESHOLD = 1.0e30;
+
+function isAndroidUpgraded(playerData) {
+    if (playerData == null) return false;
+    try {
+        var status = playerData.getStatus();
+        return status != null && status.isAndroidUpgraded() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function safeStatBonus(bonusStats, stat, base, multiplicable) {
+    if (bonusStats == null) return 0;
+    try {
+        var value = Number(
+            bonusStats.calculateBonus(
+                stat,
+                Math.round(base),
+                multiplicable === true
+            )
+        );
+        if (isNaN(value)) return 0;
+        return value;
+    } catch (err) {
+        return 0;
+    }
+}
+
+function safeScaling(playerData, stat) {
+    try {
+        var value = Number(playerData.getStatScaling(stat));
+        if (isNaN(value) || value <= 0) return 1.0;
+        return value;
+    } catch (err) {
+        return 1.0;
+    }
+}
+
+function safeTotalMultiplier(playerData, stat) {
+    try {
+        var value = Number(playerData.getTotalMultiplier(stat));
+        if (isNaN(value) || value <= 0) return 1.0;
+        return value;
+    } catch (err) {
+        return 1.0;
+    }
+}
+
+/*
+ * Mirrors dragonminez StatsData.getBattlePowerExact() after the
+ * android early-return. Verified against dragonminez-2.1.3.
+ */
+function computeBattlePowerFromStats(playerData) {
+    if (playerData == null) return 0;
+
+    try {
+        var stats = playerData.getStats();
+        if (stats == null) return 0;
+
+        var bonusStats = null;
+        try {
+            bonusStats = playerData.getBonusStats();
+        } catch (bonusErr) {}
+
+        var str = Number(stats.getStrength());
+        var skp = Number(stats.getStrikePower());
+        var res = Number(stats.getResistance());
+        var vit = Number(stats.getVitality());
+        var pwr = Number(stats.getKiPower());
+        var ene = Number(stats.getEnergy());
+
+        if (isNaN(str)) str = 0;
+        if (isNaN(skp)) skp = 0;
+        if (isNaN(res)) res = 0;
+        if (isNaN(vit)) vit = 0;
+        if (isNaN(pwr)) pwr = 0;
+        if (isNaN(ene)) ene = 0;
+
+        var multBonusStr = safeStatBonus(bonusStats, "STR", str, true);
+        var flatBonusStr = safeStatBonus(bonusStats, "STR", str, false);
+        var multBonusSkp = safeStatBonus(bonusStats, "SKP", skp, true);
+        var flatBonusSkp = safeStatBonus(bonusStats, "SKP", skp, false);
+        var multBonusDef = safeStatBonus(bonusStats, "DEF", res, true);
+        var flatBonusDef = safeStatBonus(bonusStats, "DEF", res, false);
+        var multBonusVit = safeStatBonus(bonusStats, "VIT", vit, true);
+        var flatBonusVit = safeStatBonus(bonusStats, "VIT", vit, false);
+        var multBonusPwr = safeStatBonus(bonusStats, "PWR", pwr, true);
+        var flatBonusPwr = safeStatBonus(bonusStats, "PWR", pwr, false);
+        var multBonusEne = safeStatBonus(bonusStats, "ENE", ene, true);
+        var flatBonusEne = safeStatBonus(bonusStats, "ENE", ene, false);
+
+        var rawPower =
+            (str + multBonusStr) *
+                safeScaling(playerData, "STR") *
+                safeTotalMultiplier(playerData, "STR") +
+            flatBonusStr * safeScaling(playerData, "STR") +
+            (skp + multBonusSkp) *
+                safeScaling(playerData, "SKP") *
+                safeTotalMultiplier(playerData, "SKP") +
+            flatBonusSkp * safeScaling(playerData, "SKP") +
+            (res + multBonusDef) *
+                safeScaling(playerData, "DEF") *
+                safeTotalMultiplier(playerData, "RES") +
+            flatBonusDef * safeScaling(playerData, "DEF") +
+            (pwr + multBonusPwr) *
+                safeScaling(playerData, "PWR") *
+                safeTotalMultiplier(playerData, "PWR") +
+            flatBonusPwr * safeScaling(playerData, "PWR");
+
+        rawPower +=
+            0.5 *
+            (
+                (vit + multBonusVit) *
+                    safeScaling(playerData, "VIT") *
+                    safeTotalMultiplier(playerData, "VIT") +
+                flatBonusVit * safeScaling(playerData, "VIT") +
+                (ene + multBonusEne) *
+                    safeScaling(playerData, "ENE") *
+                    safeTotalMultiplier(playerData, "ENE") +
+                flatBonusEne * safeScaling(playerData, "ENE")
+            );
+
+        if (isNaN(rawPower) || rawPower <= 0.0) {
+            return 0;
+        }
+
+        var releaseMultiplier = 1.0;
+        try {
+            var resources = playerData.getResources();
+            if (resources != null) {
+                releaseMultiplier =
+                    Number(resources.getPowerRelease()) / 100.0;
+            }
+        } catch (releaseErr) {
+            releaseMultiplier = 1.0;
+        }
+
+        if (isNaN(releaseMultiplier) || releaseMultiplier < 0) {
+            releaseMultiplier = 1.0;
+        }
+
+        var bp =
+            1200.0 *
+            Math.pow(rawPower / 100.0, 1.2) *
+            releaseMultiplier;
+
+        if (isNaN(bp) || bp <= 0.0) {
+            return 0;
+        }
+
+        return bp;
+    } catch (err) {
+        return 0;
+    }
+}
+
+/*
  * DMZ builds have used different public names for Battle Power.
  * The first available method is used.
+ *
+ * Android upgraded players: ignore DMZ's fake max BP and use
+ * the real stat-based formula instead.
  */
 function getCurrentBattlePower(playerData) {
     if (playerData == null) return 0;
+
+    if (isAndroidUpgraded(playerData)) {
+        return computeBattlePowerFromStats(playerData);
+    }
 
     var direct = invokeNumberNoArgs(
         playerData,
@@ -419,6 +591,14 @@ function getCurrentBattlePower(playerData) {
         ],
         -1
     );
+
+    /*
+     * Safety net: any absurd "infinite" BP value (android flag
+     * missed, or other fake BP) falls back to stat calculation.
+     */
+    if (direct >= ANDROID_FAKE_BP_THRESHOLD) {
+        return computeBattlePowerFromStats(playerData);
+    }
 
     if (direct >= 0) return direct;
 
@@ -435,6 +615,9 @@ function getCurrentBattlePower(playerData) {
             ],
             -1
         );
+        if (fromStats >= ANDROID_FAKE_BP_THRESHOLD) {
+            return computeBattlePowerFromStats(playerData);
+        }
         if (fromStats >= 0) return fromStats;
     } catch (e) {}
 
@@ -451,6 +634,9 @@ function getCurrentBattlePower(playerData) {
             ],
             -1
         );
+        if (fromStatus >= ANDROID_FAKE_BP_THRESHOLD) {
+            return computeBattlePowerFromStats(playerData);
+        }
         if (fromStatus >= 0) return fromStatus;
     } catch (e2) {}
 
