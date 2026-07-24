@@ -683,9 +683,15 @@ function login(event) {
 }
 
 /*
- * Once per login session (Tick or Login): prove Race Lock is
- * alive, and unlock if difficulty/party is blocking selection.
- * Works with only Tick enabled — no Chat needed.
+ * Once per login session (Tick or Login).
+ *
+ * Only unlock difficulty when the player is STUCK after a wipe:
+ * hasCreatedCharacter == false but difficultyChosen/party still
+ * blocks the picker.
+ *
+ * Do NOT clear difficultyChosen for finished characters. That was
+ * forcing every relog to re-pick difficulty (quest progress kept,
+ * only rewards scaled) even when Dragon Balls were never used.
  */
 function runSessionSagaDifficultyCheck(player, fromLogin) {
     if (player == null) {
@@ -718,6 +724,14 @@ function runSessionSagaDifficultyCheck(player, fromLogin) {
         status = dmzData.getStatus();
     } catch (sErr) {}
 
+    /*
+     * Finished characters already chose difficulty. Leave them alone.
+     * Manual unlock: /noppes script trigger 120  or  !unlockdifficulty
+     */
+    if (hasCreatedCharacter(status)) {
+        return;
+    }
+
     var chosen = isDifficultyChosen(questData);
     var inParty = isInDmzParty(questData);
     var leader = isDmzPartyLeader(
@@ -725,10 +739,6 @@ function runSessionSagaDifficultyCheck(player, fromLogin) {
         getMcPlayer(player)
     );
 
-    /*
-     * Silent unless something is actually stuck.
-     * No debug status spam on login/tick.
-     */
     if (chosen || (inParty && !leader)) {
         clearStuckSagaDifficulty(player, dmzData, true);
     }
