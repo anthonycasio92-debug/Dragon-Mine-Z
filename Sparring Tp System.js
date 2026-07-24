@@ -1,9 +1,13 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.0
+ Version: 2.0.3
 
  Changelog:
+ - Prevented players from selecting themselves as sparring partners.
+ - Self-inflicted melee and projectile hits are ignored before sparring activity is recorded.
+ - Added UUID-based safeguards when starting, processing, and rewarding sessions.
+ - Invalid pre-existing self-pair sessions are cleared automatically.
  - Added complete persistent sparring statistics for command displays.
  - Added total sessions, rewarded sparring time, best payout, perfect payouts,
    highest combo, current streak, and best streak tracking.
@@ -30,10 +34,10 @@
  - Base TP increased to 750.
  - Removed minimum TP floor system.
  - Fixed reward messages using the correct SHOW_TP_MESSAGES setting.
- - Replaced fragile section-sign characters with a safe color helper.
+ - Replaced fragile section-sign characters with \u00A7 color escapes (v2.0.2).
  - Added visible error messages when DMZ data, calculation, or payout fails.
  - Fixed minimum TP handling: calculations stay unchanged and the 750 minimum is applied only when TP is awarded.
- - Cleaned reward messages and restored Minecraft section-sign colors.
+ - Cleaned reward messages and restored Minecraft colors via unicode escapes.
  - Added functional 3-second recovery grace period.
  - Added Perfect Training x2 bonus.
  - Perfect Training requires matching gravity/weight, 200% release,
@@ -77,7 +81,7 @@ var LocalDate = Java.type("java.time.LocalDate");
 /* ========================= CONFIGURATION ========================= */
 
 var DEBUG = false;
-var COLOR_CODE = String.fromCharCode(167);
+var COLOR_CODE = "\u00A7";
 
 /* TP is paid once per active interval. */
 var BASE_TP_PER_INTERVAL = 1500;
@@ -314,6 +318,107 @@ function getPlayerName(player) {
     }
 }
 
+/*
+ * Returns the player's UUID as a stable string.
+ *
+ * UUID comparison is used instead of relying only on names or wrapper
+ * identity because projectile events can create separate script wrappers
+ * for the same underlying player.
+ */
+function getPlayerUUID(player) {
+    try {
+        if (player == null) {
+            return "";
+        }
+
+        return String(player.getUUID());
+    } catch (e) {
+        return "";
+    }
+}
+
+/*
+ * True when both script objects represent the same Minecraft player.
+ *
+ * The checks are ordered from strongest to weakest:
+ * 1. Direct wrapper identity.
+ * 2. UUID equality.
+ * 3. Underlying Minecraft entity identity.
+ * 4. Case-insensitive player-name equality as a final fallback.
+ */
+function isSamePlayer(a, b) {
+    if (a == null || b == null) {
+        return false;
+    }
+
+    try {
+        if (a === b) {
+            return true;
+        }
+    } catch (e) {}
+
+    var uuidA = getPlayerUUID(a);
+    var uuidB = getPlayerUUID(b);
+
+    if (
+        uuidA != "" &&
+        uuidB != "" &&
+        uuidA.toLowerCase() == uuidB.toLowerCase()
+    ) {
+        return true;
+    }
+
+    try {
+        var mcA = a.getMCEntity();
+        var mcB = b.getMCEntity();
+
+        if (mcA != null && mcB != null && mcA === mcB) {
+            return true;
+        }
+    } catch (e2) {}
+
+    var nameA = getPlayerName(a);
+    var nameB = getPlayerName(b);
+
+    return (
+        nameA != "" &&
+        nameB != "" &&
+        nameA.toLowerCase() == nameB.toLowerCase()
+    );
+}
+
+/*
+ * Removes only stale self-hit records.
+ *
+ * Valid hit history against another player is left untouched.
+ */
+function clearSelfHitTracking(player) {
+    if (player == null) {
+        return;
+    }
+
+    try {
+        var temp = player.getTempdata();
+        var ownName = getPlayerName(player);
+
+        if (
+            readString(temp, K_LAST_OUT_PARTNER, "").toLowerCase() ==
+            ownName.toLowerCase()
+        ) {
+            temp.remove(K_LAST_OUT_PARTNER);
+            temp.remove(K_LAST_OUT_TIME);
+        }
+
+        if (
+            readString(temp, K_LAST_IN_PARTNER, "").toLowerCase() ==
+            ownName.toLowerCase()
+        ) {
+            temp.remove(K_LAST_IN_PARTNER);
+            temp.remove(K_LAST_IN_TIME);
+        }
+    } catch (e) {}
+}
+
 function getPlayerByName(player, name) {
     try {
         var world = player.getWorld();
@@ -363,7 +468,7 @@ function sendMessage(player, text) {
 
 function debug(player, text) {
     if (!DEBUG) return;
-    sendMessage(player, "§8[Spar Debug] §7" + text);
+    sendMessage(player, "\u00A78[Spar Debug] \u00A77" + text);
 }
 
 /* ========================= DMZ DATA ========================= */
@@ -771,7 +876,7 @@ function awardTrainingPoints(player, playerData, amount) {
     } catch (e) {
         sendMessage(
             player,
-            "§c[Sparring] Failed to award TP: " + e
+            "\u00A7c[Sparring] Failed to award TP: " + e
         );
         return false;
     }
@@ -1067,6 +1172,15 @@ function snapshotPlayer(player) {
 function startSession(a, b) {
     if (a == null || b == null) return false;
 
+    /*
+     * A player can never be their own sparring partner.
+     */
+    if (isSamePlayer(a, b)) {
+        clearSelfHitTracking(a);
+        clearSelfHitTracking(b);
+        return false;
+    }
+
     var now = nowMs();
     var aTemp = a.getTempdata();
     var bTemp = b.getTempdata();
@@ -1084,6 +1198,16 @@ function startSession(a, b) {
 
     var aName = getPlayerName(a);
     var bName = getPlayerName(b);
+
+    if (
+        aName == "" ||
+        bName == "" ||
+        aName.toLowerCase() == bName.toLowerCase()
+    ) {
+        clearSelfHitTracking(a);
+        clearSelfHitTracking(b);
+        return false;
+    }
 
     putString(aTemp, K_PARTNER, bName);
     putString(bTemp, K_PARTNER, aName);
@@ -1105,15 +1229,15 @@ function startSession(a, b) {
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(
             a,
-            "§6[Sparring] §eTraining session started with §f" +
+            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
             bName +
-            "§e."
+            "\u00A7e."
         );
         sendMessage(
             b,
-            "§6[Sparring] §eTraining session started with §f" +
+            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
             aName +
-            "§e."
+            "\u00A7e."
         );
     }
 
@@ -1146,17 +1270,17 @@ function endSession(player, partner, reason) {
     if (SHOW_SESSION_MESSAGES && reason != null && reason != "") {
         sendMessage(
             player,
-            "§6[Sparring] §eSession ended: §f" +
+            "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
             reason +
-            "§e."
+            "\u00A7e."
         );
 
         if (partner != null) {
             sendMessage(
                 partner,
-                "§6[Sparring] §eSession ended: §f" +
+                "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
                 reason +
-                "§e."
+                "\u00A7e."
             );
         }
     }
@@ -1186,9 +1310,33 @@ function isKiAttack(event) {
 }
 
 function recordMeleeHit(attacker, target) {
+    if (attacker == null || target == null) {
+        return;
+    }
+
+    /*
+     * Never record self-inflicted damage as outgoing or incoming sparring
+     * activity. This check runs before any reciprocal-hit data is written.
+     */
+    if (isSamePlayer(attacker, target)) {
+        clearSelfHitTracking(attacker);
+        clearSelfHitTracking(target);
+        return;
+    }
+
     var now = nowMs();
     var attackerName = getPlayerName(attacker);
     var targetName = getPlayerName(target);
+
+    if (
+        attackerName == "" ||
+        targetName == "" ||
+        attackerName.toLowerCase() == targetName.toLowerCase()
+    ) {
+        clearSelfHitTracking(attacker);
+        clearSelfHitTracking(target);
+        return;
+    }
 
     var attackerTemp = attacker.getTempdata();
     var targetTemp = target.getTempdata();
@@ -1228,6 +1376,16 @@ function recordMeleeHit(attacker, target) {
 
 function hasRecentOutgoingHit(player, partnerName) {
     try {
+        if (
+            player == null ||
+            partnerName == null ||
+            String(partnerName) == "" ||
+            getPlayerName(player).toLowerCase() ==
+                String(partnerName).toLowerCase()
+        ) {
+            return false;
+        }
+
         var temp = player.getTempdata();
 
         return (
@@ -1558,6 +1716,17 @@ function qualifyDailyTrainingStreak(player) {
 }
 
 function calculateReward(player, partner) {
+    /*
+     * A player can never calculate a sparring reward against themselves.
+     */
+    if (
+        player == null ||
+        partner == null ||
+        isSamePlayer(player, partner)
+    ) {
+        return null;
+    }
+
     var valuesA = getLiveTrainingValues(player);
     var valuesB = getLiveTrainingValues(partner);
 
@@ -1566,11 +1735,10 @@ function calculateReward(player, partner) {
     /*
      * Use the weaker fighter's BP for the shared training reward.
      *
-     * Some races, especially Androids, can report extremely high effective
-     * Battle Power. Averaging both fighters allowed that value to multiply
-     * the reward for the entire pair. Using the lower BP prevents one fighter
-     * from inflating both payouts while high-BP vs high-BP sessions still
-     * receive their intended end-game scaling.
+     * Android upgraded players no longer report DMZ's fake max BP here;
+     * getCurrentBattlePower() computes real stat-based BP for them.
+     * Using the lower BP still prevents one fighter from inflating both
+     * payouts while high-BP vs high-BP sessions keep end-game scaling.
      */
     var trainingBP = Math.min(valuesA.bp, valuesB.bp);
     var averageRelease = (valuesA.release + valuesB.release) / 2.0;
@@ -1884,6 +2052,23 @@ function formatMultiplier(value) {
 }
 
 function awardSparTP(player, partner) {
+    /*
+     * Final payout safeguard. Even if malformed session data somehow
+     * reaches this point, a player cannot receive TP with themselves as
+     * the partner.
+     */
+    if (
+        player == null ||
+        partner == null ||
+        isSamePlayer(player, partner)
+    ) {
+        if (player != null) {
+            clearSelfHitTracking(player);
+            clearSessionData(player);
+        }
+        return;
+    }
+
     qualifyDailyTrainingStreak(player);
     announceComboTier(player);
 
@@ -1907,10 +2092,6 @@ function awardSparTP(player, partner) {
         return;
     }
 
-    /*
-     * Keep the true calculated reward untouched.
-     * The 750 minimum is applied only to the final payout.
-     */
     var tpToAward = Math.floor(reward.amount);
 
     if (!awardTrainingPoints(player, data, tpToAward)) {
@@ -2023,15 +2204,15 @@ function handleRecoverableFailure(player, partner, reason) {
         if (SHOW_GRACE_WARNING) {
             sendMessage(
                 player,
-                "§6[Sparring] §eRecover within " +
+                "\u00A76[Sparring] \u00A7eRecover within " +
                 Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: §f" + reason + "§e."
+                " seconds: \u00A7f" + reason + "\u00A7e."
             );
             sendMessage(
                 partner,
-                "§6[Sparring] §eRecover within " +
+                "\u00A76[Sparring] \u00A7eRecover within " +
                 Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: §f" + reason + "§e."
+                " seconds: \u00A7f" + reason + "\u00A7e."
             );
         }
 
@@ -2055,9 +2236,29 @@ function processSession(player) {
         return;
     }
 
+    /*
+     * Purge any self-pair session left by an older version.
+     */
+    if (
+        partnerName.toLowerCase() ==
+        getPlayerName(player).toLowerCase()
+    ) {
+        clearSelfHitTracking(player);
+        clearSessionData(player);
+        debug(player, "cleared invalid self-pair session");
+        return;
+    }
+
     var partner = getPlayerByName(player, partnerName);
     if (partner == null) {
         endSession(player, null, "partner left or changed worlds");
+        return;
+    }
+
+    if (isSamePlayer(player, partner)) {
+        clearSelfHitTracking(player);
+        clearSessionData(player);
+        debug(player, "cleared invalid self-pair session");
         return;
     }
 
@@ -2153,6 +2354,12 @@ function tick(event) {
 
         putNumber(temp, K_TICK_NEXT, now + 200);
 
+        /*
+         * Remove stale self-hit records without touching valid activity
+         * against another player.
+         */
+        clearSelfHitTracking(player);
+
         updateMovement(player);
         processSession(player);
     } catch (e) {
@@ -2173,6 +2380,22 @@ function damagedEntity(event) {
             targetMC == null ||
             !MCPlayerClass.class.isInstance(targetMC)
         ) {
+            return;
+        }
+
+        /*
+         * This check is performed before projectile classification.
+         *
+         * Some projectile damage sources may not expose themselves as
+         * AbstractKiProjectile through the CustomNPCs event, but attacker
+         * and target still resolve to the same player UUID.
+         */
+        if (isSamePlayer(attacker, target)) {
+            clearSelfHitTracking(attacker);
+            debug(
+                attacker,
+                "ignored self-inflicted hit while detecting sparring"
+            );
             return;
         }
 
