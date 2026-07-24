@@ -873,7 +873,41 @@ function forceWipeDmzData(dmzData, mcPlayer) {
         dmzData.getPlayerQuestData().resetAll();
     } catch (questErr) {}
 
+    try {
+        dmzData.getDynamicGrowth().clear();
+    } catch (dgErr) {}
+
+    /*
+     * Clear restricted race so leftover progress cannot stick
+     * to ancient_saiyan / locked races after wipe.
+     */
+    try {
+        var character = dmzData.getCharacter();
+        if (character != null) {
+            try { character.setRace("human"); } catch (r1) {}
+            try { character.setCharacterClass("warrior"); } catch (r2) {}
+            try { character.clearActiveForm(mcPlayer); } catch (r3) {}
+            try { character.clearActiveStackForm(mcPlayer); } catch (r4) {}
+            try { character.clearInteractedMasters(); } catch (r5) {}
+        }
+    } catch (charErr) {}
+
+    try {
+        var status2 = dmzData.getStatus();
+        if (status2 != null) {
+            status2.setHasCreatedCharacter(false);
+        }
+    } catch (st2) {}
+
     syncDmzFull(mcPlayer);
+
+    try {
+        var StorageManager = Java.type(
+            "com.dragonminez.server.storage.StorageManager"
+        );
+        StorageManager.savePlayer(mcPlayer);
+    } catch (saveErr) {}
+
     return wiped;
 }
 
@@ -882,35 +916,140 @@ function isDmzResetComplete(dmzData) {
         return false;
     }
 
+    var created = true;
     try {
         var status = dmzData.getStatus();
-        if (
+        created =
             status != null &&
-            status.isHasCreatedCharacter() !== true
-        ) {
-            return true;
-        }
-    } catch (err1) {}
+            status.isHasCreatedCharacter() === true;
+    } catch (err1) {
+        created = true;
+    }
 
+    var str = -1;
+    var vit = -1;
+    var ene = -1;
     try {
         var stats = dmzData.getStats();
-        if (
-            stats != null &&
-            Number(stats.getStrength()) <= 0 &&
-            Number(stats.getVitality()) <= 0 &&
-            Number(stats.getEnergy()) <= 0
-        ) {
-            return true;
+        if (stats != null) {
+            str = Number(stats.getStrength());
+            vit = Number(stats.getVitality());
+            ene = Number(stats.getEnergy());
         }
     } catch (err2) {}
 
-    try {
-        if (Number(dmzData.getLevel()) <= 1) {
-            return true;
-        }
-    } catch (err3) {}
+    /*
+     * Must wipe base stats. Character-created=false alone is NOT
+     * enough — that used to stop Race Lock while stats remained.
+     */
+    var statsWiped =
+        str <= 0 &&
+        vit <= 0 &&
+        ene <= 0;
 
-    return false;
+    return statsWiped && created !== true;
+}
+
+function hasLeftoverDmzStats(dmzData) {
+    if (dmzData == null) {
+        return false;
+    }
+    try {
+        var stats = dmzData.getStats();
+        if (stats == null) {
+            return false;
+        }
+        return (
+            Number(stats.getStrength()) > 0 ||
+            Number(stats.getStrikePower()) > 0 ||
+            Number(stats.getResistance()) > 0 ||
+            Number(stats.getVitality()) > 0 ||
+            Number(stats.getKiPower()) > 0 ||
+            Number(stats.getEnergy()) > 0
+        );
+    } catch (err) {
+        return false;
+    }
+}
+
+
+function loadDmzForPlayer(player) {
+    try {
+        var mcPlayer = player.getMCEntity
+            ? player.getMCEntity()
+            : null;
+        if (mcPlayer == null) {
+            return null;
+        }
+        var StatsProvider = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        );
+        var StatsCapability = Java.type(
+            "com.dragonminez.common.stats.StatsCapability"
+        );
+        var lazy = StatsProvider.get(
+            StatsCapability.INSTANCE,
+            mcPlayer
+        );
+        if (lazy == null) {
+            return null;
+        }
+        var data = lazy.orElse(null);
+        if (data == null) {
+            return null;
+        }
+        return {
+            mcPlayer: mcPlayer,
+            dmzData: data
+        };
+    } catch (err) {
+        return null;
+    }
+}
+
+function enforceRaceLockWipe(player, temp) {
+    var bundle = loadDmzForPlayer(player);
+    if (bundle == null) {
+        return false;
+    }
+
+    if (!hasLeftoverDmzStats(bundle.dmzData)) {
+        try {
+            var st = bundle.dmzData.getStatus();
+            if (
+                st != null &&
+                st.isHasCreatedCharacter() !== true
+            ) {
+                return true;
+            }
+        } catch (okErr) {}
+    }
+
+    forceWipeDmzData(bundle.dmzData, bundle.mcPlayer);
+
+    try {
+        var lazy2 = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        ).get(
+            Java.type(
+                "com.dragonminez.common.stats.StatsCapability"
+            ).INSTANCE,
+            bundle.mcPlayer
+        );
+        var data2 = lazy2 != null ? lazy2.orElse(null) : null;
+        if (data2 != null) {
+            forceWipeDmzData(data2, bundle.mcPlayer);
+            clearStuckSagaDifficulty(player, data2, false);
+            return isDmzResetComplete(data2);
+        }
+    } catch (reloadErr) {}
+
+    clearStuckSagaDifficulty(
+        player,
+        bundle.dmzData,
+        false
+    );
+    return isDmzResetComplete(bundle.dmzData);
 }
 
 function tick(event) {
@@ -996,6 +1135,14 @@ function tick(event) {
                 retryKey,
                 "" + retryChecks
             );
+
+            /*
+             * Do NOT idle during cooldown. Async DMZ storage can
+             * reload old stats after a wipe. Keep enforcing.
+             */
+            try {
+                enforceRaceLockWipe(player, temp);
+            } catch (enforceErr) {}
 
             return;
         }
@@ -1134,6 +1281,14 @@ function tick(event) {
                 dmzData,
                 temp
             );
+
+            /*
+             * Character flag can clear while base stats remain.
+             * Keep wiping leftovers so Race Lock actually strips power.
+             */
+            if (hasLeftoverDmzStats(dmzData)) {
+                enforceRaceLockWipe(player, temp);
+            }
 
             temp.remove(
                 "restricted_race_command_last_state"
@@ -1583,9 +1738,13 @@ function tick(event) {
             }
         } catch (reloadErr) {}
 
+        /*
+         * Keep enforcing for several checks so async storage
+         * reloads cannot restore old stats.
+         */
         temp.put(
             retryKey,
-            "" + RESET_RETRY_CHECKS
+            "" + Math.max(RESET_RETRY_CHECKS, 40)
         );
 
         clearStuckSagaDifficulty(
@@ -1593,6 +1752,8 @@ function tick(event) {
             dmzData,
             true
         );
+
+        enforceRaceLockWipe(player, temp);
 
         if (isDmzResetComplete(dmzData)) {
             clearStuckSagaDifficulty(
