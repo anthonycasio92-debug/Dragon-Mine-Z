@@ -17,7 +17,9 @@
 //
 // Also clears stuck saga difficultyChosen after resets so the
 // Quest Tree difficulty picker works again. No extra script.
-// Enable Tick (required). Optional Chat for !unlockdifficulty.
+// Enable Tick (required) and Chat (for !unlockdifficulty).
+// Also leaves DMZ party if you are a non-leader, because DMZ
+// blocks difficulty selection for party members.
 // ============================================================
 
 
@@ -101,16 +103,23 @@ var DEBUG = true;
  * SAGA DIFFICULTY HELPERS
  * ============================================================
  *
- * DMZ's SetStoryDifficultyC2S ignores clicks when
+ * DMZ SetStoryDifficultyC2S ignores clicks when
  * PlayerQuestData.difficultyChosen is already true.
- * dmzstats reset / resetPlayerProgress does NOT clear that
- * flag, so Race Lock resets can permanently lock the saga
- * difficulty picker until requestDifficultyReselect() runs.
+ * dmzstats reset does NOT clear that flag.
+ *
+ * Extra blockers from DMZ itself:
+ * - Party non-leaders cannot select difficulty at all
+ * - Joining a party forces difficultyChosen = true
+ *
+ * Unlock runs from Tick (no Bukkit needed) and from chat:
+ *   !unlockdifficulty
  */
+
+var SAGA_UNLOCK_RETRY_TICKS = 40;
 
 function syncProgression(mcPlayer) {
     if (mcPlayer == null) {
-        return;
+        return false;
     }
 
     try {
@@ -125,7 +134,7 @@ function syncProgression(mcPlayer) {
             new ProgressionSyncS2C(mcPlayer),
             mcPlayer
         );
-        return;
+        return true;
     } catch (err1) {}
 
     try {
@@ -140,7 +149,48 @@ function syncProgression(mcPlayer) {
             new StatsSyncS2C(mcPlayer),
             mcPlayer
         );
+        return true;
     } catch (err2) {}
+
+    return false;
+}
+
+function getMcPlayer(player) {
+    if (player == null) {
+        return null;
+    }
+    try {
+        return player.getMCEntity
+            ? player.getMCEntity()
+            : null;
+    } catch (err) {
+        return null;
+    }
+}
+
+function loadDmzData(player) {
+    try {
+        var StatsProvider = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        );
+        var StatsCapability = Java.type(
+            "com.dragonminez.common.stats.StatsCapability"
+        );
+        var mcPlayer = getMcPlayer(player);
+        if (mcPlayer == null) {
+            return null;
+        }
+        var lazy = StatsProvider.get(
+            StatsCapability.INSTANCE,
+            mcPlayer
+        );
+        if (lazy == null) {
+            return null;
+        }
+        return lazy.orElse(null);
+    } catch (err) {
+        return null;
+    }
 }
 
 function isDifficultyChosen(questData) {
@@ -165,6 +215,96 @@ function hasCreatedCharacter(status) {
     }
 }
 
+function isInDmzParty(questData) {
+    if (questData == null) {
+        return false;
+    }
+    try {
+        return questData.isInParty() === true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function isDmzPartyLeader(questData, mcPlayer) {
+    if (questData == null || mcPlayer == null) {
+        return false;
+    }
+    try {
+        return questData.isPartyLeader(
+            mcPlayer.m_20148_()
+        ) === true;
+    } catch (err1) {
+        try {
+            return questData.isPartyLeader(
+                mcPlayer.getUUID()
+            ) === true;
+        } catch (err2) {
+            return false;
+        }
+    }
+}
+
+function leaveDmzParty(mcPlayer) {
+    if (mcPlayer == null) {
+        return false;
+    }
+    try {
+        var PartyManager = Java.type(
+            "com.dragonminez.common.quest.PartyManager"
+        );
+        PartyManager.leaveParty(mcPlayer);
+        return true;
+    } catch (err1) {}
+
+    try {
+        var StatsProvider = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        );
+        var StatsCapability = Java.type(
+            "com.dragonminez.common.stats.StatsCapability"
+        );
+        var dmzData = StatsProvider
+            .get(StatsCapability.INSTANCE, mcPlayer)
+            .orElse(null);
+        if (dmzData != null) {
+            dmzData.getPlayerQuestData().clearPartyState();
+            return true;
+        }
+    } catch (err2) {}
+
+    return false;
+}
+
+function diagnoseDifficulty(player, dmzData) {
+    var lines = [];
+    try {
+        var questData = dmzData.getPlayerQuestData();
+        var status = dmzData.getStatus();
+        var mcPlayer = getMcPlayer(player);
+        var chosen = isDifficultyChosen(questData);
+        var created = hasCreatedCharacter(status);
+        var inParty = isInDmzParty(questData);
+        var leader = isDmzPartyLeader(questData, mcPlayer);
+
+        lines.push(
+            "\u00A78chosen=" + chosen +
+            " created=" + created +
+            " party=" + inParty +
+            " leader=" + leader
+        );
+
+        if (inParty && !leader) {
+            lines.push(
+                "\u00A7cParty members cannot pick saga difficulty. Leave the party or become leader."
+            );
+        }
+    } catch (err) {
+        lines.push("\u00A7cDiagnose failed: " + err);
+    }
+    return lines;
+}
+
 function clearStuckSagaDifficulty(player, dmzData, notify) {
     if (dmzData == null) {
         return false;
@@ -178,7 +318,26 @@ function clearStuckSagaDifficulty(player, dmzData, notify) {
             return false;
         }
 
+        var mcPlayer = getMcPlayer(player);
         var wasChosen = isDifficultyChosen(questData);
+        var wasInParty = isInDmzParty(questData);
+        var wasLeader = isDmzPartyLeader(
+            questData,
+            mcPlayer
+        );
+
+        /*
+         * Non-leaders never get a working picker even after
+         * unlocking difficultyChosen. Leave party so solo
+         * selection works again.
+         */
+        if (wasInParty && !wasLeader) {
+            leaveDmzParty(mcPlayer);
+            try {
+                questData =
+                    dmzData.getPlayerQuestData();
+            } catch (refreshErr) {}
+        }
 
         try {
             questData.requestDifficultyReselect();
@@ -186,63 +345,79 @@ function clearStuckSagaDifficulty(player, dmzData, notify) {
             try {
                 questData.setDifficultyChosen(false);
             } catch (setErr) {
+                if (notify && player != null) {
+                    player.message(
+                        "\u00A7c[Race Lock] Could not clear difficultyChosen: " +
+                        setErr
+                    );
+                }
                 return false;
             }
         }
 
-        var mcPlayer = null;
         try {
-            mcPlayer = player.getMCEntity
-                ? player.getMCEntity()
-                : null;
-        } catch (mcErr) {}
+            questData.setDifficultyChosen(false);
+        } catch (forceErr) {}
 
-        syncProgression(mcPlayer);
+        var synced = syncProgression(mcPlayer);
+        var stillChosen = isDifficultyChosen(questData);
 
-        if (notify && wasChosen && player != null) {
-            player.message(
-                "\u00A75[Race Lock] \u00A7aSaga difficulty unlocked."
-            );
-            player.message(
-                "\u00A77Open the Saga / Quest Tree and choose Easy, Normal, or Hard."
-            );
+        if (notify && player != null) {
+            if (!stillChosen) {
+                player.message(
+                    "\u00A75[Race Lock] \u00A7aSaga difficulty unlocked."
+                );
+                player.message(
+                    "\u00A77Close and reopen the Saga / Quest Tree, then choose Easy, Normal, or Hard."
+                );
+            } else {
+                player.message(
+                    "\u00A7c[Race Lock] Unlock ran but difficultyChosen is still true."
+                );
+            }
+
+            if (!synced) {
+                player.message(
+                    "\u00A7c[Race Lock] Client sync failed — relog after unlock."
+                );
+            }
+
+            if (wasInParty && !wasLeader) {
+                player.message(
+                    "\u00A7e[Race Lock] Left DMZ party so difficulty selection is allowed."
+                );
+            }
+
+            var diag = diagnoseDifficulty(player, dmzData);
+            for (var i = 0; i < diag.length; i++) {
+                player.message(diag[i]);
+            }
         } else if (DEBUG && wasChosen && player != null) {
             player.message(
                 "\u00A76[Race Lock Debug] \u00A77Cleared stuck saga difficultyChosen so the picker can open again."
             );
         }
 
-        return true;
+        return !stillChosen;
     } catch (err) {
+        if (notify && player != null) {
+            player.message(
+                "\u00A7c[Race Lock] Difficulty unlock error: " +
+                err
+            );
+        }
         return false;
     }
 }
 
 /*
- * After dmzstats reset, difficultyChosen can stay true while
- * hasCreatedCharacter is false. Unlock once per session.
+ * Keep retrying while character creation is incomplete and
+ * difficulty/party state blocks the picker. No Bukkit needed.
  */
 function maybeAutoUnlockStuckDifficulty(player, dmzData, temp) {
     if (player == null || dmzData == null || temp == null) {
         return false;
     }
-
-    var doneKey = "race_lock_saga_diff_autounlock";
-    try {
-        if (temp.has(doneKey)) {
-            return false;
-        }
-    } catch (hasErr) {
-        try {
-            if (temp.get(doneKey) != null) {
-                return false;
-            }
-        } catch (getErr) {}
-    }
-
-    try {
-        temp.put(doneKey, "1");
-    } catch (putErr) {}
 
     var questData = null;
     var status = null;
@@ -253,13 +428,44 @@ function maybeAutoUnlockStuckDifficulty(player, dmzData, temp) {
         status = dmzData.getStatus();
     } catch (sErr) {}
 
-    if (
-        !isDifficultyChosen(questData) ||
-        hasCreatedCharacter(status)
-    ) {
+    var created = hasCreatedCharacter(status);
+    var chosen = isDifficultyChosen(questData);
+    var inParty = isInDmzParty(questData);
+    var leader = isDmzPartyLeader(
+        questData,
+        getMcPlayer(player)
+    );
+
+    /*
+     * Finished characters keep their chosen difficulty.
+     * Use !unlockdifficulty to force reselect.
+     */
+    if (created) {
         return false;
     }
 
+    var stuck = chosen || (inParty && !leader);
+    if (!stuck) {
+        return false;
+    }
+
+    var coolKey = "race_lock_saga_diff_cooldown";
+    var cool = 0;
+    try {
+        cool = parseInt("" + temp.get(coolKey), 10);
+        if (isNaN(cool)) {
+            cool = 0;
+        }
+    } catch (coolErr) {
+        cool = 0;
+    }
+
+    if (cool > 0) {
+        temp.put(coolKey, "" + (cool - 1));
+        return false;
+    }
+
+    temp.put(coolKey, "" + SAGA_UNLOCK_RETRY_TICKS);
     return clearStuckSagaDifficulty(
         player,
         dmzData,
@@ -275,7 +481,10 @@ function chat(event) {
         }
 
         var trimmed = message.trim().toLowerCase();
-        if (trimmed !== "!unlockdifficulty") {
+        if (
+            trimmed !== "!unlockdifficulty" &&
+            trimmed !== "!sagadifficulty"
+        ) {
             return;
         }
 
@@ -288,26 +497,18 @@ function chat(event) {
             return;
         }
 
-        var StatsProvider = Java.type(
-            "com.dragonminez.common.stats.StatsProvider"
-        );
-        var StatsCapability = Java.type(
-            "com.dragonminez.common.stats.StatsCapability"
+        player.message(
+            "\u00A76[Race Lock] Running saga difficulty unlock..."
         );
 
-        var lazy = StatsProvider.get(
-            StatsCapability.INSTANCE,
-            player.getMCEntity()
-        );
-
-        if (lazy == null || !lazy.isPresent()) {
+        var dmzData = loadDmzData(player);
+        if (dmzData == null) {
             player.message(
                 "\u00A7c[Race Lock] Could not read DMZ data."
             );
             return;
         }
 
-        var dmzData = lazy.orElse(null);
         clearStuckSagaDifficulty(player, dmzData, true);
     } catch (err) {
         try {
@@ -317,6 +518,24 @@ function chat(event) {
             );
         } catch (msgErr) {}
     }
+}
+
+function tryEarlySagaDifficultyUnlock(player) {
+    try {
+        if (player == null) {
+            return;
+        }
+        var temp = player.getTempdata();
+        var dmzData = loadDmzData(player);
+        if (dmzData == null) {
+            return;
+        }
+        maybeAutoUnlockStuckDifficulty(
+            player,
+            dmzData,
+            temp
+        );
+    } catch (err) {}
 }
 
 
@@ -331,6 +550,12 @@ function tick(event) {
         if (player == null) {
             return;
         }
+
+        /*
+         * Unlock saga difficulty before any Bukkit-dependent
+         * race-lock logic. Missing Bukkit must not block this.
+         */
+        tryEarlySagaDifficultyUnlock(player);
 
         var temp =
             player.getTempdata();
@@ -1016,7 +1241,8 @@ function tick(event) {
          */
         clearStuckSagaDifficulty(
             player,
-            dmzData
+            dmzData,
+            true
         );
 
 
@@ -1065,7 +1291,8 @@ function tick(event) {
              */
             clearStuckSagaDifficulty(
                 player,
-                dmzData
+                dmzData,
+                true
             );
 
             player.message(
