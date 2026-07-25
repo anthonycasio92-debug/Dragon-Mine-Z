@@ -1,9 +1,12 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.3
+ Version: 2.0.4
 
  Changelog:
+ - Fixed recover-warning and session-end chat colors (COLOR_CODE builder).
+ - Recover warnings now show the correct grace seconds (3s normal, 4s distance).
+ - Prevented duplicate "Session ended" / "Recover within" spam from both ticks.
  - Prevented players from selecting themselves as sparring partners.
  - Self-inflicted melee and projectile hits are ignored before sparring activity is recorded.
  - Added UUID-based safeguards when starting, processing, and rewarding sessions.
@@ -466,9 +469,29 @@ function sendMessage(player, text) {
     } catch (e) {}
 }
 
+/*
+ * Build Minecraft color codes with COLOR_CODE + letter.
+ * Avoid embedding section-sign escapes inside long string literals;
+ * those are the messages that were showing garbled in chat.
+ */
+function sparColor(code) {
+    return COLOR_CODE + String(code);
+}
+
+function sparText() {
+    var out = "";
+    for (var i = 0; i < arguments.length; i++) {
+        out += String(arguments[i]);
+    }
+    return out;
+}
+
 function debug(player, text) {
     if (!DEBUG) return;
-    sendMessage(player, "\u00A78[Spar Debug] \u00A77" + text);
+    sendMessage(
+        player,
+        sparText(sparColor("8"), "[Spar Debug] ", sparColor("7"), text)
+    );
 }
 
 /* ========================= DMZ DATA ========================= */
@@ -876,7 +899,7 @@ function awardTrainingPoints(player, playerData, amount) {
     } catch (e) {
         sendMessage(
             player,
-            "\u00A7c[Sparring] Failed to award TP: " + e
+            sparText(sparColor("c"), "[Sparring] Failed to award TP: ", e)
         );
         return false;
     }
@@ -1229,15 +1252,21 @@ function startSession(a, b) {
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(
             a,
-            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
-            bName +
-            "\u00A7e."
+            sparText(
+                sparColor("6"), "[Sparring] ",
+                sparColor("e"), "Training session started with ",
+                sparColor("f"), bName,
+                sparColor("e"), "."
+            )
         );
         sendMessage(
             b,
-            "\u00A76[Sparring] \u00A7eTraining session started with \u00A7f" +
-            aName +
-            "\u00A7e."
+            sparText(
+                sparColor("6"), "[Sparring] ",
+                sparColor("e"), "Training session started with ",
+                sparColor("f"), aName,
+                sparColor("e"), "."
+            )
         );
     }
 
@@ -1245,6 +1274,32 @@ function startSession(a, b) {
 }
 
 function endSession(player, partner, reason) {
+    /*
+     * Only the first endSession call for an active pair should announce.
+     * Both partners tick independently; without this guard they both
+     * broadcast "Session ended" and the chat looks broken.
+     */
+    var wasActive = false;
+    try {
+        wasActive =
+            isSessionActive(player) ||
+            (partner != null && isSessionActive(partner));
+    } catch (activeErr) {
+        wasActive = true;
+    }
+
+    if (!wasActive) {
+        try {
+            clearSessionData(player);
+        } catch (eClear) {}
+        if (partner != null) {
+            try {
+                clearSessionData(partner);
+            } catch (eClear2) {}
+        }
+        return;
+    }
+
     var now = nowMs();
 
     try {
@@ -1268,20 +1323,17 @@ function endSession(player, partner, reason) {
     }
 
     if (SHOW_SESSION_MESSAGES && reason != null && reason != "") {
-        sendMessage(
-            player,
-            "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
-            reason +
-            "\u00A7e."
+        var endText = sparText(
+            sparColor("6"), "[Sparring] ",
+            sparColor("e"), "Session ended: ",
+            sparColor("f"), reason,
+            sparColor("e"), "."
         );
 
+        sendMessage(player, endText);
+
         if (partner != null) {
-            sendMessage(
-                partner,
-                "\u00A76[Sparring] \u00A7eSession ended: \u00A7f" +
-                reason +
-                "\u00A7e."
-            );
+            sendMessage(partner, endText);
         }
     }
 }
@@ -2179,14 +2231,26 @@ function clearGraceState(player, partner) {
     }
 }
 
+function gracePeriodMsForReason(reason) {
+    if (String(reason) == "fighters moved too far apart") {
+        return DISTANCE_GRACE_PERIOD_MS;
+    }
+    return SESSION_GRACE_PERIOD_MS;
+}
+
 /*
  * Returns true while the session is inside its recovery grace period.
  * Returns false after the grace period expires and ends the session.
+ *
+ * Only one partner announces the recover warning (K_GRACE_WARNED),
+ * so both fighters do not spam duplicate "Recover within X seconds".
  */
 function handleRecoverableFailure(player, partner, reason) {
     var now = nowMs();
     var temp = player.getTempdata();
     var partnerTemp = partner.getTempdata();
+    var graceMs = gracePeriodMsForReason(reason);
+    var graceSeconds = Math.max(1, Math.floor(graceMs / 1000));
 
     var graceUntil = Math.max(
         readNumber(temp, K_GRACE_UNTIL, 0),
@@ -2194,34 +2258,51 @@ function handleRecoverableFailure(player, partner, reason) {
     );
 
     if (graceUntil <= 0) {
-        graceUntil = now + SESSION_GRACE_PERIOD_MS;
+        graceUntil = now + graceMs;
 
         putNumber(temp, K_GRACE_UNTIL, graceUntil);
         putNumber(partnerTemp, K_GRACE_UNTIL, graceUntil);
         putString(temp, K_GRACE_REASON, reason);
         putString(partnerTemp, K_GRACE_REASON, reason);
 
-        if (SHOW_GRACE_WARNING) {
-            sendMessage(
-                player,
-                "\u00A76[Sparring] \u00A7eRecover within " +
-                Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: \u00A7f" + reason + "\u00A7e."
+        var alreadyWarned =
+            readString(temp, K_GRACE_WARNED, "0") == "1" ||
+            readString(partnerTemp, K_GRACE_WARNED, "0") == "1";
+
+        if (SHOW_GRACE_WARNING && !alreadyWarned) {
+            putString(temp, K_GRACE_WARNED, "1");
+            putString(partnerTemp, K_GRACE_WARNED, "1");
+
+            var warnText = sparText(
+                sparColor("6"), "[Sparring] ",
+                sparColor("e"), "Recover within ",
+                sparColor("f"), graceSeconds,
+                sparColor("e"), " second",
+                (graceSeconds == 1 ? "" : "s"),
+                ": ",
+                sparColor("f"), reason,
+                sparColor("e"), "."
             );
-            sendMessage(
-                partner,
-                "\u00A76[Sparring] \u00A7eRecover within " +
-                Math.floor(SESSION_GRACE_PERIOD_MS / 1000) +
-                " seconds: \u00A7f" + reason + "\u00A7e."
-            );
+
+            sendMessage(player, warnText);
+            if (partner != null) {
+                sendMessage(partner, warnText);
+            }
         }
 
         return true;
     }
 
-    if (now < graceUntil) return true;
+    if (now < graceUntil) {
+        return true;
+    }
 
-    endSession(player, partner, reason);
+    var endReason = readString(temp, K_GRACE_REASON, reason);
+    if (endReason == "") {
+        endReason = reason;
+    }
+
+    endSession(player, partner, endReason);
     return false;
 }
 
