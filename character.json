@@ -30,7 +30,11 @@
   "formSkillsCosts": {
     "legendaryforms": {
       "buyFromMaster": false,
-      "prices": []
+      "prices": [
+        -1,
+        -1,
+        -1
+      ]
     },
     "godforms": {
       "buyFromMaster": false,
@@ -41,7 +45,12 @@
     },
     "superforms": {
       "buyFromMaster": false,
-      "prices": []
+      "prices": [
+        -1,
+        -1,
+        -1,
+        -1
+      ]
     },
     "uniquegforms": {
       "buyFromMaster": false,

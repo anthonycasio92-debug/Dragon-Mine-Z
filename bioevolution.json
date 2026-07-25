@@ -1,7 +1,7 @@
 {
   "configVersion": "2.1.3",
   "groupName": "bioevolution",
-  "displayName": "",
+  "displayName": "Bio Evolution",
   "formType": "superforms",
   "forms": {
     "semiperfect": {
@@ -76,7 +76,7 @@
       "triggerItemCosts": [],
       "durationItemCosts": [],
       "mobEffects": [],
-      "displayName": "",
+      "displayName": "Semi-Perfect",
       "description": "",
       "unlockDescription": ""
     },
@@ -152,7 +152,7 @@
       "triggerItemCosts": [],
       "durationItemCosts": [],
       "mobEffects": [],
-      "displayName": "",
+      "displayName": "Perfect",
       "description": "",
       "unlockDescription": ""
     },
@@ -228,7 +228,7 @@
       "triggerItemCosts": [],
       "durationItemCosts": [],
       "mobEffects": [],
-      "displayName": "",
+      "displayName": "Super Perfect",
       "description": "",
       "unlockDescription": ""
     },
@@ -304,7 +304,7 @@
       "triggerItemCosts": [],
       "durationItemCosts": [],
       "mobEffects": [],
-      "displayName": "",
+      "displayName": "Ultra Perfect",
       "description": "",
       "unlockDescription": ""
     }
