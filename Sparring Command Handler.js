@@ -12,8 +12,8 @@
  This file is the command display handler only - same split
  as Rival System.js + Rival Command Handler.js.
 
- Color codes use \\u00A7 escapes only (no literal section-sign
- characters) so Minecraft chat colors stay reliable.
+ Color codes use unicode section escapes only (no literal
+ section-sign characters) so Minecraft chat colors stay reliable.
 
  PRIMARY SYNTAX (matches in-game /spar help):
    /spar
