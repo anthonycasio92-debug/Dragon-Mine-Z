@@ -45,7 +45,11 @@
  CustomNPCs Global Player Script
 
  COMMAND DISPLAY:
- Use the separate Sparring_Command_Handler_v2.0.0.js file.
+ Use the separate Sparring Command Handler.js file.
+ Primary player commands (via CMI, same style as /rival):
+   /spar
+   /spar stats [player]
+   /spar top [tp|streak|session|payout|perfect|time]
 
  REQUIRED EVENTS:
  - tick

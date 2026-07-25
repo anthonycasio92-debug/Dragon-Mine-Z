@@ -1,0 +1,84 @@
+# ============================================================
+# DBZ Legacy Reborn - Sparring CMI Aliases
+# ============================================================
+# Same pattern Rival aliases follow (/rival ... via trigger 200).
+#
+# Script-slot: Sparring Command Handler.js
+# Primary router: trigger 70 [playerName] $1-
+#
+# In-game help matches these commands:
+#   /spar
+#   /spar help
+#   /spar stats [player]
+#   /spar top [tp|streak|session|payout|perfect|time]
+#
+# asFakeOp! gives noppes a player-like OP source.
+# [playerName] is ALWAYS argument 0 (what the handler reads).
+# $1- passes the rest of the typed args as subcommands.
+#
+# Paste these entries into your server CustomAlias.yml then:
+#   /cmi reload
+# ============================================================
+
+CustomAlias:
+  # Primary router (same idea as /rival)
+  spar:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  # One-word shortcuts inject the same subcommand words
+  sparstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] stats $1-
+    AddTabs: true
+    ExactMatch: false
+
+  spartop:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparstreak:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top streak
+    AddTabs: true
+    ExactMatch: true
+
+  sparsession:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top session
+    AddTabs: true
+    ExactMatch: true
+
+  sparlongest:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top session
+    AddTabs: true
+    ExactMatch: true
+
+  sparpayout:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top payout
+    AddTabs: true
+    ExactMatch: true
+
+  sparperfect:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top perfect
+    AddTabs: true
+    ExactMatch: true
+
+  spartime:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] top time
+    AddTabs: true
+    ExactMatch: true
+
+  sparhelp:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] help
+    AddTabs: true
+    ExactMatch: true
