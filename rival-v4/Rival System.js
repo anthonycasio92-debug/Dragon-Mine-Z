@@ -1611,9 +1611,10 @@ var RP_PRESENCE_RP_MUTUAL = 4;          // unused while RP_PRESENCE_RP_ENABLED i
 var RP_PRESENCE_RP_ONE_SIDED = 3;       // unused while RP_PRESENCE_RP_ENABLED is false
 var RP_PRESENCE_TP_ENABLED = true;
 /*
- * Unknown = they declared you, you have not accepted.
- * Do NOT pay proximity TP for Unknown links (no free TP from incoming
- * declarations). Declared / Mutual / Nemesis still earn presence TP.
+ * One-sided presence TP:
+ *  - Declarer (status "declared")  -> YES, earns proximity TP
+ *  - Target   (status "unknown")   -> NO, does not earn proximity TP
+ * Mutual / Nemesis still earn presence TP for both sides.
  */
 var RP_PRESENCE_TP_UNKNOWN = false;
 var RP_PRESENCE_TP_ONE_SIDED = 180;
@@ -2303,31 +2304,30 @@ function rpProcessPlayer(player) {
 
             if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
                 var pStatus = rcLinkStatus(link);
-                /*
-                 * Skip Unknown entirely - being declared on should not
-                 * drip TP just for standing near that player.
-                 */
-                if (pStatus !== "unknown" || RP_PRESENCE_TP_UNKNOWN === true) {
-                    var presenceTp = 0;
-                    if (pStatus === "declared") {
-                        presenceTp = RP_PRESENCE_TP_ONE_SIDED;
-                    } else if (pStatus === "mutual") {
-                        presenceTp = RP_PRESENCE_TP_MUTUAL;
-                    } else if (pStatus === "nemesis") {
-                        presenceTp = RP_PRESENCE_TP_NEMESIS;
-                    } else if (pStatus === "unknown" && RP_PRESENCE_TP_UNKNOWN === true) {
-                        presenceTp = RP_PRESENCE_TP_ONE_SIDED;
-                    }
+                var presenceTp = 0;
 
-                    if (presenceTp > 0) {
-                        rpAwardTP(
-                            player,
-                            data,
-                            presenceTp,
-                            "Near " + pStatus + " " + link.name,
-                            "drip"
-                        );
-                    }
+                /*
+                 * You declared them  -> "declared" -> get TP near them.
+                 * They declared you  -> "unknown"  -> no TP (unless enabled).
+                 */
+                if (pStatus === "declared") {
+                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
+                } else if (pStatus === "mutual") {
+                    presenceTp = RP_PRESENCE_TP_MUTUAL;
+                } else if (pStatus === "nemesis") {
+                    presenceTp = RP_PRESENCE_TP_NEMESIS;
+                } else if (pStatus === "unknown" && RP_PRESENCE_TP_UNKNOWN === true) {
+                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
+                }
+
+                if (presenceTp > 0) {
+                    rpAwardTP(
+                        player,
+                        data,
+                        presenceTp,
+                        "Near " + pStatus + " " + link.name,
+                        "drip"
+                    );
                 }
             }
             if (RP_PRESENCE_RP_ENABLED === true) {
