@@ -880,7 +880,7 @@ function cmdRequest(player, targetName) {
     pushHistory(pl, "request", "Sent Mutual request");
 
     var tl = ensureLink(tref, pref);
-    /* inviteReceived only — never declaredByThem (that is silent Declared). */
+    /* inviteReceived only - never declaredByThem (that is silent Declared). */
     tl.inviteReceived = true;
     tl.mutual = false;
     refreshLinkStatus(tl);
@@ -935,7 +935,7 @@ function cmdAccept(player, fromName) {
         link.mutualAccepted = true;
         refreshLinkStatus(link);
         if (their.mutualAccepted === true) {
-            /* Finish Mutual even if they are offline — banners just skip. */
+            /* Finish Mutual even if they are offline - banners just skip. */
             formMutual(db, pref, from, "Both accepted Declared rivalry");
             removeRequests(db, from.uuid, pref.uuid);
             pref.totals.declarationsAccepted++;
@@ -995,7 +995,7 @@ function cmdRemove(player, targetName) {
     var st = linkStatus(link);
     var wasShared = (st == "mutual" || st == "nemesis");
     var wasDeclared = (st == "declared");
-    /* Unknown is silent — never tip them off that they were rivaled. */
+    /* Unknown is silent - never tip them off that they were rivaled. */
     var notifyThem = wasShared || wasDeclared;
 
     archiveRivalLink(pref, target.uuid);

@@ -345,7 +345,7 @@ function clearStuckSagaDifficulty(player, dmzData, notify) {
 
             if (!synced) {
                 player.message(
-                    "\u00A7c[Race Lock] Client sync failed — relog after unlock."
+                    "\u00A7c[Race Lock] Client sync failed - relog after unlock."
                 );
             }
 
@@ -977,7 +977,7 @@ function tick(event) {
         // not created. Stop checking until the player creates
         // another character.
         //
-        // Also unlock stuck saga difficulty once — dmzstats
+        // Also unlock stuck saga difficulty once - dmzstats
         // reset leaves difficultyChosen true, which blocks the
         // picker until requestDifficultyReselect runs.
 
@@ -1460,7 +1460,7 @@ function tick(event) {
         /*
          * Clear stuck saga difficulty as soon as the reset
          * command is issued. Do not wait for the character-
-         * created flag to flip — that is what blocks the picker.
+         * created flag to flip - that is what blocks the picker.
          */
         clearStuckSagaDifficulty(
             player,

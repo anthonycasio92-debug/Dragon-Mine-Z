@@ -15,7 +15,7 @@
 var TICK_INTERVAL = 20; // once per second
 var DEBUG = false;
 
-var BONUS_NAME = "Â§6Prestige Bonus";
+var BONUS_NAME = "\u00A76Prestige Bonus";
 
 function tick(event) {
     try {
@@ -135,7 +135,7 @@ function tick(event) {
 
         if (DEBUG && changed) {
             player.message(
-                "§aFabled multiplicative bonus applied: " +
+                "\u00A7aFabled multiplicative bonus applied: " +
                 "STR x" + toMultiplier(fStr) +
                 " SKP x" + toMultiplier(fSkp) +
                 " RES x" + toMultiplier(fRes) +
@@ -147,7 +147,7 @@ function tick(event) {
 
     } catch (e) {
         if (event.player != null && DEBUG) {
-            event.player.message("§cFabled -> DMZ bonus stat error: " + e);
+            event.player.message("\u00A7cFabled -> DMZ bonus stat error: " + e);
         }
     }
 }

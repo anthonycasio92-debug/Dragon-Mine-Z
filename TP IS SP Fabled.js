@@ -243,9 +243,9 @@ function tick(event) {
 
             if (DEBUG) {
                 player.message(
-                    "§a[TP/SP Sync] Initialized: §e" +
+                    "\u00A7a[TP/SP Sync] Initialized: \u00A7e" +
                     formatNumber(currentTp) +
-                    " TP §7| §e" +
+                    " TP \u00A77| \u00A7e" +
                     formatNumber(targetDisplayedSp) +
                     " displayed SP"
                 );
@@ -313,9 +313,9 @@ function tick(event) {
 
             if (DEBUG) {
                 player.message(
-                    "§e[TP/SP Sync] Spent §c" +
+                    "\u00A7e[TP/SP Sync] Spent \u00A7c" +
                     formatNumber(spentSp) +
-                    " SP§e. Remaining DMZ TP: §a" +
+                    " SP\u00A7e. Remaining DMZ TP: \u00A7a" +
                     formatNumber(currentTp)
                 );
             }
@@ -396,7 +396,7 @@ function tick(event) {
             DEBUG
         ) {
             event.player.message(
-                "§c[TP/SP Sync Error] §f" +
+                "\u00A7c[TP/SP Sync Error] \u00A7f" +
                 error
             );
         }

@@ -61,7 +61,7 @@ var KEY_TRIAL_END =
  * ============================================================
  * COLORS
  *
- * Unicode color codes are used to prevent § and random letters.
+ * Unicode color codes are used to prevent \u00A7 and random letters.
  * ============================================================
  */
 

@@ -1,3 +1,4 @@
+var DEBUG = false;
 var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
 var StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
 var ConfigManager = Java.type("com.dragonminez.common.config.ConfigManager");
@@ -54,13 +55,13 @@ function tick(event) {
         }
 
         if (wrappedTarget == null) {
-            player.message("§c[Absorb Debug] No target entity found for ID " + targetId + ".");
+            if (DEBUG) player.message("\u00A7c[Absorb Debug] No target entity found for ID " + targetId + ".");
             return;
         }
 
         var targetEntity = wrappedTarget.getMCEntity();
         if (targetEntity == null) {
-            player.message("§c[Absorb Debug] Target entity could not be converted.");
+            if (DEBUG) player.message("\u00A7c[Absorb Debug] Target entity could not be converted.");
             return;
         }
 
@@ -72,9 +73,9 @@ function tick(event) {
 
             if (npcBonusTP > 0) {
                 bioResources.addTrainingPoints(npcBonusTP);
-                player.message("§a[Absorb] Non-player target converted into §e" + npcBonusTP + " TP§a.");
+                player.message("\u00A7a[Absorb] Non-player target converted into \u00A7e" + npcBonusTP + " TP\u00A7a.");
             } else {
-                player.message("§7[Absorb Debug] Non-player target gave 0 TP.");
+                if (DEBUG) player.message("\u00A77[Absorb Debug] Non-player target gave 0 TP.");
             }
 
             NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(mcPlayer), mcPlayer);
@@ -83,7 +84,7 @@ function tick(event) {
 
         var targetData = StatsProvider.get(StatsCapability.INSTANCE, targetEntity).orElse(null);
         if (targetData == null) {
-            player.message("§c[Absorb Debug] Target player has no DMZ data.");
+            if (DEBUG) player.message("\u00A7c[Absorb Debug] Target player has no DMZ data.");
             return;
         }
 
@@ -96,9 +97,9 @@ function tick(event) {
         if (stolenTP > 0) {
             targetResources.removeTrainingPoints(stolenTP);
             bioResources.addTrainingPoints(stolenTP);
-            player.message("§a[Absorb] Absorbed §e" + stolenTP + " TP§a from player.");
+            player.message("\u00A7a[Absorb] Absorbed \u00A7e" + stolenTP + " TP\u00A7a from player.");
         } else {
-            player.message("§7[Absorb Debug] Target had too little TP to absorb.");
+            if (DEBUG) player.message("\u00A77[Absorb Debug] Target had too little TP to absorb.");
         }
 
         var bioSkills = bioData.getSkills();
@@ -138,9 +139,9 @@ function tick(event) {
 
             if (playerBonusTP > 0) {
                 bioResources.addTrainingPoints(playerBonusTP);
-                player.message("§a[Absorb] Target had no learnable skills. Gained §e" + playerBonusTP + " TP§a from max health.");
+                player.message("\u00A7a[Absorb] Target had no learnable skills. Gained \u00A7e" + playerBonusTP + " TP\u00A7a from max health.");
             } else {
-                player.message("§7[Absorb Debug] No learnable skills and health conversion gave 0 TP.");
+                if (DEBUG) player.message("\u00A77[Absorb Debug] No learnable skills and health conversion gave 0 TP.");
             }
 
             NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(mcPlayer), mcPlayer);
@@ -176,16 +177,16 @@ function tick(event) {
 
             bioSkills.setSkillLevel(picked, newLevel);
 
-            player.message("§d[Absorb] Learned §b" + picked + " §dlevel " + newLevel + "§d.");
-            player.message("§7[Absorb Debug] DMZ Level Chance: " + Math.floor(chance * 100) + "% | Roll: " + Math.floor(roll * 100) + "%");
+            player.message("\u00A7d[Absorb] Learned \u00A7b" + picked + " \u00A7dlevel " + newLevel + "\u00A7d.");
+            if (DEBUG) player.message("\u00A77[Absorb Debug] DMZ Level Chance: " + Math.floor(chance * 100) + "% | Roll: " + Math.floor(roll * 100) + "%");
         } else {
-            player.message("§7[Absorb Debug] Skill absorb failed. DMZ Level Chance: " + Math.floor(chance * 100) + "% | Roll: " + Math.floor(roll * 100) + "%");
+            if (DEBUG) player.message("\u00A77[Absorb Debug] Skill absorb failed. DMZ Level Chance: " + Math.floor(chance * 100) + "% | Roll: " + Math.floor(roll * 100) + "%");
         }
 
         NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(mcPlayer), mcPlayer);
         NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(targetEntity), targetEntity);
 
     } catch (err) {
-        player.message("§4[Absorb Script Error] " + err);
+        player.message("\u00A74[Absorb Script Error] " + err);
     }
 }

@@ -59,7 +59,7 @@ var KEY_TRIAL_END =
  * ============================================================
  * COLORS
  *
- * Unicode color codes prevent broken § symbols and random text.
+ * Unicode color codes prevent broken \u00A7 symbols and random text.
  * ============================================================
  */
 

@@ -54,15 +54,15 @@ var KEY_CONFIRM_NPC =
  * ============================================================
  */
 
-var GOLD = "§6";
-var YELLOW = "§e";
-var AQUA = "§b";
-var GREEN = "§a";
-var RED = "§c";
-var GRAY = "§7";
-var WHITE = "§f";
-var PURPLE = "§d";
-var DARK = "§8";
+var GOLD = "\u00A76";
+var YELLOW = "\u00A7e";
+var AQUA = "\u00A7b";
+var GREEN = "\u00A7a";
+var RED = "\u00A7c";
+var GRAY = "\u00A77";
+var WHITE = "\u00A7f";
+var PURPLE = "\u00A7d";
+var DARK = "\u00A78";
 
 
 /*
@@ -1087,7 +1087,7 @@ function interact(event) {
     } catch (err) {
         try {
             event.player.message(
-                "§cScript error while processing Prestige Level: §f" +
+                "\u00A7cScript error while processing Prestige Level: \u00A7f" +
                 err
             );
         } catch (messageErr) {}

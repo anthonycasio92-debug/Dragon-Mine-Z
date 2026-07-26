@@ -338,7 +338,7 @@ function decodeBoostValue(encoded) {
  *
  * DMZ TP effect formula:
  *
- * 1 + ((amplifier + 1) × 0.25)
+ * 1 + ((amplifier + 1) x 0.25)
  *
  * Supported examples:
  *

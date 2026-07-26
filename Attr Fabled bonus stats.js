@@ -1,5 +1,5 @@
 // ============================================================
-// DISABLED DUPLICATE ? do not use this script
+// DISABLED DUPLICATE - do not use this script
 // ============================================================
 //
 // This file is a near-copy of "Attr Fabled Multi bonus.js".

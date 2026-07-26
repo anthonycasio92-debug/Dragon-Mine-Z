@@ -24,44 +24,44 @@ function interact(event) {
         var stats = targetData.getStats();
         var skills = targetData.getSkills();
 
-        player.message("§6======= DMZ Stats: " + target.getName() + " =======");
+        player.message("\u00A76======= DMZ Stats: " + target.getName() + " =======");
 
         if (ch != null) {
-            try { player.message("§eRace: §f" + ch.getRace()); } catch (e1) {}
-            try { player.message("§eClass: §f" + ch.getCharacterClass()); } catch (e2) {}
+            try { player.message("\u00A7eRace: \u00A7f" + ch.getRace()); } catch (e1) {}
+            try { player.message("\u00A7eClass: \u00A7f" + ch.getCharacterClass()); } catch (e2) {}
         }
 
         try {
-            player.message("§ePrestiged: §f" + target.getFactionPoints(4));
+            player.message("\u00A7ePrestiged: \u00A7f" + target.getFactionPoints(4));
         } catch (e3) {}
 
-        try { player.message("§eDMZ Level: §f" + targetData.getLevel()); } catch (e4) {}
-        try { player.message("§eMax Health: §f" + target.getMaxHealth()); } catch (e5) {}
-        try { player.message("§eMax Energy / Ki: §f" + targetData.getMaxEnergy()); } catch (e6) {}
+        try { player.message("\u00A7eDMZ Level: \u00A7f" + targetData.getLevel()); } catch (e4) {}
+        try { player.message("\u00A7eMax Health: \u00A7f" + target.getMaxHealth()); } catch (e5) {}
+        try { player.message("\u00A7eMax Energy / Ki: \u00A7f" + targetData.getMaxEnergy()); } catch (e6) {}
 
-        player.message("§6--- Core Stats ---");
+        player.message("\u00A76--- Core Stats ---");
 
         if (stats != null) {
-            try { player.message("§cSTR: §f" + stats.getStrength()); } catch (e7) {}
-            try { player.message("§bSKP: §f" + stats.getSpirit()); } catch (e8) {}
-            try { player.message("§aRES: §f" + stats.getResistance()); } catch (e9) {}
-            try { player.message("§dVIT: §f" + stats.getVitality()); } catch (e10) {}
-            try { player.message("§ePWR: §f" + stats.getPower()); } catch (e11) {}
-            try { player.message("§3ENE: §f" + stats.getEnergy()); } catch (e12) {}
+            try { player.message("\u00A7cSTR: \u00A7f" + stats.getStrength()); } catch (e7) {}
+            try { player.message("\u00A7bSKP: \u00A7f" + stats.getSpirit()); } catch (e8) {}
+            try { player.message("\u00A7aRES: \u00A7f" + stats.getResistance()); } catch (e9) {}
+            try { player.message("\u00A7dVIT: \u00A7f" + stats.getVitality()); } catch (e10) {}
+            try { player.message("\u00A7ePWR: \u00A7f" + stats.getPower()); } catch (e11) {}
+            try { player.message("\u00A73ENE: \u00A7f" + stats.getEnergy()); } catch (e12) {}
         }
 
-        player.message("§6--- Damage / Defense ---");
+        player.message("\u00A76--- Damage / Defense ---");
 
-        try { player.message("§cStrike Damage: §f" + targetData.getStrikeDamage()); } catch (e13) {}
-        try { player.message("§bKi Damage: §f" + targetData.getKiDamage()); } catch (e14) {}
-        try { player.message("§aDefense: §f" + targetData.getDefense()); } catch (e15) {}
-        try { player.message("§dMax Stamina: §f" + targetData.getMaxStamina()); } catch (e16) {}
+        try { player.message("\u00A7cStrike Damage: \u00A7f" + targetData.getStrikeDamage()); } catch (e13) {}
+        try { player.message("\u00A7bKi Damage: \u00A7f" + targetData.getKiDamage()); } catch (e14) {}
+        try { player.message("\u00A7aDefense: \u00A7f" + targetData.getDefense()); } catch (e15) {}
+        try { player.message("\u00A7dMax Stamina: \u00A7f" + targetData.getMaxStamina()); } catch (e16) {}
 
-        player.message("§6--- Skills ---");
+        player.message("\u00A76--- Skills ---");
 
         if (skills != null) {
             try {
-                player.message("§5potentialunlock: §f" + skills.getSkillLevel("potentialunlock"));
+                player.message("\u00A75potentialunlock: \u00A7f" + skills.getSkillLevel("potentialunlock"));
             } catch (e17) {}
 
             var skillMap = skills.getAllSkills();
@@ -72,12 +72,12 @@ function interact(event) {
                 var level = skills.getSkillLevel(skillName);
 
                 if (level > 0) {
-                    player.message("§7" + skillName + ": §f" + level);
+                    player.message("\u00A77" + skillName + ": \u00A7f" + level);
                 }
             }
         }
 
-        player.message("§6============================");
+        player.message("\u00A76============================");
 
     } catch (err) {
         return;

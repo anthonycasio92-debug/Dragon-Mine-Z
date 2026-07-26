@@ -54,7 +54,7 @@
             ],
             "ScriptList": [
                 {
-                    "Line": "fly.js"
+                    "Line": "flight.js"
                 },
                 {
                     "Line": "potential.js"
@@ -73,7 +73,7 @@
                     "Line": "andrioidconversion.js"
                 },
                 {
-                    "Line": "jump.js"
+                    "Line": "jumpsprint.js"
                 },
                 {
                     "Line": "kiweapons.js"
@@ -107,9 +107,6 @@
             "ScriptList": [
                 {
                     "Line": "apothicfireandcolddamage.js"
-                },
-                {
-                    "Line": "sprint.js"
                 }
             ]
         },
@@ -122,7 +119,7 @@
                     "Line": "damageovertime.js"
                 },
                 {
-                    "Line": "dmz energy.js"
+                    "Line": "dmz fabled bridge.js"
                 }
             ]
         },
@@ -161,30 +158,21 @@
             "Console": [
             ],
             "ScriptList": [
-                {
-                    "Line": "dmz stat screen.js"
-                }
-            ]
+                ]
         },
         {
             "Script": "",
             "Console": [
             ],
             "ScriptList": [
-                {
-                    "Line": "fabled prestige faction sync.js"
-                }
-            ]
+                ]
         },
         {
             "Script": "",
             "Console": [
             ],
             "ScriptList": [
-                {
-                    "Line": "flight suppression.js"
-                }
-            ]
+                ]
         },
         {
             "Script": "",
@@ -212,7 +200,7 @@
             ],
             "ScriptList": [
                 {
-                    "Line": "prestige sync fabled.js"
+                    "Line": "fabled sync.js"
                 }
             ]
         },
@@ -251,8 +239,22 @@
             "Console": [
             ],
             "ScriptList": [
+                ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
                 {
-                    "Line": "universal fabled value cleaner.js"
+                    "Line": "yardrat.js"
                 }
             ]
         },
@@ -261,30 +263,7 @@
             "Console": [
             ],
             "ScriptList": [
-                {
-                    "Line": "viltrumitefly.js"
-                }
-            ]
-        },
-        {
-            "Script": "",
-            "Console": [
-            ],
-            "ScriptList": [
-                {
-                    "Line": "yardratrace.js"
-                }
-            ]
-        },
-        {
-            "Script": "",
-            "Console": [
-            ],
-            "ScriptList": [
-                {
-                    "Line": "yardratskills.js"
-                }
-            ]
+                ]
         },
         {
             "Script": "",

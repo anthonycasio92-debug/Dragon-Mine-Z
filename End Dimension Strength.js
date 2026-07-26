@@ -7,8 +7,8 @@
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
    real DMZ health capability, so we MIRROR the strongest End player's DMZ
    HP + DEF onto the entity:
-     • vanilla max_health = TP-safe mapped copy of player DMZ maxHealth
-     • NBT defense     = strong DMZ-style DEF (this is the real toughness)
+     - vanilla max_health = TP-safe mapped copy of player DMZ maxHealth
+     - NBT defense     = strong DMZ-style DEF (this is the real toughness)
  - DMZ kill TP = entity.getMaxHealth() * tpHealthRatio (default 0.25) then
    TP boosts. Absurd vanilla HP ? billions of TP. So HP stays modest and
    DEF carries the fight (flat absorb + % reduction like DMZ).
@@ -22,14 +22,14 @@
  - Spawn prefers EndDragonFight; falls back to createEntity/summon if needed
  - Extra dragon attacks: real DragonMineZ ki beams + ki blasts (not vanilla fireballs)
  - Clear "dragon already alive" notice on /enddragon when one exists
- - Dragon ~200–300 matched hits via DEF + hit caps (not multi-million HP)
- - End mobs ~10–22 matched hits
+ - Dragon ~200-300 matched hits via DEF + hit caps (not multi-million HP)
+ - End mobs ~10-22 matched hits
  - /enddragon spawn (trigger 50) + /cleardragons cleanup (trigger 51)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
 
- INSTALL (TWO scripts — this is what made trigger 50 work before):
+ INSTALL (TWO scripts - this is what made trigger 50 work before):
    1) THIS file ? Global Player, OWN tab
       events: tick, kill, trigger, damagedEntity
    2) EndDragon-Forge-Trigger.js ? Global Forge Scripts, OWN tab
@@ -73,12 +73,12 @@ var NATURAL_SPAWN_Y = 128;
 var NATURAL_SPAWN_Z = 0;
 
 /*
- * Dragon HP — TP-safe vanilla max_health MIRRORED from player DMZ maxHealth.
+ * Dragon HP - TP-safe vanilla max_health MIRRORED from player DMZ maxHealth.
  * Never copy raw multi-million DMZ HP onto the entity (that breaks kill TP).
  * Log-map player DMZ HP into [BASE .. CAP]. Toughness comes from DEF.
  */
 var DRAGON_BASE_HP = 12000;
-var DRAGON_HP_CAP = 28000; /* kill TP ˜ HP * 0.25 before boosts */
+var DRAGON_HP_CAP = 28000; /* kill TP ' HP * 0.25 before boosts */
 var DRAGON_HP_LOG_REF = 10000000; /* player DMZ HP that maps near the cap */
 var DRAGON_DAMAGE_BASE = 120;
 var DRAGON_DAMAGE_PER_LEVEL = 2.5;
@@ -87,13 +87,13 @@ var DRAGON_TARGET_HITS = 250;
 var DRAGON_MAX_HITS = 300;
 
 /*
- * Dragon DEF — the real toughness. Scale ABOVE the strongest player's
+ * Dragon DEF - the real toughness. Scale ABOVE the strongest player's
  * DMZ defense / melee so mitigation (not absurd HP) carries the fight.
  */
 var DRAGON_DEF_ENABLED = true;
 var DRAGON_DEF_BASE = 50000;
-var DRAGON_DEF_FROM_PLAYER = 2.25; /* × player DMZ defense */
-var DRAGON_DEF_FROM_MELEE = 1.75;  /* × player melee — sits above threat */
+var DRAGON_DEF_FROM_PLAYER = 2.25; /* x player DMZ defense */
+var DRAGON_DEF_FROM_MELEE = 1.75;  /* x player melee - sits above threat */
 var DRAGON_DEF_PER_LEVEL = 750;
 var DRAGON_DEF_PER_BP = 0.15;
 var DRAGON_DEF_CAP = 25000000;
@@ -107,7 +107,7 @@ var DRAGON_SCALE_SCORE_EPSILON = 0.01;
 
 /*
  * Vanilla max_health on the entity (TP-safe). DMZ StatsData cannot attach
- * to mobs — we only mirror player DMZ HP into this attribute.
+ * to mobs - we only mirror player DMZ HP into this attribute.
  */
 var USE_REAL_VANILLA_HEALTH = true;
 var VHP_ENABLED = false;
@@ -125,11 +125,11 @@ var END_STRENGTH_DMZ_HP_NBT = "end_strength_dmz_hp_src"; /* player DMZ HP we mir
 var END_DAMAGE_HIT_CAP_ENABLED = true;
 var END_DAMAGE_HIT_CAP_MULT = 1.0; /* 1.0 => ~exact hit-target length */
 
-/* Enderman melee attribute — keep modest so pathing/teleport AI stays sane. */
+/* Enderman melee attribute - keep modest so pathing/teleport AI stays sane. */
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers — short fights.
+ * End mob tiers - short fights.
  * hp/hpCap = TP-safe vanilla pools (mirrored from player DMZ HP).
  * defense  = base DEF; real DEF scales from player DMZ defense/melee.
  */
@@ -148,12 +148,12 @@ var END_MOB_DEF_SCALE_CAP = 8.0; /* allow DEF to grow with the player */
 var END_MOB_MIN_DAMAGE_FRACTION = 0.03;
 var END_MOB_HIT_BAND = 0.25;
 
-/* Dragon mitigation — DEF does the work (near DMZ reduction ceiling). */
+/* Dragon mitigation - DEF does the work (near DMZ reduction ceiling). */
 var END_FLAT_ABSORB_FRAC = 0.55;
 var END_REDUCTION_CAP = 0.92;
 var END_DEF_SCALE = 12.0;
 
-/* End-mob mitigation — tougher than before, still shorter than the dragon. */
+/* End-mob mitigation - tougher than before, still shorter than the dragon. */
 var END_MOB_FLAT_ABSORB_FRAC = 0.35;
 var END_MOB_REDUCTION_CAP = 0.80;
 var END_MOB_DEF_SCALE = 20.0;
@@ -176,7 +176,7 @@ var CRYSTAL_CLEAR_ATTEMPTS = 12;
 var ANNOUNCE_EGG_TO_KILLER = true;
 var ANNOUNCE_EGG_SERVER = true;
 
-/* Same as Sparring — fromCharCode is more reliable than "\u00A7" in CNPC. */
+/* Same as Sparring - fromCharCode is more reliable than "\u00A7" in CNPC. */
 var COLOR = String.fromCharCode(167);
 var BUFF_TAG = "end_strength_v15"; /* v15 = preserve dragon AI; clearer already-alive */
 var TEMP_SCAN = "end.strength.scan";
@@ -202,7 +202,7 @@ var TEMP_DRAGON_ATTACK = "end.strength.dragonAtk";
  * 2) Add a modest End bonus (light BP scale, hard-capped)
  * 3) Softcap only as a MAX (claw down inflated awards)
  *
- * Does NOT force a full Sparring-scale payout anymore — that adjusted too hard.
+ * Does NOT force a full Sparring-scale payout anymore - that adjusted too hard.
  */
 var END_TP_SETTLE_ENABLED = true;
 var END_TP_SETTLE_DELAY_TICKS = 6;
@@ -222,7 +222,7 @@ var END_TP_KILL_BONUS = {
     phantom: 3000,
     endermite: 2000
 };
-/* Bonus BP scale — heavily dampened vs Sparring, and hard-capped. */
+/* Bonus BP scale - heavily dampened vs Sparring, and hard-capped. */
 var END_TP_BP_DAMPEN = 0.06;
 var END_TP_BONUS_BP_MULT_CAP = 2.5;
 /* Softcaps = MAX only. Level ~4000 enderman cannot exceed ~200k. */
@@ -272,7 +272,7 @@ var END_TP_SOFTCAP_DEFAULT_MAX = 1000000;
 /* Ignore tiny estimate mismatches so we don't spam tiny adjusts. */
 var END_TP_ADJUST_MIN_DELTA = 50;
 
-/* Extra scripted dragon attacks — real DragonMineZ ki projectiles. */
+/* Extra scripted dragon attacks - real DragonMineZ ki projectiles. */
 var DRAGON_EXTRA_ATTACKS_ENABLED = true;
 var DRAGON_ATTACK_INTERVAL_MS = 3200;
 var DRAGON_ATTACK_RANGE = 96;
@@ -343,7 +343,7 @@ function isPlayer(entity) {
     try { return entity != null && entity.getType() == 1; } catch (e) { return false; }
 }
 
-/* CMI asFakeOp / Forge FakePlayer — type 1 but not a real online player. */
+/* CMI asFakeOp / Forge FakePlayer - type 1 but not a real online player. */
 function isFakePlayerEntity(entity) {
     if (entity == null) return false;
     try {
@@ -764,7 +764,7 @@ function getOrCreateEndDragonFight() {
 
     var fight = readDragonFightFromLevel(endLevel);
     if (fight == null) {
-        try { print("[EndStrength] EndDragonFight missing — creating and attaching one"); } catch (e1) {}
+        try { print("[EndStrength] EndDragonFight missing - creating and attaching one"); } catch (e1) {}
         fight = createEndDragonFightInstance(endLevel);
         if (fight != null) {
             var attached = attachDragonFightToLevel(endLevel, fight);
@@ -784,7 +784,7 @@ function getOrCreateEndDragonFight() {
 
     var world = wrapEndWorld(endLevel);
     if (world == null) {
-        try { print("[EndStrength] CNPC IWorld wrap failed — will spawn via ServerLevel directly"); } catch (eW) {}
+        try { print("[EndStrength] CNPC IWorld wrap failed - will spawn via ServerLevel directly"); } catch (eW) {}
     }
 
     return {
@@ -965,7 +965,7 @@ function calcDragonDefense(power) {
     var def = Math.max(DRAGON_DEF_BASE, fromPlayer, fromMelee);
     def += level * DRAGON_DEF_PER_LEVEL + bp * DRAGON_DEF_PER_BP;
 
-    /* Floor: at least 1.5× player melee so DEF usually wins the trade. */
+    /* Floor: at least 1.5x player melee so DEF usually wins the trade. */
     var threatFloor = melee * 1.5 + DRAGON_DEF_BASE * 0.25;
     if (def < threatFloor) def = threatFloor;
 
@@ -1315,7 +1315,7 @@ function applyRealMaxHealth(entity, targetHp) {
 
 /*
  * DMZ LivingEntityMixin derives battlePower from maxHealth when unset.
- * Inflated End HP would make BP insane and break other systems — pin it.
+ * Inflated End HP would make BP insane and break other systems - pin it.
  */
 function setEntityBattlePower(entity, battlePower) {
     battlePower = Math.max(5, Math.floor(num(battlePower, 5)));
@@ -1674,7 +1674,7 @@ function scheduleEndKillTpClawback(player, kind, maxHp) {
     try {
         var temp = player.getTempdata();
         if (temp == null) return;
-        /* delay|kind|maxHp|startedAt — wait so DMZ LivingDeath TP lands first */
+        /* delay|kind|maxHp|startedAt - wait so DMZ LivingDeath TP lands first */
         var delay = Math.max(1, Math.floor(num(END_TP_SETTLE_DELAY_TICKS, 6)));
         var payload = delay + "|" + str(kind) + "|" + Math.floor(num(maxHp, 0)) + "|" + nowMs();
         temp.put(TEMP_TP_CLAWBACK, payload);
@@ -1835,7 +1835,7 @@ function buffMob(entity, world) {
     if (tier == null) return false;
 
     /*
-     * Buff once per entity. Do NOT re-apply every scan — that heal/reset
+     * Buff once per entity. Do NOT re-apply every scan - that heal/reset
      * loop breaks Enderman AI.
      */
     var needsBuff = !alreadyBuffed(entity) || !(readEntityDefense(entity) > 0);
@@ -1887,7 +1887,7 @@ function applyDragonStats(entity, power, sourceLabel) {
             newCurrent = Math.max(newCurrent, prevHp + (hp - prevMax));
             touchHealth = true;
         } else {
-            /* DEF/name rescale only — leave attributes alone (keeps dragon AI). */
+            /* DEF/name rescale only - leave attributes alone (keeps dragon AI). */
             newCurrent = prevHp;
             hp = prevMax;
             touchHealth = false;
@@ -2054,7 +2054,7 @@ function findDragons(world) {
         }
     } catch (e) {}
 
-    /* MC-level backup — CNPC scans sometimes miss the fight dragon. */
+    /* MC-level backup - CNPC scans sometimes miss the fight dragon. */
     try {
         var level = getMcServerLevel(world);
         if (level != null) {
@@ -2238,10 +2238,10 @@ function resolveSpawnedDragon(mcDragon, world, endLevel) {
     found = findDragonsOnLevel(endLevel);
     if (found.length > 0) return found[found.length - 1];
 
-    /* Dragon exists on ServerLevel even if CNPC wrap failed — keep a pending buff. */
+    /* Dragon exists on ServerLevel even if CNPC wrap failed - keep a pending buff. */
     if (mcDragon != null) {
         try {
-            print("[EndStrength] Dragon spawned on ServerLevel but CNPC wrap failed — entity is alive in The End");
+            print("[EndStrength] Dragon spawned on ServerLevel but CNPC wrap failed - entity is alive in The End");
         } catch (e2) {}
     }
     return null;
@@ -2414,7 +2414,7 @@ function spawnDragonViaFight(world) {
     }
 
     if (mcDragon == null) {
-        /* Maybe createNewDragon added it but returned void/null — scan level. */
+        /* Maybe createNewDragon added it but returned void/null - scan level. */
         var scanned = findDragonsOnLevel(endLevel);
         if (scanned.length > 0) {
             try { print("[EndStrength] Found dragon on ServerLevel after spawn attempts"); } catch (eSc) {}
@@ -2532,7 +2532,7 @@ function spawnDragonEntityFallback(world, x, y, z) {
         } catch (e3) {}
     }
 
-    /* Command summon — works even when CNPC createEntity fails. */
+    /* Command summon - works even when CNPC createEntity fails. */
     try {
         var cmdWorld = world;
         if (cmdWorld == null) {
@@ -3271,7 +3271,7 @@ function spawnAndFireDmzKiProjectile(proj, endLevel, lifeTicks) {
 
 /*
  * Real DragonMineZ ki beam (KiLaserEntity / setupKiBeamPlayer).
- * Owner is the Ender Dragon (LivingEntity). Damage uses setKiDamage —
+ * Owner is the Ender Dragon (LivingEntity). Damage uses setKiDamage  - 
  * non-player owners skip player-stat remapping and hit via kiblast DamageSource.
  */
 function fireDmzKiBeam(world, dragon, target) {
@@ -3316,7 +3316,7 @@ function fireDmzKiBeam(world, dragon, target) {
     }
 }
 
-/* Real DragonMineZ ki blast (KiBlastEntity) — replaces vanilla dragon fireballs. */
+/* Real DragonMineZ ki blast (KiBlastEntity) - replaces vanilla dragon fireballs. */
 function fireDmzKiBlast(world, dragon, target) {
     if (world == null || dragon == null || target == null) return false;
     if (!isLivingDragon(dragon)) return false;
@@ -3451,7 +3451,7 @@ function tick(event) {
         var player = event.player;
         if (!isPlayer(player)) return;
 
-        /* Runs in any dimension — DMZ kill TP may land a few ticks after death. */
+        /* Runs in any dimension - DMZ kill TP may land a few ticks after death. */
         try { processEndKillTpClawback(player); } catch (eClaw) {}
 
         /* Retry /enddragon if fight spawn lagged after trigger 50. */
@@ -3532,7 +3532,7 @@ function tick(event) {
                 var ent = list[i];
                 var kind = classifyEndEntity(ent);
                 if (kind === "dragon") {
-                    /* Soft repair only — avoid thrashing attributes (breaks AI). */
+                    /* Soft repair only - avoid thrashing attributes (breaks AI). */
                     try {
                         var intended = readNbtNumber(ent, END_STRENGTH_MAX_NBT);
                         var curMax = getEntityMaxHealthSafe(ent);
@@ -3584,7 +3584,7 @@ function kill(event) {
 
 /*
  * Apply stored DMZ-style defense when players hit the dragon or End mobs.
- * CustomNPCs damagedEntity is LivingHurt RAW damage — we rewrite event.damage
+ * CustomNPCs damagedEntity is LivingHurt RAW damage - we rewrite event.damage
  * to the post-mitigation amount. With real vanilla HP (DMZ-uncapped), that
  * mitigated value actually chips the health / boss bar.
  */
@@ -3649,7 +3649,7 @@ function trigger(event) {
         /*
          * Same pattern as Global TP Boost / Android conversion:
          * resolve the target from arguments[0], NOT event.entity.
-         * With CMI asFakeOp!, event.entity is the FakePlayer — using it
+         * With CMI asFakeOp!, event.entity is the FakePlayer - using it
          * makes spawn/messages hit the fake source and look like "nothing happened".
          */
         var id = -1;

@@ -218,7 +218,7 @@ function trigger(event) {
             try {
                 if (event.player != null) {
                     event.player.message(
-                        "§cCould not access the global TP Boost data."
+                        "\u00A7cCould not access the global TP Boost data."
                     );
                 }
             } catch (messageErr1) {}
@@ -241,8 +241,8 @@ function trigger(event) {
                 removeTpEffect(player);
 
                 player.message(
-                    "§6§lGLOBAL TP BOOST §r§7- " +
-                    "§cThe global TP boost has been disabled by an administrator."
+                    "\u00A76\u00A7lGLOBAL TP BOOST \u00A7r\u00A77- " +
+                    "\u00A7cThe global TP boost has been disabled by an administrator."
                 );
             }
         );
@@ -254,7 +254,7 @@ function trigger(event) {
         try {
             if (event.player != null) {
                 event.player.message(
-                    "§aGlobal TP Boost disabled successfully."
+                    "\u00A7aGlobal TP Boost disabled successfully."
                 );
             }
         } catch (messageErr2) {}
@@ -267,7 +267,7 @@ function trigger(event) {
         try {
             if (event.player != null) {
                 event.player.message(
-                    "§cGlobal TP Boost stop error: " +
+                    "\u00A7cGlobal TP Boost stop error: " +
                     err
                 );
             }

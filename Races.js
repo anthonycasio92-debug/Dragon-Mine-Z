@@ -80,7 +80,7 @@ function tick(event) {
         ) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Sync] Fabled is unavailable."
+                    "\u00A7c[Race Sync] Fabled is unavailable."
                 );
             }
 
@@ -119,7 +119,7 @@ function tick(event) {
         if (getDataMethod == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Sync] Could not find Fabled.getData."
+                    "\u00A7c[Race Sync] Could not find Fabled.getData."
                 );
             }
 
@@ -152,7 +152,7 @@ function tick(event) {
         if (getClassMethod == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Sync] Could not find Fabled.getClass."
+                    "\u00A7c[Race Sync] Could not find Fabled.getClass."
                 );
             }
 
@@ -251,7 +251,7 @@ function tick(event) {
         if (targetClass == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Sync] No Fabled class found for DMZ race: §e" +
+                    "\u00A7c[Race Sync] No Fabled class found for DMZ race: \u00A7e" +
                     dmzRaceRaw
                 );
             }
@@ -324,7 +324,7 @@ function tick(event) {
         if (changedPlayerClass == null) {
             if (DEBUG) {
                 player.message(
-                    "§c[Race Sync] Fabled rejected class change to §e" +
+                    "\u00A7c[Race Sync] Fabled rejected class change to \u00A7e" +
                     targetClassName
                 );
             }
@@ -366,11 +366,11 @@ function tick(event) {
 
         if (DEBUG) {
             player.message(
-                "§a[Race Sync] DMZ race §e" +
+                "\u00A7a[Race Sync] DMZ race \u00A7e" +
                 dmzRaceRaw +
-                " §awas synchronized to Fabled class §e" +
+                " \u00A7awas synchronized to Fabled class \u00A7e" +
                 targetClassName +
-                "§a."
+                "\u00A7a."
             );
         }
 
@@ -380,7 +380,7 @@ function tick(event) {
             DEBUG
         ) {
             event.player.message(
-                "§c[Race Sync Error] §f" + err
+                "\u00A7c[Race Sync Error] \u00A7f" + err
             );
         }
     }
