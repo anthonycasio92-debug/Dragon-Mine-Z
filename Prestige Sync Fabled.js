@@ -12,9 +12,6 @@
 // Prestige class level 1 -> DMZ prestige skill level 0
 // Prestige class level 2 -> DMZ prestige skill level 1
 // Prestige class level 10 -> DMZ prestige skill level 9
-//
-// Skips sync while DMZ hasCreatedCharacter is false so a wipe
-// is not undone every second by restoring the prestige skill.
 // ============================================================
 
 var TICK_INTERVAL = 20; // once per second
@@ -88,7 +85,7 @@ function tick(event) {
         if (plugin == null || !plugin.isEnabled()) {
             if (DEBUG) {
                 player.message(
-                    "\u00A7c[Prestige Sync] Fabled plugin is unavailable."
+                    "§c[Prestige Sync] Fabled plugin is unavailable."
                 );
             }
 
@@ -125,7 +122,7 @@ function tick(event) {
         if (getDataMethod == null) {
             if (DEBUG) {
                 player.message(
-                    "\u00A7c[Prestige Sync] Could not locate Fabled.getData."
+                    "§c[Prestige Sync] Could not locate Fabled.getData."
                 );
             }
 
@@ -232,31 +229,6 @@ function tick(event) {
 
         if (dmzSkills == null) return;
 
-        /*
-         * Fabled Prestige class survives DMZ wipe.
-         * Do NOT re-register / restore the DMZ prestige skill
-         * while the character is wiped — that undoes Race Lock
-         * / dmzstats reset skill clears every second.
-         */
-        var characterCreated = false;
-        try {
-            var status = dmzData.getStatus();
-            characterCreated =
-                status != null &&
-                status.isHasCreatedCharacter() === true;
-        } catch (statusErr) {
-            characterCreated = false;
-        }
-
-        if (!characterCreated) {
-            try {
-                if (dmzSkills.hasSkill(DMZ_SKILL_ID)) {
-                    dmzSkills.setSkillLevel(DMZ_SKILL_ID, 0);
-                }
-            } catch (clearSkillErr) {}
-            return;
-        }
-
         // ----------------------------------------------------
         // Make sure the custom skill exists
         // ----------------------------------------------------
@@ -270,7 +242,7 @@ function tick(event) {
             } catch (registerError) {
                 if (DEBUG) {
                     player.message(
-                        "\u00A7c[Prestige Sync] DMZ skill '" +
+                        "§c[Prestige Sync] DMZ skill '" +
                         DMZ_SKILL_ID +
                         "' was not registered."
                     );
@@ -310,10 +282,10 @@ function tick(event) {
 
         if (DEBUG) {
             player.message(
-                "\u00A7a[Prestige Sync] " +
-                "Fabled Prestige class level: \u00A7e" +
+                "§a[Prestige Sync] " +
+                "Fabled Prestige class level: §e" +
                 prestigeClassLevel +
-                " \u00A77| \u00A7aDMZ prestige skill: \u00A7e" +
+                " §7| §aDMZ prestige skill: §e" +
                 targetSkillLevel
             );
         }
@@ -321,7 +293,7 @@ function tick(event) {
     } catch (e) {
         if (event.player != null && DEBUG) {
             event.player.message(
-                "\u00A7c[Prestige Sync Error] \u00A7f" + e
+                "§c[Prestige Sync Error] §f" + e
             );
         }
     }

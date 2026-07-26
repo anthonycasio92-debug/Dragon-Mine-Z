@@ -2524,4 +2524,3 @@ function died(event) {
         }
     } catch (e) {}
 }
-

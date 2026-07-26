@@ -1,0 +1,301 @@
+{
+    "ScriptEnabled": 1b,
+    "ScriptConsole": [
+    ],
+    "Scripts": [
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "farming tp skill.js"
+                },
+                {
+                    "Line": "rival system.js"
+                },
+                {
+                    "Line": "skillcheckcommand.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "playerstatchecker.js"
+                },
+                {
+                    "Line": "sparring command handler.js"
+                },
+                {
+                    "Line": "sparring tp system.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "changebiomemed.js"
+                },
+                {
+                    "Line": "meditation new.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "fly.js"
+                },
+                {
+                    "Line": "potential.js"
+                },
+                {
+                    "Line": "tp boost end.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "andrioidconversion.js"
+                },
+                {
+                    "Line": "jump.js"
+                },
+                {
+                    "Line": "kiweapons.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "rival command handler.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "shadowdummylimiter.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "apothicfireandcolddamage.js"
+                },
+                {
+                    "Line": "sprint.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "damageovertime.js"
+                },
+                {
+                    "Line": "dmz energy.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "attr fabled multi bonus.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "bioandroid.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "dmz race lock.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "dmz stat screen.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "fabled prestige faction sync.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "flight suppression.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "global tp boost.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "piercing.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "prestige sync fabled.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "races.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "spirtualist ki control.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "tp is sp fabled.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "universal fabled value cleaner.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "viltrumitefly.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "yardratrace.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "yardratskills.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
+                    "Line": "end dimension strength.js"
+                }
+            ]
+        }
+    ],
+    "ScriptLanguage": "ECMAScript"
+}

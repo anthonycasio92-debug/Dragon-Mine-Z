@@ -11,24 +11,11 @@
 //
 // RES is handled with addBonusSplit("RES", ...)
 // because DMZ splits RES into DEF + STM.
-//
-// IMPORTANT:
-// Do NOT also run "Attr Fabled bonus stats.js".
-// That file is a duplicate with a different bonus name and
-// stacks a second prestige multiplier on top of this one.
-//
-// After a DMZ wipe (Race Lock / prestige / dmzstats reset),
-// hasCreatedCharacter is false. This script must CLEAR bonuses
-// and not re-apply Fabled multipliers until a character exists
-// again ? otherwise wipe power looks like it "persists".
 
 var TICK_INTERVAL = 20; // once per second
 var DEBUG = false;
 
-var BONUS_NAME = "\u00A76Prestige Bonus";
-
-// Old typo name from the duplicate script ? clear it too.
-var LEGACY_BONUS_NAME = "\u00A76Prestrige Bonus";
+var BONUS_NAME = "Â§6Prestige Bonus";
 
 function tick(event) {
     try {
@@ -82,10 +69,7 @@ function tick(event) {
         var fabledData = getDataMethod.invoke(null, bukkitPlayer);
         if (fabledData == null) return;
 
-        var mcPlayer = player.getMCEntity();
-        if (mcPlayer == null) return;
-
-        var lazy = StatsProvider.get(StatsCapability.INSTANCE, mcPlayer);
+        var lazy = StatsProvider.get(StatsCapability.INSTANCE, player.getMCEntity());
         if (lazy == null) return;
 
         var dmzData = lazy.orElse(null);
@@ -94,39 +78,22 @@ function tick(event) {
         var bonusStats = dmzData.getBonusStats();
         if (bonusStats == null) return;
 
-        /*
-         * Fabled attribute points survive DMZ wipe.
-         * Never re-apply them while the character is wiped /
-         * not created, or the wipe looks like it failed.
-         */
-        var characterCreated = false;
-        try {
-            var status = dmzData.getStatus();
-            characterCreated =
-                status != null &&
-                status.isHasCreatedCharacter() === true;
-        } catch (statusErr) {
-            characterCreated = false;
-        }
-
-        clearAllNamedBonuses(bonusStats);
-
-        if (!characterCreated) {
-            try {
-                NetworkHandler.sendToTrackingEntityAndSelf(
-                    new StatsSyncS2C(mcPlayer),
-                    mcPlayer
-                );
-            } catch (syncClearErr) {}
-            return;
-        }
-
         var fStr = safeNumber(fabledData.getAttribute("str"));
         var fSkp = safeNumber(fabledData.getAttribute("skp"));
         var fRes = safeNumber(fabledData.getAttribute("res"));
         var fVit = safeNumber(fabledData.getAttribute("vit"));
         var fPwr = safeNumber(fabledData.getAttribute("pwr"));
         var fEne = safeNumber(fabledData.getAttribute("ene"));
+
+        clearBonus(bonusStats, "STR");
+        clearBonus(bonusStats, "SKP");
+        clearBonus(bonusStats, "VIT");
+        clearBonus(bonusStats, "PWR");
+        clearBonus(bonusStats, "ENE");
+
+        try {
+            bonusStats.removeBonusSplit("RES", BONUS_NAME);
+        } catch (resClearErr) {}
 
         var changed = false;
 
@@ -162,16 +129,13 @@ function tick(event) {
 
         if (changed) {
             try {
-                NetworkHandler.sendToTrackingEntityAndSelf(
-                    new StatsSyncS2C(mcPlayer),
-                    mcPlayer
-                );
+                NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(player.getMCEntity()), player.getMCEntity());
             } catch (syncErr) {}
         }
 
         if (DEBUG && changed) {
             player.message(
-                "\u00A7aFabled multiplicative bonus applied: " +
+                "§aFabled multiplicative bonus applied: " +
                 "STR x" + toMultiplier(fStr) +
                 " SKP x" + toMultiplier(fSkp) +
                 " RES x" + toMultiplier(fRes) +
@@ -183,9 +147,7 @@ function tick(event) {
 
     } catch (e) {
         if (event.player != null && DEBUG) {
-            event.player.message(
-                "\u00A7cFabled -> DMZ bonus stat error: " + e
-            );
+            event.player.message("§cFabled -> DMZ bonus stat error: " + e);
         }
     }
 }
@@ -209,34 +171,12 @@ function safeNumber(value) {
     return n;
 }
 
-function clearBonus(bonusStats, stat, bonusName) {
+function clearBonus(bonusStats, stat) {
     try {
-        bonusStats.removeBonus(stat, bonusName);
+        bonusStats.removeBonus(stat, BONUS_NAME);
     } catch (e1) {}
 
     try {
-        bonusStats.clearBonus(stat, bonusName);
+        bonusStats.clearBonus(stat, BONUS_NAME);
     } catch (e2) {}
-}
-
-function clearAllNamedBonuses(bonusStats) {
-    var stats = ["STR", "SKP", "VIT", "PWR", "ENE"];
-    var names = [BONUS_NAME, LEGACY_BONUS_NAME];
-    var s;
-    var n;
-
-    for (s = 0; s < stats.length; s++) {
-        for (n = 0; n < names.length; n++) {
-            clearBonus(bonusStats, stats[s], names[n]);
-        }
-    }
-
-    for (n = 0; n < names.length; n++) {
-        try {
-            bonusStats.removeBonusSplit("RES", names[n]);
-        } catch (resClearErr) {}
-        try {
-            bonusStats.clearBonusSplit("RES", names[n]);
-        } catch (resClearErr2) {}
-    }
 }
