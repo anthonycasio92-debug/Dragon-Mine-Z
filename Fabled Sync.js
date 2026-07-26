@@ -8,7 +8,7 @@
  PLACE AS: CustomNPCs Global Player Script
  Enable: tick
 
- Disable the old separate tabs this replaces.
+ Old Prestige Sync / Faction Sync / Value Cleaner files were removed.
 ============================================================
 */
 

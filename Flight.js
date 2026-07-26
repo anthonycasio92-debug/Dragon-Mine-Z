@@ -11,7 +11,7 @@
  PLACE AS: CustomNPCs Global Player Script
  Enable: tick
 
- Disable the old Fly / ViltrumiteFly / flight suppression tabs.
+ Old Fly / ViltrumiteFly / flight suppression files were removed.
 ============================================================
 */
 

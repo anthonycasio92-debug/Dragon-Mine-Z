@@ -8,7 +8,7 @@
  PLACE AS: CustomNPCs Global Player Script
  Enable: tick
 
- Disable the old separate tabs this replaces.
+ Old DMZ Energy / DMZ Stat Screen files were removed.
 ============================================================
 */
 
