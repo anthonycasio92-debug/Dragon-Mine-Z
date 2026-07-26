@@ -1,0 +1,47 @@
+# ============================================================
+# DBZ Legacy Reborn - Sparring CMI Aliases (reference style)
+# ============================================================
+# Same pattern Rival aliases follow.
+#
+# Script-slot: Sparring Command Handler.js
+# COMMAND FORMAT: noppes script trigger <id> <playerName>
+#
+# asFakeOp! gives noppes a player-like OP source.
+# [playerName] is ALWAYS argument 0 (what the handler reads).
+# Paste into CMI Aliases.yml then: /cmi reload
+# ============================================================
+
+sparstats:
+  Cmds:
+  - asFakeOp! noppes script trigger 73 [playerName]
+  Help: '&6/sparstats &7- Personal sparring statistics'
+
+sparringtop:
+  Cmds:
+  - asFakeOp! noppes script trigger 74 [playerName]
+  Help: '&6/sparringtop &7- Top sparring TP'
+
+sparstreak:
+  Cmds:
+  - asFakeOp! noppes script trigger 75 [playerName]
+  Help: '&6/sparstreak &7- Top training streaks'
+
+sparlongest:
+  Cmds:
+  - asFakeOp! noppes script trigger 76 [playerName]
+  Help: '&6/sparlongest &7- Longest sparring sessions'
+
+sparpayout:
+  Cmds:
+  - asFakeOp! noppes script trigger 77 [playerName]
+  Help: '&6/sparpayout &7- Highest sparring payouts'
+
+sparperfect:
+  Cmds:
+  - asFakeOp! noppes script trigger 78 [playerName]
+  Help: '&6/sparperfect &7- Perfect training payouts'
+
+spartime:
+  Cmds:
+  - asFakeOp! noppes script trigger 79 [playerName]
+  Help: '&6/spartime &7- Total rewarded sparring time'

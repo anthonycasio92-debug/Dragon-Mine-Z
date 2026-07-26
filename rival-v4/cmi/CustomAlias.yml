@@ -1,0 +1,254 @@
+#
+# Edit custom variables in game if possible
+# Some extra variables can be used, like [playerName] will insert senders name automatically
+# All global variables should work, you can find full list in locale file
+# You can add delay between commands by inserting line like
+# delay! 5
+# This will delay next commands by defines time in seconds
+# If command is shortened and you need to provide some changing variables like target player name you need to define what and where it should be placed
+# Example: /cmi heal Zrips 
+# Can be shortened with custom alias to something like /h zrips by using alias command like
+# cmi heal $1
+# If you need to add more than one variable, use $1- format. Number represents variable place when used in alias command
+# Example: cmi tppos $1-
+# In case you want to print out help page if player enters wrong subcommand, use ? in alias
+# Example: ca ?
+# In this case if player performs /ca wrongsub or /ca anotherwrong
+# Commands under this alias will get executed. Exelent way to show help page and correct usage if needed
+#
+# Rival commands use Rival Command Handler.js (script-slot with SkillCheck / Spar).
+# Format: asFakeOp! noppes script trigger <id> [playerName] [$1...]
+
+CustomAlias:
+  ResetSaga:
+    Cmds:
+    - asConsole! dmzquest resetsaga all [playerName]
+    AddTabs: true
+    ExactMatch: true
+    CustomTabs:
+    - ResetSaga
+  Tutorial:
+    Cmds:
+    - asConsole! noppes dialog show [playerName] 4 Server
+    AddTabs: true
+    ExactMatch: true
+  Rules:
+    Cmds:
+    - asConsole! ctext rules [playerName]
+    AddTabs: true
+    ExactMatch: true
+  SkillCheck:
+    Cmds:
+    - asFakeOp! noppes script trigger 21 [playerName]
+    Perm: true
+    ExactMatch: true
+  Terminal:
+    Cmds:
+    - asConsole! class forcecast [playerName] terminal
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  Revive:
+    Cmds:
+    - asFakeOp! dmzrevive [playerName]
+    Perm: true
+    ExactMatch: true
+  Aura:
+    Cmds:
+    - AsPlayer! pp gui presets
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  Halo:
+    Cmds:
+    - asConsole! dmzhalo on [playerName]
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  RemoveHalo:
+    Cmds:
+    - asConsole! dmzhalo off [playerName]
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  Weights:
+    Cmds:
+    - AsConsoles! dmzweight $1-
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  ShopSpawn:
+    Cmds:
+    - asfakeop! warp shopspawn [playerName]
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  TPBoost:
+    Cmds:
+    - asFakeOp! noppes script trigger 30 $4 $3 $2 $1
+    Perm: true
+    AddTabs: true
+    ExactMatch: true
+  discord:
+    Cmds:
+    - asConsole! minecraft:tellraw [playerName] {"text":"--------------------------------","color":"dark_gray","strikethrough":true}
+    - asConsole! minecraft:tellraw [playerName] {"text":"Official Discord","color":"aqua","bold":true}
+    - asConsole! minecraft:tellraw [playerName] {"text":"Join the DBZ Legacy Reborn
+      community!","color":"gray"}
+    - asConsole! minecraft:tellraw [playerName] {"text":"[ CLICK TO JOIN OUR DISCORD
+      ]","color":"aqua","bold":true,"underlined":true,"clickEvent":{"action":"open_url","value":"https://discord.gg/eRNs935hUM"}}
+    - asConsole! minecraft:tellraw [playerName] {"text":"--------------------------------","color":"dark_gray","strikethrough":true}
+    AddTabs: true
+    ExactMatch: true
+  spar:
+    Cmds:
+    - asFakeOp! noppes script trigger 73 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  spartop:
+    Cmds:
+    - asFakeOp! noppes script trigger 74 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  sparstreak:
+    Cmds:
+    - asFakeOp! noppes script trigger 75 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  sparsession:
+    Cmds:
+    - asFakeOp! noppes script trigger 76 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  sparpayout:
+    Cmds:
+    - asFakeOp! noppes script trigger 77 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  sparperfect:
+    Cmds:
+    - asFakeOp! noppes script trigger 78 [playerName]
+    AddTabs: true
+    ExactMatch: true
+  spartime:
+    Cmds:
+    - asFakeOp! noppes script trigger 79 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ============================================================
+  # Rival System V4 - Rival Command Handler.js
+  # Same script-slot as SkillCheck / Sparring Command Handler.
+  #
+  # Primary syntax (matches in-game /rival help):
+  #   /rival <player>
+  #   /rival declare|accept|decline|remove <player>
+  #   /rival list | stats [player] | top [cat]
+  #   /rival title | journal | season | quests | achievements | hof
+  #   /challenge <player>
+  #   /challenge rival <player>
+  #   /challenge accept | decline | cancel
+  #   /spectaterival <player>
+  #
+  # ExactMatch MUST be false when the player types extra args.
+  # One-word shortcuts below inject the same subcommand words.
+  # ============================================================
+  rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+  spectaterival:
+    Cmds:
+    - asFakeOp! noppes script trigger 230 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  # Shortcuts -> same /rival <sub> syntax via trigger 200
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] declare $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] accept $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaldecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] decline $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalremove:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] remove $1-
+    AddTabs: true
+    ExactMatch: false
+  rivallist:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] list
+    AddTabs: true
+    ExactMatch: true
+  rivalstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] stats $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaltop:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] top $1-
+    AddTabs: true
+    ExactMatch: false
+  rivaltitle:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] title
+    AddTabs: true
+    ExactMatch: true
+  rivaljournal:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] journal $1-
+    AddTabs: true
+    ExactMatch: false
+  rivalseason:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] season
+    AddTabs: true
+    ExactMatch: true
+  rivalquests:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] quests
+    AddTabs: true
+    ExactMatch: true
+  rivalachievements:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] achievements
+    AddTabs: true
+    ExactMatch: true
+  rivalhof:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] hof
+    AddTabs: true
+    ExactMatch: true
+
+  # Shortcuts -> same /challenge <sub> syntax via trigger 210
+  challengeaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] accept $1-
+    AddTabs: true
+    ExactMatch: false
+  challengedecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] decline $1-
+    AddTabs: true
+    ExactMatch: false
+  challengecancel:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] cancel
+    AddTabs: true
+    ExactMatch: true
