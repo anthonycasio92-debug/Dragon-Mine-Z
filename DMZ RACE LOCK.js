@@ -51,17 +51,16 @@ var RESET_RETRY_CHECKS = 5;
 // Capitalization is ignored.
 //
 // Each entry must line up with the corresponding entry in
-// REQUIRED_FABLED_SKILLS.
+// REQUIRED_FABLED_SKILLS and RESTRICTED_RACE_DISPLAY_NAMES.
+// Nashorn requires a comma after EVERY entry except the last.
 var RESTRICTED_RACE_IDS = [
-    "ancient_saiyan"
+    "ancient_saiyan",
+    "sento_saiyan"
 ];
 
 
 // Exact Fabled skill key OR displayed skill name required for
 // each restricted race.
-//
-// For the current test, the race "test" requires a Fabled skill
-// whose key or displayed name is also "test".
 //
 // Example for later:
 //
@@ -77,7 +76,8 @@ var RESTRICTED_RACE_IDS = [
 //     "race_unlock_yardrat"
 // ];
 var REQUIRED_FABLED_SKILLS = [
-    "Ancient Saiyan"
+    "Ancient Saiyan",
+    "Sento Saiyan"
 ];
 
 
@@ -85,7 +85,8 @@ var REQUIRED_FABLED_SKILLS = [
 //
 // Each position must match RESTRICTED_RACE_IDS.
 var RESTRICTED_RACE_DISPLAY_NAMES = [
-    "Ancient Saiyan"
+    "Ancient Saiyan",
+    "Sento Saiyan"
 ];
 
 
