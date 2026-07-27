@@ -1,13 +1,15 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.4
+ Version: 4.6.5
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
    announce locks). Root scripts were missing the rival-v4 spam fix.
+ - Only the challenger tick starts FIGHT so both fighters do not
+   race duplicate personal/server fight lines.
 
  PLACE AS:
  CustomNPCs Global Player Script
