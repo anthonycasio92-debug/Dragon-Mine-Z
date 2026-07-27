@@ -3559,6 +3559,16 @@ function chBeginBattle(player, db, session) {
     if (session.state !== "countdown") return;
     if (session.announcedFight === true) return;
 
+    /*
+     * Only the challenger's tick starts the fight. Both fighters tick the
+     * countdown; without this they race and each get duplicate FIGHT lines.
+     */
+    if (chUuid(player) !== chString(session.challengerUuid)) return;
+
+    var fightKey = "fight." + chString(session.challengerUuid) + ">" +
+        chString(session.opponentUuid);
+    if (!chClaimCountdownAnnounce(fightKey)) return;
+
     session.state = "active";
     var durationMs = chNumber(session.durationMs, CH_DURATION_MS);
     if (durationMs < CH_DURATION_MS) durationMs = CH_DURATION_MS;
@@ -3575,9 +3585,6 @@ function chBeginBattle(player, db, session) {
         CH_COLOR + "eMost damage in " + fightLabel + "!");
     if (b !== null) chMessage(b, CH_COLOR + "c" + CH_COLOR + "lFIGHT! " + CH_COLOR + "r" +
         CH_COLOR + "eMost damage in " + fightLabel + "!");
-
-    var fightKey = "fight." + chString(session.challengerUuid) + ">" + chString(session.opponentUuid);
-    if (!chClaimCountdownAnnounce(fightKey)) return;
 
     chBroadcast(CH_COLOR + "8--------------------------------");
     chBroadcast(CH_COLOR + "c" + CH_COLOR + "l FIGHT! " + CH_COLOR + "r");
