@@ -65,21 +65,74 @@ function nbtHasKey(tag, key) {
     return false;
 }
 
-function nbtOverpoweredByte(tag) {
-    if (tag == null) return 0;
+/*
+ * /kubejs hand shows: Item.of('capsule:capsule',
+ * '{color:16777215,overpowered:1,size:1,state:0}')
+ *
+ * Capsule's Java API reads overpowered as a BYTE (1b), but many items
+ * (and KubeJS SNBT) store it as INT 1. getByte() then returns 0 and the
+ * old purge missed them. Accept byte, int, short, and KubeJS property.
+ */
+function isOverpoweredNbt(tag, stack) {
+    if (tag == null && stack == null) return false;
+
+    if (tag != null) {
+        var values = [];
+
+        try {
+            if (tag.overpowered !== undefined && tag.overpowered !== null) {
+                values.push(Number(tag.overpowered));
+            }
+        } catch (eProp) {}
+
+        try {
+            if (tag.getByte) values.push(Number(tag.getByte("overpowered")));
+        } catch (eByte) {}
+        try {
+            if (tag.getInt) values.push(Number(tag.getInt("overpowered")));
+        } catch (eInt) {}
+        try {
+            if (tag.getShort) values.push(Number(tag.getShort("overpowered")));
+        } catch (eShort) {}
+        try {
+            if (tag.getLong) values.push(Number(tag.getLong("overpowered")));
+        } catch (eLong) {}
+
+        for (var i = 0; i < values.length; i++) {
+            if (values[i] == 1) return true;
+        }
+
+        // contains("overpowered") with truthy/1-like SNBT from KubeJS
+        if (nbtHasKey(tag, "overpowered")) {
+            try {
+                var raw = String(tag.overpowered);
+                if (raw === "1" || raw === "1b" || raw === "true") return true;
+            } catch (eRaw) {}
+        }
+    }
+
+    // Last resort: SNBT / toString from the held-item format.
     try {
-        if (tag.getByte) return Number(tag.getByte("overpowered"));
-    } catch (e1) {}
-    try {
-        return Number(tag.overpowered);
-    } catch (e2) {}
-    return 0;
+        var snbt = "";
+        if (stack != null && stack.nbtString) snbt = String(stack.nbtString);
+        else if (tag != null) snbt = String(tag);
+        if (
+            snbt.indexOf("overpowered:1b") >= 0 ||
+            snbt.indexOf("overpowered:1,") >= 0 ||
+            snbt.indexOf("overpowered:1}") >= 0 ||
+            snbt.indexOf("overpowered:1 ") >= 0
+        ) {
+            return true;
+        }
+    } catch (eSnbt) {}
+
+    return false;
 }
 
 /*
- * Matches Capsule mod rules exactly:
- * - blueprint = NBT has "sourceInventory" (even empty {})
- * - overpowered = NBT byte overpowered == 1
+ * Banned when:
+ * - overpowered:1 / 1b (INT or BYTE — see /kubejs hand)
+ * - blueprint sourceInventory key (even empty {})
  */
 function isBannedCapsule(stack) {
     if (!isCapsuleStack(stack)) return false;
@@ -100,14 +153,11 @@ function isBannedCapsule(stack) {
     } catch (eNbt) {
         tag = null;
     }
-    if (tag == null) return false;
 
-    // Overpowered: Capsule stores this as a BYTE.
-    var op = nbtOverpoweredByte(tag);
-    if (op == 1) return true;
+    if (isOverpoweredNbt(tag, stack)) return true;
 
     // Blueprint: ANY sourceInventory key, including empty compound.
-    if (nbtHasKey(tag, "sourceInventory")) return true;
+    if (tag != null && nbtHasKey(tag, "sourceInventory")) return true;
 
     return false;
 }
