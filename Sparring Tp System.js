@@ -1,9 +1,11 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.4
+ Version: 2.0.5
 
  Changelog:
+ - Combat knockback, flight motion, and melee hits now count as movement
+   so grounded trading / aerial spars no longer false-timeout both fighters.
  - Fixed recover-warning and session-end chat colors (COLOR_CODE builder).
  - Recover warnings now show the correct grace seconds (3s normal, 4s distance).
  - Prevented duplicate "Session ended" / "Recover within" spam from both ticks.
@@ -147,9 +149,15 @@ var HIT_ACTIVITY_WINDOW_MS = 5000;
 /* Initial reciprocal hit required within this time. */
 var SESSION_START_WINDOW_MS = 15000;
 
-/* Both players must move this far to refresh movement activity. */
-var MIN_MOVEMENT_DISTANCE = 1.5;
+/*
+ * Position change needed to refresh movement activity.
+ * Kept low so knockback slides and aerial drift still count.
+ */
+var MIN_MOVEMENT_DISTANCE = 0.35;
 var MOVEMENT_ACTIVITY_WINDOW_MS = 8000;
+
+/* Horizontal/vertical speed that counts as combat motion (knockback/flight). */
+var MIN_MOTION_SPEED = 0.08;
 
 /* Maximum distance between sparring partners. */
 var MAX_SPAR_DISTANCE = 30.0;
@@ -1070,6 +1078,78 @@ function getPrestigeMultiplier(prestige) {
 
 /* ========================= MOVEMENT ========================= */
 
+/*
+ * Melee hits, knockback, and flight all count as "moving" for sparring.
+ * Standing still while trading blows used to fail the 1.5-block walk check
+ * and force both fighters into the 3-second recover timer.
+ */
+function refreshMovementActivity(player) {
+    if (player == null) return;
+
+    try {
+        var temp = player.getTempdata();
+        var now = nowMs();
+
+        putNumber(
+            temp,
+            K_MOVE_VALID_UNTIL,
+            now + MOVEMENT_ACTIVITY_WINDOW_MS
+        );
+
+        putNumber(temp, K_MOVE_X, Number(player.getX()));
+        putNumber(temp, K_MOVE_Y, Number(player.getY()));
+        putNumber(temp, K_MOVE_Z, Number(player.getZ()));
+    } catch (e) {}
+}
+
+function readPlayerMotionSpeed(player) {
+    try {
+        var mcPlayer = player.getMCEntity ? player.getMCEntity() : null;
+        if (mcPlayer == null) return 0;
+
+        var motion = null;
+        if (typeof mcPlayer.getDeltaMovement == "function") {
+            motion = mcPlayer.getDeltaMovement();
+        } else if (typeof mcPlayer.m_20184_ == "function") {
+            motion = mcPlayer.m_20184_();
+        }
+
+        if (motion == null) {
+            try {
+                var mx = Number(player.getMotionX());
+                var my = Number(player.getMotionY());
+                var mz = Number(player.getMotionZ());
+                if (!isNaN(mx) && !isNaN(my) && !isNaN(mz)) {
+                    return Math.sqrt(mx * mx + my * my + mz * mz);
+                }
+            } catch (cnpcErr) {}
+            return 0;
+        }
+
+        var x = NaN;
+        var y = NaN;
+        var z = NaN;
+
+        try {
+            if (typeof motion.x == "function") x = Number(motion.x());
+            else x = Number(motion.x);
+        } catch (ex) {}
+        try {
+            if (typeof motion.y == "function") y = Number(motion.y());
+            else y = Number(motion.y);
+        } catch (ey) {}
+        try {
+            if (typeof motion.z == "function") z = Number(motion.z());
+            else z = Number(motion.z);
+        } catch (ez) {}
+
+        if (isNaN(x) || isNaN(y) || isNaN(z)) return 0;
+        return Math.sqrt(x * x + y * y + z * z);
+    } catch (e) {
+        return 0;
+    }
+}
+
 function updateMovement(player) {
     try {
         var temp = player.getTempdata();
@@ -1098,16 +1178,13 @@ function updateMovement(player) {
         var dy = y - oldY;
         var dz = z - oldZ;
         var moved = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        var speed = readPlayerMotionSpeed(player);
 
-        if (moved >= MIN_MOVEMENT_DISTANCE) {
-            putNumber(
-                temp,
-                K_MOVE_VALID_UNTIL,
-                now + MOVEMENT_ACTIVITY_WINDOW_MS
-            );
-            putNumber(temp, K_MOVE_X, x);
-            putNumber(temp, K_MOVE_Y, y);
-            putNumber(temp, K_MOVE_Z, z);
+        /*
+         * Count small knockback slides, flight drift, and normal walking.
+         */
+        if (moved >= MIN_MOVEMENT_DISTANCE || speed >= MIN_MOTION_SPEED) {
+            refreshMovementActivity(player);
         }
     } catch (e) {}
 }
@@ -1245,6 +1322,13 @@ function startSession(a, b) {
     putNumber(bTemp, K_NEXT_AWARD, now + AWARD_INTERVAL_MS);
     putNumber(aTemp, K_COMBO_TIER, 0);
     putNumber(bTemp, K_COMBO_TIER, 0);
+
+    /*
+     * Seed movement validity so the session does not instantly enter
+     * "both fighters must resume moving" before the first knockback.
+     */
+    refreshMovementActivity(a);
+    refreshMovementActivity(b);
 
     recordSparringSessionStarted(a);
     recordSparringSessionStarted(b);
@@ -1398,6 +1482,14 @@ function recordMeleeHit(attacker, target) {
 
     putString(targetTemp, K_LAST_IN_PARTNER, attackerName);
     putNumber(targetTemp, K_LAST_IN_TIME, now);
+
+    /*
+     * Grounded knockback combat and aerial spars often keep one fighter
+     * planted while the other is shoved. Count the hit itself as movement
+     * activity for both so the recover timer does not false-trigger.
+     */
+    refreshMovementActivity(attacker);
+    refreshMovementActivity(target);
 
     /*
      * Start only after the target has recently hit the attacker.
