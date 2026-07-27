@@ -1,131 +1,199 @@
 // kubejs/server_scripts/capsule_disable.js
-// DBZ Legacy Reborn - Capsule Disable (load-safe)
+// DBZ Legacy Reborn - Capsule Disable
 //
-// Disables blueprint + overpowered Capsule recipes and removes ONLY
-// those banned capsule stacks from inventories / ender chests / ground.
+// Recipes ARE removed (see logs: "removed 4 recipes").
+// This version fixes inventory purge so blueprint / overpowered
+// capsules are actually detected and removed slot-by-slot.
 //
 // SAFETY:
-// - Never runs minecraft:clear (that wiped inventories before)
-// - Never runs kill/clear against players
-// - Only empties a slot after confirming it is a banned capsule
+// - Never runs minecraft:clear
+// - Never clears a whole inventory
+// - Only replaces a slot after confirming that slot is a banned capsule
 
 console.info("[Capsule Disable] script file evaluating...");
 
 var CapsuleItemClass = null;
+var CapsuleClassTried = false;
 var PLAYER_PURGE_INTERVAL = 100; // 5 seconds
+var DEBUG_CAPSULE = false;
 
 function getCapsuleItemClass() {
-    if (CapsuleItemClass != null) return CapsuleItemClass;
+    if (CapsuleClassTried) return CapsuleItemClass;
+    CapsuleClassTried = true;
     try {
         CapsuleItemClass = Java.loadClass("capsule.items.CapsuleItem");
+        console.info("[Capsule Disable] CapsuleItem class loaded.");
     } catch (err) {
-        console.error("[Capsule Disable] Could not load CapsuleItem class: " + err);
         CapsuleItemClass = null;
+        console.error("[Capsule Disable] CapsuleItem class missing: " + err);
     }
     return CapsuleItemClass;
 }
 
-function getNativeStack(stack) {
-    if (stack == null) return null;
+function stackId(stack) {
     try {
-        if (stack.getItemStack) return stack.getItemStack();
-    } catch (e1) {}
-    try {
-        if (stack.itemStack) return stack.itemStack;
-    } catch (e2) {}
-    return stack;
+        return String(stack.id);
+    } catch (e) {
+        return "";
+    }
 }
 
 function isCapsuleStack(stack) {
     if (stack == null) return false;
     try {
         if (stack.isEmpty()) return false;
-    } catch (e) {
+    } catch (eEmpty) {
         return false;
     }
+
+    // KubeJS-friendly matchers first.
     try {
-        return String(stack.id) === "capsule:capsule";
-    } catch (e2) {
-        return false;
-    }
+        if (stack.is && stack.is("capsule:capsule")) return true;
+    } catch (eIs) {}
+
+    return stackId(stack) === "capsule:capsule";
 }
 
+function nbtHasKey(tag, key) {
+    if (tag == null) return false;
+    try {
+        if (tag.contains && tag.contains(key)) return true;
+    } catch (e1) {}
+    try {
+        if (tag[key] !== undefined && tag[key] !== null) return true;
+    } catch (e2) {}
+    return false;
+}
+
+function nbtOverpoweredByte(tag) {
+    if (tag == null) return 0;
+    try {
+        if (tag.getByte) return Number(tag.getByte("overpowered"));
+    } catch (e1) {}
+    try {
+        return Number(tag.overpowered);
+    } catch (e2) {}
+    return 0;
+}
+
+/*
+ * Matches Capsule mod rules exactly:
+ * - blueprint = NBT has "sourceInventory" (even empty {})
+ * - overpowered = NBT byte overpowered == 1
+ */
 function isBannedCapsule(stack) {
     if (!isCapsuleStack(stack)) return false;
 
     var CapsuleItem = getCapsuleItemClass();
-    var nativeStack = getNativeStack(stack);
-
-    // Prefer Capsule mod API (same as your old working scripts).
-    if (CapsuleItem != null && nativeStack != null) {
+    if (CapsuleItem != null) {
         try {
-            if (CapsuleItem.isBlueprint(nativeStack)) return true;
-        } catch (eBlueprint) {}
+            if (CapsuleItem.isBlueprint(stack)) return true;
+        } catch (e1) {}
         try {
-            if (CapsuleItem.isOverpowered(nativeStack)) return true;
-        } catch (eOp) {}
+            if (CapsuleItem.isOverpowered(stack)) return true;
+        } catch (e2) {}
     }
 
-    // Strict NBT fallback only (overpowered is a BYTE in Capsule).
+    var tag = null;
     try {
-        var tag = stack.nbt;
-        if (tag == null) return false;
+        tag = stack.nbt;
+    } catch (eNbt) {
+        tag = null;
+    }
+    if (tag == null) return false;
 
-        try {
-            if (tag.getByte && tag.getByte("overpowered") === 1) return true;
-        } catch (eByte) {}
-        try {
-            if (tag.getInt && tag.getInt("overpowered") === 1) return true;
-        } catch (eInt) {}
+    // Overpowered: Capsule stores this as a BYTE.
+    var op = nbtOverpoweredByte(tag);
+    if (op == 1) return true;
 
-        // Blueprint marker used by CapsuleItem.isBlueprint:
-        // sourceInventory compound with coordinates (not every capsule NBT).
-        try {
-            if (
-                tag.contains &&
-                tag.contains("sourceInventory") &&
-                tag.getCompound
-            ) {
-                var src = tag.getCompound("sourceInventory");
-                if (src != null && src.contains && src.contains("x")) {
-                    return true;
-                }
-            }
-        } catch (eSrc) {}
-    } catch (eNbt) {}
+    // Blueprint: ANY sourceInventory key, including empty compound.
+    if (nbtHasKey(tag, "sourceInventory")) return true;
 
     return false;
 }
 
-function emptyItem() {
+function emptyStack() {
     try {
         return Item.empty;
     } catch (e1) {}
+    return Item.of("minecraft:air");
+}
+
+function readSlot(container, slot) {
     try {
-        return Item.of("minecraft:air");
+        if (container.getItem) return container.getItem(slot);
+    } catch (e1) {}
+    try {
+        if (container.get) return container.get(slot);
     } catch (e2) {}
     return null;
 }
 
-function purgeContainer(container) {
+function writeSlot(container, slot, stack) {
+    try {
+        if (container.setItem) {
+            container.setItem(slot, stack);
+            return true;
+        }
+    } catch (e1) {}
+    try {
+        if (container.set) {
+            container.set(slot, stack);
+            return true;
+        }
+    } catch (e2) {}
+    return false;
+}
+
+function containerSize(container) {
+    try {
+        if (container.getContainerSize) return Number(container.getContainerSize());
+    } catch (e1) {}
+    try {
+        if (container.getSlots) return Number(container.getSlots());
+    } catch (e2) {}
+    try {
+        if (container.slots != null) return Number(container.slots);
+    } catch (e3) {}
+    // Player inventory fallback: 41 slots (main + armor + offhand).
+    return 41;
+}
+
+function purgeContainer(container, label) {
     var removed = 0;
     if (container == null) return 0;
 
-    var empty = emptyItem();
-    if (empty == null) return 0;
+    var empty = emptyStack();
+    var size = containerSize(container);
 
-    var size = container.getContainerSize();
     for (var slot = 0; slot < size; slot++) {
-        var stack = container.getItem(slot);
+        var stack = readSlot(container, slot);
+        if (stack == null) continue;
         if (!isBannedCapsule(stack)) continue;
 
-        // Re-check right before write.
-        var again = container.getItem(slot);
+        var again = readSlot(container, slot);
         if (!isBannedCapsule(again)) continue;
-        if (String(again.id) !== "capsule:capsule") continue;
+        if (!isCapsuleStack(again)) continue;
 
-        removed += again.count;
-        container.setItem(slot, empty);
+        var count = 1;
+        try {
+            count = Number(again.count);
+            if (isNaN(count) || count < 1) count = 1;
+        } catch (eCount) {}
+
+        if (writeSlot(container, slot, empty)) {
+            removed += count;
+            if (DEBUG_CAPSULE) {
+                console.info(
+                    "[Capsule Disable] Cleared " +
+                        count +
+                        "x banned capsule from " +
+                        label +
+                        " slot " +
+                        slot
+                );
+            }
+        }
     }
     return removed;
 }
@@ -134,17 +202,41 @@ function purgePlayerCapsules(player, announce) {
     if (player == null) return;
 
     var removed = 0;
+
+    // Prefer vanilla inventory APIs, then KubeJS inventory wrapper.
     try {
-        removed += purgeContainer(player.getInventory());
+        removed += purgeContainer(player.getInventory(), "inventory");
     } catch (eInv) {
-        try {
-            removed += purgeContainer(player.inventory);
-        } catch (eInv2) {}
+        if (DEBUG_CAPSULE) console.error("[Capsule Disable] getInventory failed: " + eInv);
     }
 
     try {
-        removed += purgeContainer(player.getEnderChestInventory());
-    } catch (eEnder) {}
+        removed += purgeContainer(player.inventory, "inventoryKJS");
+    } catch (eInv2) {
+        if (DEBUG_CAPSULE) console.error("[Capsule Disable] player.inventory failed: " + eInv2);
+    }
+
+    try {
+        removed += purgeContainer(player.getEnderChestInventory(), "ender");
+    } catch (eEnder) {
+        try {
+            removed += purgeContainer(player.enderChestInventory, "enderKJS");
+        } catch (eEnder2) {}
+    }
+
+    // Cursor / offhand extras on some wrappers.
+    try {
+        if (player.mainHandItem && isBannedCapsule(player.mainHandItem)) {
+            player.setMainHandItem(emptyStack());
+            removed += 1;
+        }
+    } catch (eHand) {}
+    try {
+        if (player.offHandItem && isBannedCapsule(player.offHandItem)) {
+            player.setOffHandItem(emptyStack());
+            removed += 1;
+        }
+    } catch (eOff) {}
 
     if (removed > 0 && announce) {
         try {
@@ -177,6 +269,7 @@ ServerEvents.recipes(function (event) {
 
 PlayerEvents.loggedIn(function (event) {
     try {
+        getCapsuleItemClass();
         purgePlayerCapsules(event.player, true);
     } catch (err) {
         console.error("[Capsule Disable] loggedIn error: " + err);
@@ -194,18 +287,40 @@ PlayerEvents.tick(function (event) {
     }
 });
 
-EntityEvents.spawned(function (event) {
+// Stop banned capsules from being used even if one slips through.
+ItemEvents.rightClicked("capsule:capsule", function (event) {
     try {
-        var entity = event.entity;
-        if (entity.type !== "minecraft:item") return;
-        if (isBannedCapsule(entity.item)) {
-            entity.discard();
+        if (isBannedCapsule(event.item)) {
+            event.cancel();
+            try {
+                event.item.count = 0;
+            } catch (eCount) {
+                try {
+                    event.player.setMainHandItem(emptyStack());
+                } catch (eHand) {}
+            }
+            event.player.tell(
+                "\u00A7cBlueprint / Overpowered capsules are disabled on this server."
+            );
         }
     } catch (err) {
-        // ignore spawn-hook failures
+        console.error("[Capsule Disable] rightClicked error: " + err);
     }
 });
 
+EntityEvents.spawned("minecraft:item", function (event) {
+    try {
+        var entity = event.entity;
+        var stack = entity.item;
+        if (isBannedCapsule(stack)) {
+            event.cancel();
+            try {
+                entity.discard();
+            } catch (eDisc) {}
+        }
+    } catch (err) {}
+});
+
 console.info(
-    "[DBZ Legacy Reborn] Capsule disable handlers registered (slot-safe)."
+    "[DBZ Legacy Reborn] Capsule disable handlers registered (slot-safe purge)."
 );
