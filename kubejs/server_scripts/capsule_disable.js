@@ -1,14 +1,18 @@
 // kubejs/server_scripts/capsule_disable.js
 // DBZ Legacy Reborn - Capsule Disable
 //
-// Recipes ARE removed (see logs: "removed 4 recipes").
-// This version fixes inventory purge so blueprint / overpowered
-// capsules are actually detected and removed slot-by-slot.
+// Pure ASCII file so KubeJS UTF-8 reader never hits MalformedInputException.
+//
+// Removes blueprint + overpowered Capsule recipes and deletes ONLY those
+// banned capsule stacks from inventories / ender chests / ground.
 //
 // SAFETY:
 // - Never runs minecraft:clear
 // - Never clears a whole inventory
 // - Only replaces a slot after confirming that slot is a banned capsule
+//
+// /kubejs hand example for OP capsule:
+// Item.of('capsule:capsule', '{color:16777215,overpowered:1,size:1,state:0}')
 
 console.info("[Capsule Disable] script file evaluating...");
 
@@ -46,7 +50,6 @@ function isCapsuleStack(stack) {
         return false;
     }
 
-    // KubeJS-friendly matchers first.
     try {
         if (stack.is && stack.is("capsule:capsule")) return true;
     } catch (eIs) {}
@@ -66,12 +69,8 @@ function nbtHasKey(tag, key) {
 }
 
 /*
- * /kubejs hand shows: Item.of('capsule:capsule',
- * '{color:16777215,overpowered:1,size:1,state:0}')
- *
- * Capsule's Java API reads overpowered as a BYTE (1b), but many items
- * (and KubeJS SNBT) store it as INT 1. getByte() then returns 0 and the
- * old purge missed them. Accept byte, int, short, and KubeJS property.
+ * Capsule Java API reads overpowered as BYTE (1b), but /kubejs hand and
+ * many items store INT 1. Accept byte, int, short, property, and SNBT.
  */
 function isOverpoweredNbt(tag, stack) {
     if (tag == null && stack == null) return false;
@@ -102,7 +101,6 @@ function isOverpoweredNbt(tag, stack) {
             if (values[i] == 1) return true;
         }
 
-        // contains("overpowered") with truthy/1-like SNBT from KubeJS
         if (nbtHasKey(tag, "overpowered")) {
             try {
                 var raw = String(tag.overpowered);
@@ -111,7 +109,6 @@ function isOverpoweredNbt(tag, stack) {
         }
     }
 
-    // Last resort: SNBT / toString from the held-item format.
     try {
         var snbt = "";
         if (stack != null && stack.nbtString) snbt = String(stack.nbtString);
@@ -129,11 +126,6 @@ function isOverpoweredNbt(tag, stack) {
     return false;
 }
 
-/*
- * Banned when:
- * - overpowered:1 / 1b (INT or BYTE — see /kubejs hand)
- * - blueprint sourceInventory key (even empty {})
- */
 function isBannedCapsule(stack) {
     if (!isCapsuleStack(stack)) return false;
 
@@ -156,7 +148,7 @@ function isBannedCapsule(stack) {
 
     if (isOverpoweredNbt(tag, stack)) return true;
 
-    // Blueprint: ANY sourceInventory key, including empty compound.
+    // Blueprint marker used by Capsule: sourceInventory key (even empty {}).
     if (tag != null && nbtHasKey(tag, "sourceInventory")) return true;
 
     return false;
@@ -205,7 +197,6 @@ function containerSize(container) {
     try {
         if (container.slots != null) return Number(container.slots);
     } catch (e3) {}
-    // Player inventory fallback: 41 slots (main + armor + offhand).
     return 41;
 }
 
@@ -253,7 +244,6 @@ function purgePlayerCapsules(player, announce) {
 
     var removed = 0;
 
-    // Prefer vanilla inventory APIs, then KubeJS inventory wrapper.
     try {
         removed += purgeContainer(player.getInventory(), "inventory");
     } catch (eInv) {
@@ -274,7 +264,6 @@ function purgePlayerCapsules(player, announce) {
         } catch (eEnder2) {}
     }
 
-    // Cursor / offhand extras on some wrappers.
     try {
         if (player.mainHandItem && isBannedCapsule(player.mainHandItem)) {
             player.setMainHandItem(emptyStack());
@@ -337,7 +326,6 @@ PlayerEvents.tick(function (event) {
     }
 });
 
-// Stop banned capsules from being used even if one slips through.
 ItemEvents.rightClicked("capsule:capsule", function (event) {
     try {
         if (isBannedCapsule(event.item)) {
