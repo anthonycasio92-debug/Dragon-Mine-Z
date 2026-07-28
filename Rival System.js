@@ -1,11 +1,14 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.5
+ Version: 4.6.6
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Rival path synced with Command Handler: silent /rival = Unknown;
+   both silent = Declared; /rival declare = Mutual path;
+   Nemesis after 3+ death losses (not damage/timer losses).
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
    announce locks). Root scripts were missing the rival-v4 spam fix.
  - Only the challenger tick starts FIGHT so both fighters do not
@@ -66,20 +69,16 @@ var RC_VERSION = 4;
 var RC_COLOR = "\u00A7";
 
 /*
- Rival relationship statuses (per-link) - original concept:
-  unknown  - incoming (they declared you / pending invite); unlimited
-  declared - you declared them (one-sided or reciprocated); unlimited
-  mutual   - both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
-  nemesis  - auto from mutual history score; one per player
+ Rival relationship statuses (per-link) - must match Command Handler:
+  unknown  - silent /rival one-sided, or pending visible declare
+  declared - both players silently /rival each other
+  mutual   - both /rival declare (or accept); max RC_MAX_MUTUAL_RIVALS
+  nemesis  - mutual + 3 or more DEATH losses to that rival (one per player)
 
-  Command status labels live in Rival Command Handler.js and must match:
-  /rival declare = Declared (silent). /rival both = Declared (reciprocated).
-  Unknown is only for incoming links, never for "I just declared them".
-  nemesis  - your single greatest mutual rival (history-chosen, only ONE)
-
- If a 3rd mutual would form, the oldest mutual is demoted automatically.
- Nemesis is recomputed from battles / wins / losses / rivalry age - not an RP gate.
+ Benefits require declaredByMe (you rivaled them). Incoming-only links
+ get no presence TP. Damage/timer losses never crown a Nemesis.
 */
+var RC_NEMESIS_DEATH_LOSSES = 3;
 var RC_MAX_MUTUAL_RIVALS = 2;
 var RC_REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var RC_DECLARE_COOLDOWN_MS = 30 * 1000;
@@ -363,8 +362,13 @@ function rcLinkStatus(link) {
         if (link.isNemesis === true) return "nemesis";
         return "mutual";
     }
-    if (link.declaredByMe === true) return "declared";
-    if (link.declaredByThem === true) return "unknown";
+    if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
+    if (link.declaredByMe === true ||
+        link.declaredByThem === true ||
+        link.inviteSent === true ||
+        link.inviteReceived === true) {
+        return "unknown";
+    }
     return "none";
 }
 
@@ -401,6 +405,8 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.damageTaken = rcNumber(link.damageTaken, 0);
     link.timeFoughtMs = rcNumber(link.timeFoughtMs, 0);
     link.battles = rcNumber(link.battles, link.wins + link.losses + link.draws);
+    link.deathLosses = rcNumber(link.deathLosses, 0);
+    link.deathWins = rcNumber(link.deathWins, 0);
     link.presenceMs = rcNumber(link.presenceMs, 0);
     link.createdAt = rcNumber(link.createdAt, rcNow());
     link.firstMetAt = rcNumber(link.firstMetAt, link.createdAt);
@@ -888,20 +894,12 @@ function rcCountByStatus(record, status) {
     return count;
 }
 
-/* History score: fight most, beat most, lose most, longest rivalry. */
+/* Nemesis requires Mutual + enough DEATH losses to that rival. */
 function rcNemesisScore(link) {
     if (link === null || link.mutual !== true) return -1;
-    var battles = rcNumber(link.battles, 0);
-    if (battles <= 0) battles = rcNumber(link.wins, 0) + rcNumber(link.losses, 0) + rcNumber(link.draws, 0);
-    var ageMs = Math.max(0, rcNow() - rcNumber(link.mutualSince, link.firstMetAt || link.createdAt || 0));
-    var ageDays = ageMs / RC_MS_PER_DAY;
-    var foughtMin = rcNumber(link.timeFoughtMs, 0) / 60000.0;
-    return battles * 10 +
-        rcNumber(link.wins, 0) * 5 +
-        rcNumber(link.losses, 0) * 3 +
-        rcNumber(link.points, 0) * 0.05 +
-        ageDays * 2 +
-        foughtMin;
+    var deathLosses = rcNumber(link.deathLosses, 0);
+    if (deathLosses < RC_NEMESIS_DEATH_LOSSES) return -1;
+    return deathLosses * 1000 + rcNumber(link.deathWins, 0);
 }
 
 function rcRecomputeNemesis(record) {
@@ -922,14 +920,6 @@ function rcRecomputeNemesis(record) {
         }
     }
 
-    /* Need real history before crowning a Nemesis (at least one official battle). */
-    if (bestUuid !== null) {
-        var best = record.rivals[bestUuid];
-        var fights = rcNumber(best.battles, 0);
-        if (fights <= 0) fights = rcNumber(best.wins, 0) + rcNumber(best.losses, 0) + rcNumber(best.draws, 0);
-        if (fights <= 0) bestUuid = null;
-    }
-
     if (bestUuid !== null) {
         record.rivals[bestUuid].isNemesis = true;
         record.nemesisUuid = bestUuid;
@@ -948,7 +938,8 @@ function rcRecomputeNemesis(record) {
         if (online !== null) {
             rcMessage(online, RC_COLOR + "c" + RC_COLOR + "lNEMESIS! " +
                 RC_COLOR + "e" + record.rivals[bestUuid].name +
-                RC_COLOR + "7 is now your greatest rival.");
+                RC_COLOR + "7 - fallen to them " +
+                rcNumber(record.rivals[bestUuid].deathLosses, 0) + "+ times by death.");
         }
     }
     return bestUuid;
@@ -1470,10 +1461,11 @@ function rcHelp(player) {
         RC_COLOR + "eDeclared " + RC_COLOR + "8> " + RC_COLOR + "6Mutual " + RC_COLOR + "8> " +
         RC_COLOR + "cNemesis");
     rcMessage(player, RC_COLOR + "8Slots  " + RC_COLOR + "f2 Mutual max" + RC_COLOR + "8  |  " +
-        RC_COLOR + "7Nemesis from history");
+        RC_COLOR + "cNemesis after " + RC_NEMESIS_DEATH_LOSSES + "+ death losses");
     rcMessage(player, " ");
     rcMessage(player, RC_COLOR + "6Rivalry");
-    rcMessage(player, RC_COLOR + "e  /rival <player>" + RC_COLOR + "8  declare");
+    rcMessage(player, RC_COLOR + "e  /rival <player>" + RC_COLOR + "8  silent Unknown");
+    rcMessage(player, RC_COLOR + "e  /rival declare <player>" + RC_COLOR + "8  visible -> Mutual");
     rcMessage(player, RC_COLOR + "e  /rival accept|decline|remove <player>");
     rcMessage(player, RC_COLOR + "e  /rival list" + RC_COLOR + "8  rivals + proving grounds");
     rcMessage(player, RC_COLOR + "e  /rival stats [player]");
@@ -2318,15 +2310,15 @@ function rpProcessPlayer(player) {
                 var presenceTp = 0;
 
                 /*
-                 * You declared them  -> "declared" -> get TP near them.
-                 * They declared you  -> "unknown"  -> no TP (unless enabled).
+                 * Benefits only if YOU rivaled them (declaredByMe).
+                 * Silent Unknown, Declared, Mutual, Nemesis all qualify when you declared.
+                 * Incoming-only / ignored declares get nothing.
                  */
-                if (pStatus === "declared") {
+                if (link.mutual === true) {
+                    if (pStatus === "nemesis") presenceTp = RP_PRESENCE_TP_NEMESIS;
+                    else presenceTp = RP_PRESENCE_TP_MUTUAL;
+                } else if (link.declaredByMe === true) {
                     presenceTp = RP_PRESENCE_TP_ONE_SIDED;
-                } else if (pStatus === "mutual") {
-                    presenceTp = RP_PRESENCE_TP_MUTUAL;
-                } else if (pStatus === "nemesis") {
-                    presenceTp = RP_PRESENCE_TP_NEMESIS;
                 } else if (pStatus === "unknown" && RP_PRESENCE_TP_UNKNOWN === true) {
                     presenceTp = RP_PRESENCE_TP_ONE_SIDED;
                 }
@@ -2342,11 +2334,11 @@ function rpProcessPlayer(player) {
                 }
             }
             if (RP_PRESENCE_RP_ENABLED === true) {
-                var presenceStatus = rcLinkStatus(link);
-                if (presenceStatus !== "unknown") {
+                /* RP presence only for people who rivaled (declaredByMe) or Mutual. */
+                if (link.declaredByMe === true || link.mutual === true) {
                     var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
-                    if (presenceStatus === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
-                    if (presenceStatus === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
+                    if (link.mutual === true) presenceRp = RP_PRESENCE_RP_MUTUAL;
+                    if (rcLinkStatus(link) === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
                     rpAwardPoints(record, rivalUuid, presenceRp, "presence");
                 }
             }
@@ -3247,6 +3239,8 @@ function chEnsureLink(owner, target) {
             losses: 0,
             draws: 0,
             battles: 0,
+            deathLosses: 0,
+            deathWins: 0,
             currentStreak: 0,
             bestStreak: 0,
             damageDealt: 0,
@@ -3869,7 +3863,23 @@ function chApplyRewards(player, session, result) {
         winnerRecord.rivals[loserRecord.uuid].wins++;
         loserRecord.rivals[winnerRecord.uuid].losses++;
 
-        var winRp = 0;
+        /*
+         * Nemesis tracks DEATH / knockout losses only.
+         * Timer or damage-dealt decisions do not increment deathLosses.
+         */
+        var deathLoss = result.knockout === true ||
+            result.reason === "knockout" ||
+            result.reason === "death";
+        if (deathLoss) {
+            var wLink = winnerRecord.rivals[loserRecord.uuid];
+            var lLink = loserRecord.rivals[winnerRecord.uuid];
+            wLink.deathWins = chNumber(wLink.deathWins, 0) + 1;
+            lLink.deathLosses = chNumber(lLink.deathLosses, 0) + 1;
+        }
+        if (mutual) {
+            rcRecomputeNemesis(winnerRecord);
+            rcRecomputeNemesis(loserRecord);
+        }
         var loseRp = 0;
         if (mutual) {
             winRp = CH_WIN_RP;
