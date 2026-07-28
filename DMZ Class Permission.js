@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.1.0
+ * Version: 3.1.1
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -177,10 +177,22 @@ function containsValue(array, value) {
         return false;
     }
 
-    var wanted = ("" + value).toLowerCase();
+    /*
+     * Case / spacing insensitive:
+     * "Martial Artist", "martial artist", "martialartist"
+     */
+    var wanted = normalizeName(value);
+    if (wanted == "") {
+        wanted = ("" + value).toLowerCase();
+    }
+
     var i;
     for (i = 0; i < array.length; i++) {
-        if (("" + array[i]).toLowerCase() == wanted) {
+        var entry = normalizeName(array[i]);
+        if (entry == "") {
+            entry = ("" + array[i]).toLowerCase();
+        }
+        if (entry == wanted) {
             return true;
         }
     }
@@ -535,10 +547,27 @@ function getDMZClass(player) {
  * SKILL SEARCH
  * ============================================================
  *
+ * All skill matching is case-insensitive (and ignores spaces,
+ * underscores, hyphens via normalizeName).
+ *
  * Finds the registered base Fabled skill matching the DMZ
  * class ID (martialartist -> Martial Artist, warrior -> Warrior).
  * Never matches "... Prestige" as the base skill.
  */
+
+function namesMatchIgnoreCase(a, b) {
+    if (a == null || b == null) {
+        return false;
+    }
+
+    var na = normalizeName(a);
+    var nb = normalizeName(b);
+    if (na != "" && nb != "" && na == nb) {
+        return true;
+    }
+
+    return ("" + a).toLowerCase() == ("" + b).toLowerCase();
+}
 
 function findBaseSkill(skills, dmzClass) {
     if (skills == null || dmzClass == null) {
@@ -573,9 +602,76 @@ function findBaseSkill(skills, dmzClass) {
         } catch (keyError) {}
 
         if (
+            namesMatchIgnoreCase(skillName, dmzClass) ||
+            namesMatchIgnoreCase(skillKey, dmzClass) ||
             normalizeName(skillName) == normalizedClass ||
             normalizeName(skillKey) == normalizedClass
         ) {
+            return skill;
+        }
+    }
+
+    return null;
+}
+
+/*
+ * Find "<Class> Prestige" in the registered skill list without
+ * caring about capitalization (Warrior Prestige / warrior prestige).
+ */
+function findPrestigeSkill(skills, baseSkillName) {
+    if (
+        skills == null ||
+        baseSkillName == null ||
+        baseSkillName == ""
+    ) {
+        return null;
+    }
+
+    var wanted = normalizeName(
+        "" + baseSkillName + PRESTIGE_SKILL_SUFFIX
+    );
+    if (wanted == "") {
+        return null;
+    }
+
+    var i;
+    for (i = 0; i < skills.length; i++) {
+        var skill = skills[i];
+        if (skill == null) {
+            continue;
+        }
+
+        var skillName = "" + skill.getName();
+        if (
+            !endsWithIgnoreCase(
+                skillName,
+                PRESTIGE_SKILL_SUFFIX
+            )
+        ) {
+            continue;
+        }
+
+        var skillKey = "";
+        try {
+            skillKey = "" + skill.getKey();
+        } catch (keyError) {}
+
+        if (
+            normalizeName(skillName) == wanted ||
+            normalizeName(skillKey) == wanted
+        ) {
+            return skill;
+        }
+
+        /*
+         * Also accept prestige skills whose base portion matches
+         * the class name (e.g. base "Warrior", skill "warrior prestige").
+         */
+        var baseFromPrestige = skillName.substring(
+            0,
+            skillName.length - PRESTIGE_SKILL_SUFFIX.length
+        );
+        if (namesMatchIgnoreCase(baseFromPrestige, baseSkillName)) {
             return skill;
         }
     }
@@ -588,9 +684,12 @@ function findBaseSkill(skills, dmzClass) {
  * ============================================================
  * PRESTIGE CHECK
  * ============================================================
+ *
+ * Case-insensitive. Tries the constructed name, then scans
+ * registered skills for any casing of "<Class> Prestige".
  */
 
-function getPrestigeSkillLevel(fabledData, baseSkillName) {
+function getPrestigeSkillLevel(fabledData, baseSkillName, skills) {
     if (
         fabledData == null ||
         baseSkillName == null ||
@@ -599,23 +698,61 @@ function getPrestigeSkillLevel(fabledData, baseSkillName) {
         return 0;
     }
 
-    var prestigeSkillName =
-        "" + baseSkillName + PRESTIGE_SKILL_SUFFIX;
     var level = 0;
+    var tried = [];
 
-    try {
-        level = Number(
-            fabledData.getSkillLevel(prestigeSkillName)
-        );
-    } catch (e) {
-        level = 0;
+    function tryLevel(skillLabel) {
+        if (
+            skillLabel == null ||
+            skillLabel == "" ||
+            containsValue(tried, skillLabel)
+        ) {
+            return 0;
+        }
+        addUnique(tried, skillLabel);
+
+        try {
+            var value = Number(
+                fabledData.getSkillLevel(skillLabel)
+            );
+            if (!isNaN(value) && value > 0) {
+                return Math.floor(value);
+            }
+        } catch (e) {}
+
+        return 0;
     }
 
-    if (isNaN(level) || level < 0) {
-        level = 0;
+    /* Direct attempts - Fabled itself lowercases, but try variants. */
+    level = tryLevel("" + baseSkillName + PRESTIGE_SKILL_SUFFIX);
+    if (level >= 1) {
+        return level;
+    }
+    level = tryLevel(
+        ("" + baseSkillName + PRESTIGE_SKILL_SUFFIX).toLowerCase()
+    );
+    if (level >= 1) {
+        return level;
     }
 
-    return Math.floor(level);
+    /* Scan registered skills case-insensitively for the real name/key. */
+    var prestigeSkill = findPrestigeSkill(skills, baseSkillName);
+    if (prestigeSkill != null) {
+        var realName = "" + prestigeSkill.getName();
+        level = tryLevel(realName);
+        if (level >= 1) {
+            return level;
+        }
+
+        try {
+            level = tryLevel("" + prestigeSkill.getKey());
+            if (level >= 1) {
+                return level;
+            }
+        } catch (keyErr) {}
+    }
+
+    return 0;
 }
 
 
@@ -763,7 +900,8 @@ function synchronizeClassPermission(player) {
          */
         var oldPrestigeLevel = getPrestigeSkillLevel(
             fabled.data,
-            oldSkillName
+            oldSkillName,
+            fabled.skills
         );
         if (oldPrestigeLevel >= 1) {
             if (
