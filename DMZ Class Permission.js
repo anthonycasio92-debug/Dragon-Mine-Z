@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.2.0
+ * Version: 3.2.1
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -23,6 +23,8 @@
  *   for CLASS_CONFIRM_TIME_MS (same idea as Spiritualist Ki
  *   Control). Browsing classes resets the timer; leaving the
  *   menu or settling a wish applies the final current class.
+ * - Unloaded / missing DMZ data does NOT reset the timer and
+ *   does NOT unset permissions (avoids never-assigning).
  *
  * EXAMPLES:
  *   DMZ class ID:   warrior
@@ -85,9 +87,15 @@ var FABLED_SKILL_PERMISSION_ROOT = "fabled.skill.";
  * How long the DMZ class must stay unchanged before LuckPerms
  * set/unset runs. Covers character-menu browsing and Dragon
  * Ball recustomize wishes (both apply class on every preview).
- * Matches Spirtualist Ki Control.js.
+ * Slightly shorter than Spiritualist's 10s so permissions
+ * assign soon after leaving the menu / finishing a wish.
  */
-var CLASS_CONFIRM_TIME_MS = 10000;
+var CLASS_CONFIRM_TIME_MS = 5000;
+
+/*
+ * java.lang.System - same as Spirtualist Ki Control.js
+ */
+var System = Java.type("java.lang.System");
 
 /*
  * Keep false on live. When true, messages only fire on
@@ -135,6 +143,13 @@ var LAST_SEEN_CLASS_KEY =
 
 var CLASS_STABLE_SINCE_KEY =
     "dmz_fabled_class_permissions_v3_class_stable_since";
+
+/*
+ * Last class that successfully completed a permission sync.
+ * Used so we can force-set when the settled class is new.
+ */
+var LAST_SYNCED_CLASS_KEY =
+    "dmz_fabled_class_permissions_v3_last_synced_class";
 
 
 /*
@@ -626,65 +641,84 @@ function getFabledContext(player) {
  * ============================================================
  * DMZ CONNECTION
  * ============================================================
+ *
+ * Returns:
+ *   { ready: false, className: "" }
+ *     when stats/character are not available yet
+ *   { ready: true, className: "warrior" }
+ *     when the character exists and class can be trusted
+ *
+ * ready:false must NOT reset the confirm timer and must NOT
+ * unset permissions - that was causing grants to never stick.
  */
 
-function getDMZClass(player) {
-    var StatsProvider = Java.type(
-        "com.dragonminez.common.stats.StatsProvider"
-    );
-    var StatsCapability = Java.type(
-        "com.dragonminez.common.stats.StatsCapability"
-    );
-
-    var mcPlayer = player.getMCEntity
-        ? player.getMCEntity()
-        : null;
-    if (mcPlayer == null) {
-        return "";
-    }
-
-    var lazy = StatsProvider.get(
-        StatsCapability.INSTANCE,
-        mcPlayer
-    );
-    if (lazy == null) {
-        return "";
-    }
-
-    var dmzData = lazy.orElse(null);
-    if (dmzData == null) {
-        return "";
-    }
+function getDMZClassState(player) {
+    var notReady = { ready: false, className: "" };
 
     try {
-        if (!dmzData.isDataLoaded()) {
-            return "";
+        var StatsProvider = Java.type(
+            "com.dragonminez.common.stats.StatsProvider"
+        );
+        var StatsCapability = Java.type(
+            "com.dragonminez.common.stats.StatsCapability"
+        );
+
+        /*
+         * Match Spirtualist Ki Control.js: fall back to the CNPC
+         * player wrapper when getMCEntity() is unavailable.
+         */
+        var mcPlayer = player.getMCEntity
+            ? player.getMCEntity()
+            : player;
+        if (mcPlayer == null) {
+            return notReady;
         }
-    } catch (e) {
-        return "";
-    }
 
-    try {
-        var status = dmzData.getStatus();
-        if (
-            status == null ||
-            !status.isHasCreatedCharacter()
-        ) {
-            return "";
+        var lazy = StatsProvider.get(
+            StatsCapability.INSTANCE,
+            mcPlayer
+        );
+        if (lazy == null) {
+            return notReady;
         }
-    } catch (e2) {
-        return "";
-    }
 
-    try {
+        var dmzData = lazy.orElse(null);
+        if (dmzData == null) {
+            return notReady;
+        }
+
+        try {
+            if (!dmzData.isDataLoaded()) {
+                return notReady;
+            }
+        } catch (e) {
+            return notReady;
+        }
+
+        try {
+            var status = dmzData.getStatus();
+            if (
+                status == null ||
+                !status.isHasCreatedCharacter()
+            ) {
+                return notReady;
+            }
+        } catch (e2) {
+            return notReady;
+        }
+
         var character = dmzData.getCharacter();
         if (character == null) {
-            return "";
+            return notReady;
         }
 
         var className = character.getCharacterClass();
         if (className == null) {
-            return "";
+            /*
+             * Character exists but class is null - treat as ready
+             * empty only if stringifies to blank; otherwise not ready.
+             */
+            return { ready: true, className: "" };
         }
 
         className = ("" + className).trim();
@@ -692,13 +726,21 @@ function getDMZClass(player) {
             className == "" ||
             className.toLowerCase() == "null"
         ) {
-            return "";
+            return { ready: true, className: "" };
         }
 
-        return className;
+        return { ready: true, className: className };
     } catch (e3) {
+        return notReady;
+    }
+}
+
+function getDMZClass(player) {
+    var state = getDMZClassState(player);
+    if (state == null || !state.ready) {
         return "";
     }
+    return state.className;
 }
 
 
@@ -950,6 +992,14 @@ function runLuckPermsCommand(
         " " +
         permission;
 
+    /*
+     * LuckPerms accepts an explicit true/false on set. Using
+     * true avoids ambiguous parses on some LP versions.
+     */
+    if (operation == "set") {
+        command += " true";
+    }
+
     var accepted = fabledContext.bukkit.dispatchCommand(
         fabledContext.bukkit.getConsoleSender(),
         command
@@ -1004,17 +1054,30 @@ function playerHasPermission(fabledContext, permission) {
 
 function getNowMs() {
     try {
-        return Number(
-            Java.type("java.lang.System").currentTimeMillis()
-        );
+        return System.currentTimeMillis();
     } catch (e) {
         return 0;
     }
 }
 
+function readTempNumber(temp, key, fallback) {
+    try {
+        if (temp == null || !temp.has(key)) {
+            return fallback;
+        }
+        var value = Number("" + temp.get(key));
+        if (isNaN(value)) {
+            return fallback;
+        }
+        return value;
+    } catch (e) {
+        return fallback;
+    }
+}
+
 /*
  * Returns true only after dmzClass has been unchanged for
- * CLASS_CONFIRM_TIME_MS. Any class change (menu browse or
+ * CLASS_CONFIRM_TIME_MS. Any real class change (menu browse or
  * wish) restarts the timer.
  */
 function isDmzClassConfirmed(player, dmzClass, now) {
@@ -1022,8 +1085,12 @@ function isDmzClassConfirmed(player, dmzClass, now) {
         return false;
     }
 
-    if (now == null || isNaN(now) || now <= 0) {
+    if (now == null || isNaN(Number("" + now)) || Number("" + now) <= 0) {
         now = getNowMs();
+    }
+    now = Number("" + now);
+    if (isNaN(now) || now <= 0) {
+        return false;
     }
 
     var temp = player.getTempdata();
@@ -1062,21 +1129,16 @@ function isDmzClassConfirmed(player, dmzClass, now) {
         return false;
     }
 
-    var stableSince = now;
-    try {
-        if (temp.has(CLASS_STABLE_SINCE_KEY)) {
-            stableSince = Number(
-                "" + temp.get(CLASS_STABLE_SINCE_KEY)
-            );
-            if (isNaN(stableSince) || stableSince <= 0) {
-                stableSince = now;
-                temp.put(CLASS_STABLE_SINCE_KEY, "" + now);
-            }
-        } else {
+    var stableSince = readTempNumber(
+        temp,
+        CLASS_STABLE_SINCE_KEY,
+        0
+    );
+
+    if (stableSince <= 0) {
+        try {
             temp.put(CLASS_STABLE_SINCE_KEY, "" + now);
-            return false;
-        }
-    } catch (stableErr) {
+        } catch (e) {}
         return false;
     }
 
@@ -1096,18 +1158,27 @@ function isDmzClassConfirmed(player, dmzClass, now) {
 
 function synchronizeClassPermission(player) {
     var temp = player.getTempdata();
+    var now = getNowMs();
 
-    var fabled = getFabledContext(player);
-    if (fabled == null) {
-        /*
-         * Not ready yet (join, reload, Fabled init). Retry next
-         * tick with no player-facing error spam.
-         */
+    /*
+     * Observe DMZ class before Fabled. Unready data must not
+     * reset the confirm timer or strip permissions.
+     */
+    var classState = getDMZClassState(player);
+    if (classState == null || !classState.ready) {
         return;
     }
 
-    var dmzClass = getDMZClass(player);
-    var now = getNowMs();
+    var dmzClass = classState.className;
+
+    /*
+     * DMZ characters always have a class id (default warrior).
+     * A blank class means bad/partial reads - ignore it so we
+     * do not reset the confirm timer or strip permissions.
+     */
+    if (dmzClass == null || dmzClass == "") {
+        return;
+    }
 
     /*
      * Do not set/unset while the player is still flipping
@@ -1115,6 +1186,15 @@ function synchronizeClassPermission(player) {
      * the current class stays put, sync that final class.
      */
     if (!isDmzClassConfirmed(player, dmzClass, now)) {
+        return;
+    }
+
+    var fabled = getFabledContext(player);
+    if (fabled == null) {
+        /*
+         * Class is already confirmed; wait for Fabled without
+         * clearing the timer so the grant still happens.
+         */
         return;
     }
 
@@ -1231,28 +1311,42 @@ function synchronizeClassPermission(player) {
                     currentSkillName
                 );
 
-                if (!wasManaged) {
-                    runLuckPermsCommand(
-                        player,
-                        fabled,
-                        "set",
-                        currentPermission
-                    );
-                } else if (
-                    !playerHasPermission(
-                        fabled,
-                        currentPermission
-                    )
+                var lastSyncedClass = "";
+                try {
+                    if (
+                        temp != null &&
+                        temp.has(LAST_SYNCED_CLASS_KEY)
+                    ) {
+                        lastSyncedClass =
+                            "" + temp.get(LAST_SYNCED_CLASS_KEY);
+                    }
+                } catch (syncReadErr) {}
+
+                var classAlreadySynced =
+                    normalizeName(lastSyncedClass) ==
+                    normalizeName(dmzClass);
+
+                var hasPermission = playerHasPermission(
+                    fabled,
+                    currentPermission
+                );
+
+                /*
+                 * Always grant when:
+                 * - first time managing this class skill
+                 * - permission is missing
+                 * - settled DMZ class differs from last sync
+                 *   (menu/wish finished on a new class)
+                 */
+                if (
+                    !wasManaged ||
+                    !hasPermission ||
+                    !classAlreadySynced
                 ) {
                     runLuckPermsCommand(
                         player,
                         fabled,
                         "set",
-                        currentPermission
-                    );
-                    sendDebug(
-                        player,
-                        "Re-applied missing permission: \u00A7f" +
                         currentPermission
                     );
                 }
@@ -1272,6 +1366,12 @@ function synchronizeClassPermission(player) {
     if (lockedChanged) {
         writeLockedPrestigeSkills(player, lockedPrestige);
     }
+
+    try {
+        if (temp != null) {
+            temp.put(LAST_SYNCED_CLASS_KEY, "" + dmzClass);
+        }
+    } catch (syncPutErr) {}
 
     var state =
         normalizeName(dmzClass) +
