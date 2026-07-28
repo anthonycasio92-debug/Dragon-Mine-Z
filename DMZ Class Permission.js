@@ -1,36 +1,37 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.0.0
+ * Version: 3.1.0
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
  *
  * PURPOSE:
- * - Reads the player's current DMZ class.
- * - Finds the registered Fabled skill with the matching name/key.
- * - Grants that Fabled skill permission through LuckPerms.
- * - Removes old class permissions when the player changes class.
- * - Preserves a permission when the player owns the matching
- *   "<Class Name> Prestige" Fabled skill.
+ * - When a player chooses a DMZ class, grant the Fabled skill
+ *   permission for the matching class name.
+ * - When the player changes class, remove temporary class
+ *   permissions that are no longer current.
+ * - If the player has a Fabled skill titled
+ *   "<Class Name> Prestige", lock that class permission
+ *   permanently and STOP checking Prestige for it.
  *
  * EXAMPLES:
- *   DMZ class ID:  warrior
- *   Fabled skill:  Warrior
- *   Permission:    fabled.skill.warrior
- *   Command:       lp user PlayerName permission set fabled.skill.warrior
+ *   DMZ class ID:   warrior
+ *   Fabled skill:   Warrior
+ *   Permission:     fabled.skill.warrior
+ *   Prestige skill: Warrior Prestige
  *
- *   DMZ class ID:  martialartist
- *   Fabled skill:  Martial Artist
- *   Permission:    fabled.skill.martial-artist
+ *   DMZ class ID:   martialartist
+ *   Fabled skill:   Martial Artist
+ *   Permission:     fabled.skill.martial-artist
  *   Prestige skill: Martial Artist Prestige
  *
  * PRESTIGE RULE:
- * - No Prestige skill: current class permission is added,
- *   old class permissions are removed.
- * - Owns "<Class> Prestige": that permission is not added or
- *   removed by this script; a previously managed permission
- *   is retained.
+ * - No Prestige yet: permission follows current DMZ class
+ *   (set on choose, unset on leave).
+ * - Once "<Class> Prestige" is owned (level >= 1):
+ *   permission is kept forever and this script never checks
+ *   that Prestige skill again for that class.
  *
  * IMPORTANT:
  * The corresponding base Fabled skills must have:
@@ -86,10 +87,18 @@ var DEBUG = false;
 
 /*
  * Persists through logout/restart.
- * Pipe-separated base Fabled skill names this script managed.
+ * Pipe-separated base Fabled skill names with TEMPORARY
+ * class permissions (no Prestige yet).
  */
 var MANAGED_SKILLS_KEY =
     "dmz_fabled_class_permissions_v3_managed";
+
+/*
+ * Classes whose "<Name> Prestige" skill was confirmed once.
+ * Permission stays forever. Never re-check Prestige for these.
+ */
+var LOCKED_PRESTIGE_KEY =
+    "dmz_fabled_class_permissions_v3_prestige_locked";
 
 var TICK_KEY =
     "dmz_fabled_class_permissions_v3_tick";
@@ -220,23 +229,20 @@ function getSkillPermission(skillName) {
 
 /*
  * ============================================================
- * MANAGED SKILL STORAGE
+ * MANAGED / LOCKED SKILL STORAGE
  * ============================================================
  */
 
-function readManagedSkills(player) {
+function readSkillList(player, key) {
     var result = [];
 
     try {
         var stored = player.getStoreddata();
-        if (
-            stored == null ||
-            !stored.has(MANAGED_SKILLS_KEY)
-        ) {
+        if (stored == null || !stored.has(key)) {
             return result;
         }
 
-        var raw = "" + stored.get(MANAGED_SKILLS_KEY);
+        var raw = "" + stored.get(key);
         if (raw == "") {
             return result;
         }
@@ -254,7 +260,7 @@ function readManagedSkills(player) {
     return result;
 }
 
-function writeManagedSkills(player, skills) {
+function writeSkillList(player, key, skills) {
     try {
         var stored = player.getStoreddata();
         if (stored == null) {
@@ -275,11 +281,75 @@ function writeManagedSkills(player, skills) {
         }
 
         if (output == "") {
-            stored.remove(MANAGED_SKILLS_KEY);
+            stored.remove(key);
         } else {
-            stored.put(MANAGED_SKILLS_KEY, output);
+            stored.put(key, output);
         }
     } catch (e) {}
+}
+
+function readManagedSkills(player) {
+    return readSkillList(player, MANAGED_SKILLS_KEY);
+}
+
+function writeManagedSkills(player, skills) {
+    writeSkillList(player, MANAGED_SKILLS_KEY, skills);
+}
+
+function readLockedPrestigeSkills(player) {
+    return readSkillList(player, LOCKED_PRESTIGE_KEY);
+}
+
+function writeLockedPrestigeSkills(player, skills) {
+    writeSkillList(player, LOCKED_PRESTIGE_KEY, skills);
+}
+
+function isPrestigeLocked(lockedList, skillName) {
+    return containsValue(lockedList, skillName);
+}
+
+/*
+ * First time Prestige is confirmed: ensure permission is set,
+ * then permanently stop checking that Prestige skill.
+ */
+function lockPrestigeClass(
+    player,
+    fabled,
+    skillName,
+    lockedList
+) {
+    if (
+        skillName == null ||
+        skillName == "" ||
+        isPrestigeLocked(lockedList, skillName)
+    ) {
+        return false;
+    }
+
+    var permission = getSkillPermission(skillName);
+    if (permission == "") {
+        return false;
+    }
+
+    if (!playerHasPermission(fabled, permission)) {
+        runLuckPermsCommand(
+            player,
+            fabled,
+            "set",
+            permission
+        );
+    }
+
+    addUnique(lockedList, skillName);
+
+    sendDebug(
+        player,
+        "Prestige locked (no more checks): \u00A7f" +
+        skillName +
+        " Prestige"
+    );
+
+    return true;
 }
 
 
@@ -645,7 +715,6 @@ function synchronizeClassPermission(player) {
     var currentBaseSkill = null;
     var currentSkillName = "";
     var currentPermission = "";
-    var currentPrestigeLevel = 0;
 
     if (dmzClass != "") {
         currentBaseSkill = findBaseSkill(
@@ -659,23 +728,26 @@ function synchronizeClassPermission(player) {
             currentPermission = getSkillPermission(
                 currentSkillName
             );
-            currentPrestigeLevel = getPrestigeSkillLevel(
-                fabled.data,
-                currentSkillName
-            );
         }
     }
 
     var previousManaged = readManagedSkills(player);
+    var lockedPrestige = readLockedPrestigeSkills(player);
     var updatedManaged = [];
+    var lockedChanged = false;
 
     /*
-     * Remove old class permissions that are no longer current
-     * and are not protected by Prestige.
+     * Clean temporary permissions for classes the player left.
+     * Prestige-locked classes are never unset and never
+     * re-checked for Prestige.
      */
     var i;
     for (i = 0; i < previousManaged.length; i++) {
         var oldSkillName = "" + previousManaged[i];
+
+        if (isPrestigeLocked(lockedPrestige, oldSkillName)) {
+            continue;
+        }
 
         if (
             currentSkillName != "" &&
@@ -685,21 +757,25 @@ function synchronizeClassPermission(player) {
             continue;
         }
 
-        var oldPermission = getSkillPermission(
-            oldSkillName
-        );
+        /*
+         * One Prestige check for this old class. If owned,
+         * lock forever and stop checking it.
+         */
         var oldPrestigeLevel = getPrestigeSkillLevel(
             fabled.data,
             oldSkillName
         );
-
-        /*
-         * Prestige protects this permission.
-         * Keep tracking it so cleanup can happen later if
-         * Prestige is ever removed.
-         */
         if (oldPrestigeLevel >= 1) {
-            addUnique(updatedManaged, oldSkillName);
+            if (
+                lockPrestigeClass(
+                    player,
+                    fabled,
+                    oldSkillName,
+                    lockedPrestige
+                )
+            ) {
+                lockedChanged = true;
+            }
             continue;
         }
 
@@ -707,71 +783,74 @@ function synchronizeClassPermission(player) {
             player,
             fabled,
             "unset",
-            oldPermission
+            getSkillPermission(oldSkillName)
         );
     }
 
     /*
-     * Add or retain the current class permission.
+     * Current DMZ class -> matching Fabled class permission.
      */
     if (
         currentBaseSkill != null &&
         currentSkillName != "" &&
         currentPermission != ""
     ) {
-        var wasManaged = containsValue(
-            previousManaged,
-            currentSkillName
-        );
+        if (isPrestigeLocked(lockedPrestige, currentSkillName)) {
+            /*
+             * Already locked by Prestige - do nothing.
+             * Never re-check "<Class> Prestige" for this class.
+             */
+        } else {
+            var currentPrestigeLevel = getPrestigeSkillLevel(
+                fabled.data,
+                currentSkillName
+            );
 
-        /*
-         * Prestige owned: do not add or remove via this script.
-         * Keep tracking only if we already managed it before.
-         */
-        if (currentPrestigeLevel >= 1) {
-            if (wasManaged) {
-                addUnique(
-                    updatedManaged,
+            if (currentPrestigeLevel >= 1) {
+                if (
+                    lockPrestigeClass(
+                        player,
+                        fabled,
+                        currentSkillName,
+                        lockedPrestige
+                    )
+                ) {
+                    lockedChanged = true;
+                }
+            } else {
+                var wasManaged = containsValue(
+                    previousManaged,
                     currentSkillName
                 );
-            }
-        } else {
-            /*
-             * No Prestige - permission is temporary and tied
-             * to the current DMZ class.
-             */
-            if (!wasManaged) {
-                runLuckPermsCommand(
-                    player,
-                    fabled,
-                    "set",
-                    currentPermission
-                );
-            } else if (
-                !playerHasPermission(
-                    fabled,
-                    currentPermission
-                )
-            ) {
-                /*
-                 * Confirm Bukkit can see the permission.
-                 * If it is missing despite being tracked,
-                 * set it again on this pass.
-                 */
-                runLuckPermsCommand(
-                    player,
-                    fabled,
-                    "set",
-                    currentPermission
-                );
-                sendDebug(
-                    player,
-                    "Re-applied missing permission: \u00A7f" +
-                    currentPermission
-                );
-            }
 
-            addUnique(updatedManaged, currentSkillName);
+                if (!wasManaged) {
+                    runLuckPermsCommand(
+                        player,
+                        fabled,
+                        "set",
+                        currentPermission
+                    );
+                } else if (
+                    !playerHasPermission(
+                        fabled,
+                        currentPermission
+                    )
+                ) {
+                    runLuckPermsCommand(
+                        player,
+                        fabled,
+                        "set",
+                        currentPermission
+                    );
+                    sendDebug(
+                        player,
+                        "Re-applied missing permission: \u00A7f" +
+                        currentPermission
+                    );
+                }
+
+                addUnique(updatedManaged, currentSkillName);
+            }
         }
     } else if (dmzClass != "" && currentBaseSkill == null) {
         sendDebug(
@@ -782,15 +861,18 @@ function synchronizeClassPermission(player) {
     }
 
     writeManagedSkills(player, updatedManaged);
+    if (lockedChanged) {
+        writeLockedPrestigeSkills(player, lockedPrestige);
+    }
 
     var state =
         normalizeName(dmzClass) +
         "|" +
         normalizeName(currentSkillName) +
-        "|" +
-        currentPrestigeLevel +
-        "|" +
-        updatedManaged.join(",");
+        "|managed=" +
+        updatedManaged.join(",") +
+        "|locked=" +
+        lockedPrestige.join(",");
 
     var previousState = "";
     try {
@@ -812,12 +894,14 @@ function synchronizeClassPermission(player) {
             (currentSkillName == ""
                 ? "(none)"
                 : currentSkillName) +
-            "\u00A77 prestige=\u00A7f" +
-            currentPrestigeLevel +
-            "\u00A77 managed=\u00A7f" +
+            "\u00A77 temp=\u00A7f" +
             (updatedManaged.length == 0
                 ? "(none)"
-                : updatedManaged.join(", "))
+                : updatedManaged.join(", ")) +
+            "\u00A77 prestige-locked=\u00A7f" +
+            (lockedPrestige.length == 0
+                ? "(none)"
+                : lockedPrestige.join(", "))
         );
     }
 }
