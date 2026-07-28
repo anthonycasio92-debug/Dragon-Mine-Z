@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.1.1
+ * Version: 3.1.2
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -226,6 +226,10 @@ function getSkillPermission(skillName) {
         return "";
     }
 
+    /*
+     * Case-insensitive permission id:
+     * "Martial Artist" / "martial artist" -> fabled.skill.martial-artist
+     */
     var formatted =
         ("" + skillName)
             .toLowerCase()
@@ -372,93 +376,222 @@ function lockPrestigeClass(
  *
  * Same Bukkit + Fabled classloader pattern as Race Lock /
  * Fabled attribute scripts.
+ *
+ * Returns null quietly when Bukkit/Fabled/player data is not
+ * ready yet (common right after join). Callers must NOT throw
+ * on null - just retry next tick.
  */
 
-function getFabledContext(player) {
-    var Bukkit = Java.type("org.bukkit.Bukkit");
-    var UUID = Java.type("java.util.UUID");
+var CACHED_SKILL_LIST = null;
+var CACHED_SKILL_LIST_AT = 0;
+var SKILL_LIST_CACHE_MS = 60000;
 
-    var bukkitPlayer = Bukkit.getPlayer(
-        UUID.fromString("" + player.getUUID())
-    );
-    if (bukkitPlayer == null) {
-        return null;
-    }
-
-    var plugin =
-        Bukkit.getPluginManager().getPlugin("Fabled");
-    if (plugin == null || !plugin.isEnabled()) {
-        return null;
-    }
-
-    var loader = plugin.getClass().getClassLoader();
-    var fabledClass = loader.loadClass(
-        "studio.magemonkey.fabled.Fabled"
-    );
-
-    var getDataMethod = null;
-    var getSkillsMethod = null;
-    var methods = fabledClass.getMethods();
-    var i;
-    for (i = 0; i < methods.length; i++) {
-        var method = methods[i];
-        var methodName = String(method.getName());
-        var parameterCount =
-            method.getParameterTypes().length;
-
-        if (
-            methodName == "getData" &&
-            parameterCount == 1
-        ) {
-            getDataMethod = method;
-        }
-        if (
-            methodName == "getSkills" &&
-            parameterCount == 0
-        ) {
-            getSkillsMethod = method;
-        }
-    }
-
-    if (getDataMethod == null || getSkillsMethod == null) {
-        return null;
-    }
-
-    var fabledData = getDataMethod.invoke(
-        null,
-        bukkitPlayer
-    );
-    if (fabledData == null) {
+function invokeNoArgStatic(method) {
+    if (method == null) {
         return null;
     }
 
     try {
-        if (!fabledData.isInit()) {
-            return null;
-        }
-    } catch (ignoredInitError) {}
+        return method.invoke(null);
+    } catch (e1) {}
 
-    var emptyArguments = Java.to(
-        [],
-        "java.lang.Object[]"
-    );
-    var skillMap = getSkillsMethod.invoke(
-        null,
-        emptyArguments
-    );
+    try {
+        var empty = Java.to([], "java.lang.Object[]");
+        return method.invoke(null, empty);
+    } catch (e2) {}
+
+    try {
+        return method.invoke(null, []);
+    } catch (e3) {}
+
+    return null;
+}
+
+function getBukkitPlayer(player) {
+    var Bukkit = Java.type("org.bukkit.Bukkit");
+    var UUID = Java.type("java.util.UUID");
+
+    try {
+        var byUuid = Bukkit.getPlayer(
+            UUID.fromString("" + player.getUUID())
+        );
+        if (byUuid != null) {
+            return { bukkit: Bukkit, bukkitPlayer: byUuid };
+        }
+    } catch (e1) {}
+
+    try {
+        var byName = Bukkit.getPlayerExact("" + player.getName());
+        if (byName != null) {
+            return { bukkit: Bukkit, bukkitPlayer: byName };
+        }
+    } catch (e2) {}
+
+    try {
+        var byName2 = Bukkit.getPlayer("" + player.getName());
+        if (byName2 != null) {
+            return { bukkit: Bukkit, bukkitPlayer: byName2 };
+        }
+    } catch (e3) {}
+
+    return null;
+}
+
+function loadRegisteredSkills(fabledClass, getSkillsMethod) {
+    var now = 0;
+    try {
+        now = Number(
+            Java.type("java.lang.System").currentTimeMillis()
+        );
+    } catch (tErr) {
+        now = 0;
+    }
+
+    if (
+        CACHED_SKILL_LIST != null &&
+        now > 0 &&
+        now - CACHED_SKILL_LIST_AT < SKILL_LIST_CACHE_MS
+    ) {
+        return CACHED_SKILL_LIST;
+    }
+
+    var skillMap = null;
+
+    if (getSkillsMethod != null) {
+        skillMap = invokeNoArgStatic(getSkillsMethod);
+    }
+
+    if (skillMap == null) {
+        try {
+            skillMap = fabledClass
+                .getMethod("getSkills")
+                .invoke(null);
+        } catch (e2) {}
+    }
+
     if (skillMap == null) {
         return null;
     }
 
-    var skills = skillMap.values().toArray();
+    var skills = null;
+    try {
+        skills = skillMap.values().toArray();
+    } catch (arrErr) {
+        try {
+            var list = [];
+            var it = skillMap.values().iterator();
+            while (it.hasNext()) {
+                list[list.length] = it.next();
+            }
+            skills = list;
+        } catch (iterErr) {
+            return null;
+        }
+    }
 
-    return {
-        bukkit: Bukkit,
-        bukkitPlayer: bukkitPlayer,
-        plugin: plugin,
-        data: fabledData,
-        skills: skills
-    };
+    if (skills == null || skills.length == 0) {
+        return skills;
+    }
+
+    CACHED_SKILL_LIST = skills;
+    CACHED_SKILL_LIST_AT = now;
+    return skills;
+}
+
+function getFabledContext(player) {
+    try {
+        var resolved = getBukkitPlayer(player);
+        if (resolved == null || resolved.bukkitPlayer == null) {
+            return null;
+        }
+
+        var Bukkit = resolved.bukkit;
+        var bukkitPlayer = resolved.bukkitPlayer;
+
+        var plugin =
+            Bukkit.getPluginManager().getPlugin("Fabled");
+        if (plugin == null || !plugin.isEnabled()) {
+            return null;
+        }
+
+        var loader = plugin.getClass().getClassLoader();
+        var fabledClass = loader.loadClass(
+            "studio.magemonkey.fabled.Fabled"
+        );
+
+        var getDataMethod = null;
+        var getSkillsMethod = null;
+        var methods = fabledClass.getMethods();
+        var i;
+        for (i = 0; i < methods.length; i++) {
+            var method = methods[i];
+            var methodName = String(method.getName());
+            var parameterCount =
+                method.getParameterTypes().length;
+
+            if (
+                methodName == "getData" &&
+                parameterCount == 1
+            ) {
+                getDataMethod = method;
+            }
+            if (
+                methodName == "getSkills" &&
+                parameterCount == 0
+            ) {
+                getSkillsMethod = method;
+            }
+        }
+
+        if (getDataMethod == null) {
+            try {
+                getDataMethod = fabledClass.getMethod(
+                    "getData",
+                    Java.type("org.bukkit.OfflinePlayer")
+                );
+            } catch (mErr) {}
+        }
+
+        if (getDataMethod == null) {
+            return null;
+        }
+
+        var fabledData = getDataMethod.invoke(
+            null,
+            bukkitPlayer
+        );
+        if (fabledData == null) {
+            return null;
+        }
+
+        /*
+         * Player data often is not init for a few ticks after join.
+         * Skip quietly until Fabled finishes loading.
+         */
+        try {
+            if (!fabledData.isInit()) {
+                return null;
+            }
+        } catch (ignoredInitError) {}
+
+        var skills = loadRegisteredSkills(
+            fabledClass,
+            getSkillsMethod
+        );
+        if (skills == null) {
+            return null;
+        }
+
+        return {
+            bukkit: Bukkit,
+            bukkitPlayer: bukkitPlayer,
+            plugin: plugin,
+            data: fabledData,
+            skills: skills
+        };
+    } catch (err) {
+        return null;
+    }
 }
 
 
@@ -842,9 +975,11 @@ function synchronizeClassPermission(player) {
 
     var fabled = getFabledContext(player);
     if (fabled == null) {
-        throw (
-            "Fabled player data or registered skills were unavailable."
-        );
+        /*
+         * Not ready yet (join, reload, Fabled init). Retry next
+         * tick with no player-facing error spam.
+         */
+        return;
     }
 
     var dmzClass = getDMZClass(player);
@@ -941,7 +1076,8 @@ function synchronizeClassPermission(player) {
         } else {
             var currentPrestigeLevel = getPrestigeSkillLevel(
                 fabled.data,
-                currentSkillName
+                currentSkillName,
+                fabled.skills
             );
 
             if (currentPrestigeLevel >= 1) {
