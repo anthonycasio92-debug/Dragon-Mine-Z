@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.1.2
+ * Version: 3.2.0
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -14,6 +14,15 @@
  * - If the player has a Fabled skill titled
  *   "<Class Name> Prestige", lock that class permission
  *   permanently and STOP checking Prestige for it.
+ *
+ * CLASS CONFIRMATION (menu / wish):
+ * - Character customization flips the server class on every
+ *   arrow click, and Dragon Ball recustomize wishes open that
+ *   same menu. There is no reliable "in menu" flag.
+ * - Permissions only sync after the DMZ class stays unchanged
+ *   for CLASS_CONFIRM_TIME_MS (same idea as Spiritualist Ki
+ *   Control). Browsing classes resets the timer; leaving the
+ *   menu or settling a wish applies the final current class.
  *
  * EXAMPLES:
  *   DMZ class ID:   warrior
@@ -73,6 +82,14 @@ var PRESTIGE_SKILL_SUFFIX = " Prestige";
 var FABLED_SKILL_PERMISSION_ROOT = "fabled.skill.";
 
 /*
+ * How long the DMZ class must stay unchanged before LuckPerms
+ * set/unset runs. Covers character-menu browsing and Dragon
+ * Ball recustomize wishes (both apply class on every preview).
+ * Matches Spirtualist Ki Control.js.
+ */
+var CLASS_CONFIRM_TIME_MS = 10000;
+
+/*
  * Keep false on live. When true, messages only fire on
  * class/skill state changes, LuckPerms commands, or errors.
  */
@@ -108,6 +125,16 @@ var DEBUG_STATE_KEY =
 
 var ERROR_KEY =
     "dmz_fabled_class_permissions_v3_error";
+
+/*
+ * Temp only. Tracks the last observed DMZ class and when it
+ * last changed so menu/wish previews do not thrash permissions.
+ */
+var LAST_SEEN_CLASS_KEY =
+    "dmz_fabled_class_permissions_v3_last_seen_class";
+
+var CLASS_STABLE_SINCE_KEY =
+    "dmz_fabled_class_permissions_v3_class_stable_since";
 
 
 /*
@@ -966,6 +993,103 @@ function playerHasPermission(fabledContext, permission) {
 
 /*
  * ============================================================
+ * CLASS CONFIRMATION (MENU / WISH)
+ * ============================================================
+ *
+ * DMZ writes the selected class to the player on every menu
+ * arrow click and when a recustomize wish opens that menu.
+ * Wait until the observed class is stable before syncing
+ * LuckPerms, then always apply whatever the current class is.
+ */
+
+function getNowMs() {
+    try {
+        return Number(
+            Java.type("java.lang.System").currentTimeMillis()
+        );
+    } catch (e) {
+        return 0;
+    }
+}
+
+/*
+ * Returns true only after dmzClass has been unchanged for
+ * CLASS_CONFIRM_TIME_MS. Any class change (menu browse or
+ * wish) restarts the timer.
+ */
+function isDmzClassConfirmed(player, dmzClass, now) {
+    if (player == null) {
+        return false;
+    }
+
+    if (now == null || isNaN(now) || now <= 0) {
+        now = getNowMs();
+    }
+
+    var temp = player.getTempdata();
+    if (temp == null) {
+        return false;
+    }
+
+    var classKey = normalizeName(dmzClass);
+    var lastSeen = "";
+
+    try {
+        if (temp.has(LAST_SEEN_CLASS_KEY)) {
+            lastSeen = "" + temp.get(LAST_SEEN_CLASS_KEY);
+        }
+    } catch (readErr) {
+        lastSeen = "";
+    }
+
+    var lastKey = normalizeName(lastSeen);
+
+    if (lastKey != classKey) {
+        try {
+            temp.put(LAST_SEEN_CLASS_KEY, "" + dmzClass);
+            temp.put(CLASS_STABLE_SINCE_KEY, "" + now);
+        } catch (putErr) {}
+
+        sendDebug(
+            player,
+            "Class change detected (\u00A7f" +
+            (dmzClass == "" ? "(none)" : dmzClass) +
+            "\u00A77). Waiting " +
+            Math.ceil(CLASS_CONFIRM_TIME_MS / 1000) +
+            "s before syncing permissions."
+        );
+
+        return false;
+    }
+
+    var stableSince = now;
+    try {
+        if (temp.has(CLASS_STABLE_SINCE_KEY)) {
+            stableSince = Number(
+                "" + temp.get(CLASS_STABLE_SINCE_KEY)
+            );
+            if (isNaN(stableSince) || stableSince <= 0) {
+                stableSince = now;
+                temp.put(CLASS_STABLE_SINCE_KEY, "" + now);
+            }
+        } else {
+            temp.put(CLASS_STABLE_SINCE_KEY, "" + now);
+            return false;
+        }
+    } catch (stableErr) {
+        return false;
+    }
+
+    if (now - stableSince < CLASS_CONFIRM_TIME_MS) {
+        return false;
+    }
+
+    return true;
+}
+
+
+/*
+ * ============================================================
  * MAIN SYNCHRONIZATION
  * ============================================================
  */
@@ -983,6 +1107,16 @@ function synchronizeClassPermission(player) {
     }
 
     var dmzClass = getDMZClass(player);
+    var now = getNowMs();
+
+    /*
+     * Do not set/unset while the player is still flipping
+     * classes in the customization menu (or mid-wish). Once
+     * the current class stays put, sync that final class.
+     */
+    if (!isDmzClassConfirmed(player, dmzClass, now)) {
+        return;
+    }
 
     var currentBaseSkill = null;
     var currentSkillName = "";
