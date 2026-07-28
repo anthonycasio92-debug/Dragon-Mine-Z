@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.2.2
+ * Version: 3.3.0
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -15,18 +15,20 @@
  *   "<Class Name> Prestige", lock that class permission
  *   permanently and STOP checking Prestige for it.
  *
+ * GRANT PATH (v3.3.0):
+ * - Permissions are resolved from a hardcoded DMZ class map
+ *   first (warrior, martialartist, etc.). Fabled skill-list
+ *   lookup is optional and only used to refine names / Prestige.
+ * - Existing players are bootstrapped immediately when this
+ *   script has never synced them.
+ * - LuckPerms is applied by UUID (then name), with API +
+ *   console command fallbacks.
+ *
  * CLASS CONFIRMATION (menu / wish):
- * - Character customization flips the server class on every
- *   arrow click, and Dragon Ball recustomize wishes open that
- *   same menu. There is no reliable "in menu" flag.
  * - Confirm delay applies ONLY when the DMZ class differs from
  *   the last class this script already synced.
- * - Existing players / first install: if this script has never
- *   synced them, grant their CURRENT class permission immediately
- *   (no settle wait). Same for missing permissions on the
- *   already-synced class.
  * - Unloaded / missing DMZ data does NOT reset the timer and
- *   does NOT unset permissions (avoids never-assigning).
+ *   does NOT unset permissions.
  *
  * EXAMPLES:
  *   DMZ class ID:   warrior
@@ -105,6 +107,44 @@ var System = Java.type("java.lang.System");
  */
 var DEBUG = false;
 
+/*
+ * Tell the player once when a class permission is granted.
+ * Helps verify the script on existing players.
+ */
+var NOTIFY_ON_GRANT = true;
+
+/*
+ * Hardcoded DMZ class id -> Fabled skill display name.
+ * Matches stats.json / ClassPassives. Used so grants work even
+ * when Fabled.getSkills() is unavailable or names differ only
+ * by spacing/case.
+ */
+function getHardcodedSkillName(dmzClass) {
+    var key = normalizeName(dmzClass);
+    if (key == "warrior") {
+        return "Warrior";
+    }
+    if (key == "martialartist") {
+        return "Martial Artist";
+    }
+    if (key == "spiritualist") {
+        return "Spiritualist";
+    }
+    if (key == "berserker") {
+        return "Berserker";
+    }
+    if (key == "cleric") {
+        return "Cleric";
+    }
+    if (key == "paladin") {
+        return "Paladin";
+    }
+    if (key == "tank") {
+        return "Tank";
+    }
+    return "";
+}
+
 
 /*
  * ============================================================
@@ -153,6 +193,14 @@ var CLASS_STABLE_SINCE_KEY =
  */
 var LAST_SYNCED_CLASS_KEY =
     "dmz_fabled_class_permissions_v3_last_synced_class";
+
+/*
+ * Bump when grant logic changes so existing players are
+ * re-bootstrapped once (clears stale last-synced / managed).
+ */
+var SYNC_VERSION_KEY =
+    "dmz_fabled_class_permissions_v3_sync_version";
+var SYNC_VERSION = "3.3.0";
 
 
 /*
@@ -287,6 +335,32 @@ function getSkillPermission(skillName) {
     return FABLED_SKILL_PERMISSION_ROOT + formatted;
 }
 
+/*
+ * Prefer a live Fabled skill name when available, otherwise the
+ * hardcoded DMZ class map. Never returns empty for known classes.
+ */
+function resolveSkillName(dmzClass, skills) {
+    if (dmzClass == null || dmzClass == "") {
+        return "";
+    }
+
+    if (skills != null) {
+        var found = findBaseSkill(skills, dmzClass);
+        if (found != null) {
+            try {
+                return "" + found.getName();
+            } catch (e) {}
+        }
+    }
+
+    var hardcoded = getHardcodedSkillName(dmzClass);
+    if (hardcoded != "") {
+        return hardcoded;
+    }
+
+    return "";
+}
+
 
 /*
  * ============================================================
@@ -375,7 +449,7 @@ function isPrestigeLocked(lockedList, skillName) {
  */
 function lockPrestigeClass(
     player,
-    fabled,
+    bukkitContext,
     skillName,
     lockedList
 ) {
@@ -392,10 +466,10 @@ function lockPrestigeClass(
         return false;
     }
 
-    if (!playerHasPermission(fabled, permission)) {
+    if (!playerHasPermission(bukkitContext, permission)) {
         runLuckPermsCommand(
             player,
-            fabled,
+            bukkitContext,
             "set",
             permission
         );
@@ -543,6 +617,14 @@ function loadRegisteredSkills(fabledClass, getSkillsMethod) {
     return skills;
 }
 
+function getBukkitContext(player) {
+    try {
+        return getBukkitPlayer(player);
+    } catch (e) {
+        return null;
+    }
+}
+
 function getFabledContext(player) {
     try {
         var resolved = getBukkitPlayer(player);
@@ -623,9 +705,7 @@ function getFabledContext(player) {
             fabledClass,
             getSkillsMethod
         );
-        if (skills == null) {
-            return null;
-        }
+        /* skills may be null/empty - grants still work via map */
 
         return {
             bukkit: Bukkit,
@@ -966,66 +1046,181 @@ function getPrestigeSkillLevel(fabledData, baseSkillName, skills) {
  * LUCKPERMS COMMANDS
  * ============================================================
  *
- * lp user Player permission set fabled.skill.warrior
- * lp user Player permission unset fabled.skill.warrior
+ * lp user <uuid|name> permission set fabled.skill.warrior true
+ * lp user <uuid|name> permission unset fabled.skill.warrior
  */
+
+function tryLuckPermsApi(player, operation, permission) {
+    try {
+        var LuckPermsProvider = Java.type(
+            "net.luckperms.api.LuckPermsProvider"
+        );
+        var lp = LuckPermsProvider.get();
+        if (lp == null) {
+            return false;
+        }
+
+        var UUID = Java.type("java.util.UUID");
+        var uuid = UUID.fromString("" + player.getUUID());
+        var user = lp.getUserManager().getUser(uuid);
+        if (user == null) {
+            return false;
+        }
+
+        var Node = Java.type("net.luckperms.api.node.Node");
+        var node = Node.builder(permission).value(true).build();
+
+        if (operation == "set") {
+            user.data().add(node);
+        } else if (operation == "unset") {
+            user.data().remove(node);
+        } else {
+            return false;
+        }
+
+        lp.getUserManager().saveUser(user);
+        try {
+            lp.getUserManager().loadUser(uuid);
+        } catch (reloadErr) {}
+
+        return true;
+    } catch (apiErr) {
+        return false;
+    }
+}
+
+function dispatchLpCommand(bukkit, command) {
+    try {
+        return (
+            bukkit.dispatchCommand(
+                bukkit.getConsoleSender(),
+                command
+            ) === true
+        );
+    } catch (e) {
+        return false;
+    }
+}
 
 function runLuckPermsCommand(
     player,
-    fabledContext,
+    bukkitContext,
     operation,
     permission
 ) {
     if (
         player == null ||
-        fabledContext == null ||
+        bukkitContext == null ||
+        bukkitContext.bukkit == null ||
         permission == null ||
         permission == ""
     ) {
         return false;
     }
 
+    if (tryLuckPermsApi(player, operation, permission)) {
+        sendDebug(
+            player,
+            "LuckPerms API " + operation + ": \u00A7f" + permission
+        );
+        return true;
+    }
+
+    var bukkit = bukkitContext.bukkit;
     var playerName = "" + player.getName();
-    var command =
-        LUCKPERMS_COMMAND +
-        " user " +
-        playerName +
-        " permission " +
-        operation +
-        " " +
-        permission;
+    var playerUuid = "";
+    try {
+        playerUuid = ("" + player.getUUID()).trim();
+    } catch (uuidErr) {
+        playerUuid = "";
+    }
+
+    var targets = [];
+    if (playerUuid != "") {
+        targets[targets.length] = playerUuid;
+    }
+    targets[targets.length] = playerName;
+
+    var prefixes = [LUCKPERMS_COMMAND, "luckperms"];
+    var t;
+    var p;
+    for (p = 0; p < prefixes.length; p++) {
+        for (t = 0; t < targets.length; t++) {
+            var target = targets[t];
+            var command =
+                prefixes[p] +
+                " user " +
+                target +
+                " permission " +
+                operation +
+                " " +
+                permission;
+
+            if (operation == "set") {
+                if (dispatchLpCommand(bukkit, command + " true")) {
+                    sendDebug(
+                        player,
+                        "Executed: \u00A7f/" + command + " true"
+                    );
+                    return true;
+                }
+            }
+
+            if (dispatchLpCommand(bukkit, command)) {
+                sendDebug(
+                    player,
+                    "Executed: \u00A7f/" + command
+                );
+                return true;
+            }
+        }
+    }
 
     /*
-     * LuckPerms accepts an explicit true/false on set. Using
-     * true avoids ambiguous parses on some LP versions.
+     * CNPC command bridge fallback (same idea as Race Lock).
      */
-    if (operation == "set") {
-        command += " true";
-    }
+    try {
+        if (
+            bukkitContext.event != null &&
+            bukkitContext.event.API != null
+        ) {
+            var apiCmd =
+                LUCKPERMS_COMMAND +
+                " user " +
+                (playerUuid != "" ? playerUuid : playerName) +
+                " permission " +
+                operation +
+                " " +
+                permission;
+            if (operation == "set") {
+                apiCmd += " true";
+            }
+            bukkitContext.event.API.executeCommand(
+                player.getWorld(),
+                apiCmd
+            );
+            sendDebug(
+                player,
+                "CNPC executed: \u00A7f/" + apiCmd
+            );
+            return true;
+        }
+    } catch (cnpcErr) {}
 
-    var accepted = fabledContext.bukkit.dispatchCommand(
-        fabledContext.bukkit.getConsoleSender(),
-        command
+    throw (
+        "LuckPerms failed to " +
+        operation +
+        " " +
+        permission +
+        " for " +
+        playerName
     );
-
-    if (!accepted) {
-        throw (
-            "LuckPerms rejected command: /" + command
-        );
-    }
-
-    sendDebug(
-        player,
-        "Executed: \u00A7f/" + command
-    );
-
-    return true;
 }
 
-function playerHasPermission(fabledContext, permission) {
+function playerHasPermission(bukkitContext, permission) {
     if (
-        fabledContext == null ||
-        fabledContext.bukkitPlayer == null ||
+        bukkitContext == null ||
+        bukkitContext.bukkitPlayer == null ||
         permission == null ||
         permission == ""
     ) {
@@ -1034,13 +1229,39 @@ function playerHasPermission(fabledContext, permission) {
 
     try {
         return (
-            fabledContext.bukkitPlayer.hasPermission(
+            bukkitContext.bukkitPlayer.hasPermission(
                 permission
             ) === true
         );
     } catch (e) {
         return false;
     }
+}
+
+function notifyGrant(player, permission) {
+    if (!NOTIFY_ON_GRANT || player == null) {
+        return;
+    }
+
+    try {
+        var stored = player.getStoreddata();
+        var key =
+            "dmz_fabled_class_permissions_v3_notified_" +
+            normalizeName(permission);
+        if (stored != null && stored.has(key)) {
+            return;
+        }
+        if (stored != null) {
+            stored.put(key, "1");
+        }
+    } catch (e) {}
+
+    try {
+        player.message(
+            "\u00A7a[Class Permission] \u00A7fGranted \u00A7e" +
+            permission
+        );
+    } catch (msgErr) {}
 }
 
 
@@ -1101,6 +1322,39 @@ function writeLastSyncedClass(player, dmzClass) {
         } else {
             stored.put(LAST_SYNCED_CLASS_KEY, "" + dmzClass);
         }
+    } catch (e) {}
+}
+
+/*
+ * One-time migration when this script version changes so
+ * existing players are not stuck with a stale "already synced"
+ * flag from older broken builds.
+ */
+function ensureSyncVersion(player) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null) {
+            return;
+        }
+
+        var current = "";
+        if (stored.has(SYNC_VERSION_KEY)) {
+            current = "" + stored.get(SYNC_VERSION_KEY);
+        }
+
+        if (current == SYNC_VERSION) {
+            return;
+        }
+
+        writeLastSyncedClass(player, "");
+        writeManagedSkills(player, []);
+        stored.put(SYNC_VERSION_KEY, SYNC_VERSION);
+
+        sendDebug(
+            player,
+            "Migrated class-permission sync to \u00A7f" +
+            SYNC_VERSION
+        );
     } catch (e) {}
 }
 
@@ -1199,9 +1453,11 @@ function isDmzClassConfirmed(player, dmzClass, now) {
  * ============================================================
  */
 
-function synchronizeClassPermission(player) {
+function synchronizeClassPermission(player, event) {
     var temp = player.getTempdata();
     var now = getNowMs();
+
+    ensureSyncVersion(player);
 
     /*
      * Observe DMZ class before Fabled. Unready data must not
@@ -1235,33 +1491,22 @@ function synchronizeClassPermission(player) {
         }
     }
 
-    var fabled = getFabledContext(player);
-    if (fabled == null) {
-        /*
-         * Wait for Fabled without clearing bootstrap / confirm
-         * state so the grant still happens next tick.
-         */
+    var bukkitContext = getBukkitContext(player);
+    if (bukkitContext == null || bukkitContext.bukkitPlayer == null) {
         return;
     }
+    bukkitContext.event = event;
 
-    var currentBaseSkill = null;
-    var currentSkillName = "";
-    var currentPermission = "";
+    /*
+     * Fabled is optional. Grants use the hardcoded class map when
+     * skill discovery is unavailable. Prestige checks need Fabled.
+     */
+    var fabled = getFabledContext(player);
+    var fabledSkills = fabled != null ? fabled.skills : null;
+    var fabledData = fabled != null ? fabled.data : null;
 
-    if (dmzClass != "") {
-        currentBaseSkill = findBaseSkill(
-            fabled.skills,
-            dmzClass
-        );
-
-        if (currentBaseSkill != null) {
-            currentSkillName =
-                "" + currentBaseSkill.getName();
-            currentPermission = getSkillPermission(
-                currentSkillName
-            );
-        }
-    }
+    var currentSkillName = resolveSkillName(dmzClass, fabledSkills);
+    var currentPermission = getSkillPermission(currentSkillName);
 
     var previousManaged = readManagedSkills(player);
     var lockedPrestige = readLockedPrestigeSkills(player);
@@ -1293,28 +1538,30 @@ function synchronizeClassPermission(player) {
          * One Prestige check for this old class. If owned,
          * lock forever and stop checking it.
          */
-        var oldPrestigeLevel = getPrestigeSkillLevel(
-            fabled.data,
-            oldSkillName,
-            fabled.skills
-        );
-        if (oldPrestigeLevel >= 1) {
-            if (
-                lockPrestigeClass(
-                    player,
-                    fabled,
-                    oldSkillName,
-                    lockedPrestige
-                )
-            ) {
-                lockedChanged = true;
+        if (fabledData != null) {
+            var oldPrestigeLevel = getPrestigeSkillLevel(
+                fabledData,
+                oldSkillName,
+                fabledSkills
+            );
+            if (oldPrestigeLevel >= 1) {
+                if (
+                    lockPrestigeClass(
+                        player,
+                        bukkitContext,
+                        oldSkillName,
+                        lockedPrestige
+                    )
+                ) {
+                    lockedChanged = true;
+                }
+                continue;
             }
-            continue;
         }
 
         runLuckPermsCommand(
             player,
-            fabled,
+            bukkitContext,
             "unset",
             getSkillPermission(oldSkillName)
         );
@@ -1323,28 +1570,27 @@ function synchronizeClassPermission(player) {
     /*
      * Current DMZ class -> matching Fabled class permission.
      */
-    if (
-        currentBaseSkill != null &&
-        currentSkillName != "" &&
-        currentPermission != ""
-    ) {
+    if (currentSkillName != "" && currentPermission != "") {
         if (isPrestigeLocked(lockedPrestige, currentSkillName)) {
             /*
              * Already locked by Prestige - do nothing.
              * Never re-check "<Class> Prestige" for this class.
              */
         } else {
-            var currentPrestigeLevel = getPrestigeSkillLevel(
-                fabled.data,
-                currentSkillName,
-                fabled.skills
-            );
+            var currentPrestigeLevel = 0;
+            if (fabledData != null) {
+                currentPrestigeLevel = getPrestigeSkillLevel(
+                    fabledData,
+                    currentSkillName,
+                    fabledSkills
+                );
+            }
 
             if (currentPrestigeLevel >= 1) {
                 if (
                     lockPrestigeClass(
                         player,
-                        fabled,
+                        bukkitContext,
                         currentSkillName,
                         lockedPrestige
                     )
@@ -1364,7 +1610,7 @@ function synchronizeClassPermission(player) {
                     normalizeName(dmzClass);
 
                 var hasPermission = playerHasPermission(
-                    fabled,
+                    bukkitContext,
                     currentPermission
                 );
 
@@ -1381,10 +1627,11 @@ function synchronizeClassPermission(player) {
                 ) {
                     runLuckPermsCommand(
                         player,
-                        fabled,
+                        bukkitContext,
                         "set",
                         currentPermission
                     );
+                    notifyGrant(player, currentPermission);
                     sendDebug(
                         player,
                         "Granted permission: \u00A7f" +
@@ -1395,12 +1642,18 @@ function synchronizeClassPermission(player) {
                 addUnique(updatedManaged, currentSkillName);
             }
         }
-    } else if (dmzClass != "" && currentBaseSkill == null) {
+    } else if (dmzClass != "") {
         sendDebug(
             player,
-            "No Fabled base skill matched DMZ class: \u00A7f" +
+            "No skill name resolved for DMZ class: \u00A7f" +
             dmzClass
         );
+        try {
+            player.message(
+                "\u00A7c[Class Permission] \u00A7fNo skill mapping for class: \u00A7e" +
+                dmzClass
+            );
+        } catch (mapErr) {}
     }
 
     writeManagedSkills(player, updatedManaged);
@@ -1409,9 +1662,8 @@ function synchronizeClassPermission(player) {
     }
 
     /*
-     * Mark synced only when the current class matched a Fabled
-     * skill (granted, repaired, or prestige-locked). No match
-     * keeps retrying so existing players are not stuck.
+     * Mark synced only when the current class resolved to a
+     * skill name. Failed maps keep retrying bootstrap.
      */
     if (currentSkillName != "") {
         writeLastSyncedClass(player, dmzClass);
@@ -1491,7 +1743,7 @@ function tick(event) {
 
         temp.put(TICK_KEY, "0");
 
-        synchronizeClassPermission(player);
+        synchronizeClassPermission(player, event);
 
         try {
             if (temp.has(ERROR_KEY)) {
