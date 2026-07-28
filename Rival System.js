@@ -67,9 +67,14 @@ var RC_COLOR = "\u00A7";
 
 /*
  Rival relationship statuses (per-link) - original concept:
-  unknown  - they declared you (incoming); unlimited
-  declared - you declared them (one-sided); unlimited
+  unknown  - incoming (they declared you / pending invite); unlimited
+  declared - you declared them (one-sided or reciprocated); unlimited
   mutual   - both accepted; max RC_MAX_MUTUAL_RIVALS (real rivalry)
+  nemesis  - auto from mutual history score; one per player
+
+  Command status labels live in Rival Command Handler.js and must match:
+  /rival declare = Declared (silent). /rival both = Declared (reciprocated).
+  Unknown is only for incoming links, never for "I just declared them".
   nemesis  - your single greatest mutual rival (history-chosen, only ONE)
 
  If a 3rd mutual would form, the oldest mutual is demoted automatically.
