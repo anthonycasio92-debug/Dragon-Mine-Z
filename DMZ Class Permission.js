@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * DMZ Class -> Fabled Skill Permission via LuckPerms
- * Version: 3.2.1
+ * Version: 3.2.2
  *
  * PLACE AS: CustomNPCs Global Player Script
  * Enable: Tick
@@ -19,10 +19,12 @@
  * - Character customization flips the server class on every
  *   arrow click, and Dragon Ball recustomize wishes open that
  *   same menu. There is no reliable "in menu" flag.
- * - Permissions only sync after the DMZ class stays unchanged
- *   for CLASS_CONFIRM_TIME_MS (same idea as Spiritualist Ki
- *   Control). Browsing classes resets the timer; leaving the
- *   menu or settling a wish applies the final current class.
+ * - Confirm delay applies ONLY when the DMZ class differs from
+ *   the last class this script already synced.
+ * - Existing players / first install: if this script has never
+ *   synced them, grant their CURRENT class permission immediately
+ *   (no settle wait). Same for missing permissions on the
+ *   already-synced class.
  * - Unloaded / missing DMZ data does NOT reset the timer and
  *   does NOT unset permissions (avoids never-assigning).
  *
@@ -145,8 +147,9 @@ var CLASS_STABLE_SINCE_KEY =
     "dmz_fabled_class_permissions_v3_class_stable_since";
 
 /*
- * Last class that successfully completed a permission sync.
- * Used so we can force-set when the settled class is new.
+ * Last DMZ class that completed a permission sync.
+ * Stored persistently so existing players are bootstrapped once
+ * and menu/wish confirm only runs on real class changes.
  */
 var LAST_SYNCED_CLASS_KEY =
     "dmz_fabled_class_permissions_v3_last_synced_class";
@@ -1075,6 +1078,46 @@ function readTempNumber(temp, key, fallback) {
     }
 }
 
+function readLastSyncedClass(player) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null || !stored.has(LAST_SYNCED_CLASS_KEY)) {
+            return "";
+        }
+        return ("" + stored.get(LAST_SYNCED_CLASS_KEY)).trim();
+    } catch (e) {
+        return "";
+    }
+}
+
+function writeLastSyncedClass(player, dmzClass) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null) {
+            return;
+        }
+        if (dmzClass == null || dmzClass == "") {
+            stored.remove(LAST_SYNCED_CLASS_KEY);
+        } else {
+            stored.put(LAST_SYNCED_CLASS_KEY, "" + dmzClass);
+        }
+    } catch (e) {}
+}
+
+/*
+ * True when we must wait for the class to stop changing
+ * (menu browse / wish). False for:
+ * - first-ever sync (existing players / new install)
+ * - current class already matches last synced class
+ */
+function needsClassChangeConfirm(player, dmzClass) {
+    var lastSynced = readLastSyncedClass(player);
+    if (lastSynced == "") {
+        return false;
+    }
+    return normalizeName(lastSynced) != normalizeName(dmzClass);
+}
+
 /*
  * Returns true only after dmzClass has been unchanged for
  * CLASS_CONFIRM_TIME_MS. Any real class change (menu browse or
@@ -1181,19 +1224,22 @@ function synchronizeClassPermission(player) {
     }
 
     /*
-     * Do not set/unset while the player is still flipping
-     * classes in the customization menu (or mid-wish). Once
-     * the current class stays put, sync that final class.
+     * Existing players / first install: never synced before ->
+     * grant current class immediately.
+     * Already-synced same class: re-check/repair permission.
+     * Menu / wish class change: wait until settled.
      */
-    if (!isDmzClassConfirmed(player, dmzClass, now)) {
-        return;
+    if (needsClassChangeConfirm(player, dmzClass)) {
+        if (!isDmzClassConfirmed(player, dmzClass, now)) {
+            return;
+        }
     }
 
     var fabled = getFabledContext(player);
     if (fabled == null) {
         /*
-         * Class is already confirmed; wait for Fabled without
-         * clearing the timer so the grant still happens.
+         * Wait for Fabled without clearing bootstrap / confirm
+         * state so the grant still happens next tick.
          */
         return;
     }
@@ -1311,16 +1357,7 @@ function synchronizeClassPermission(player) {
                     currentSkillName
                 );
 
-                var lastSyncedClass = "";
-                try {
-                    if (
-                        temp != null &&
-                        temp.has(LAST_SYNCED_CLASS_KEY)
-                    ) {
-                        lastSyncedClass =
-                            "" + temp.get(LAST_SYNCED_CLASS_KEY);
-                    }
-                } catch (syncReadErr) {}
+                var lastSyncedClass = readLastSyncedClass(player);
 
                 var classAlreadySynced =
                     normalizeName(lastSyncedClass) ==
@@ -1334,9 +1371,8 @@ function synchronizeClassPermission(player) {
                 /*
                  * Always grant when:
                  * - first time managing this class skill
-                 * - permission is missing
+                 * - permission is missing (existing players)
                  * - settled DMZ class differs from last sync
-                 *   (menu/wish finished on a new class)
                  */
                 if (
                     !wasManaged ||
@@ -1347,6 +1383,11 @@ function synchronizeClassPermission(player) {
                         player,
                         fabled,
                         "set",
+                        currentPermission
+                    );
+                    sendDebug(
+                        player,
+                        "Granted permission: \u00A7f" +
                         currentPermission
                     );
                 }
@@ -1367,11 +1408,14 @@ function synchronizeClassPermission(player) {
         writeLockedPrestigeSkills(player, lockedPrestige);
     }
 
-    try {
-        if (temp != null) {
-            temp.put(LAST_SYNCED_CLASS_KEY, "" + dmzClass);
-        }
-    } catch (syncPutErr) {}
+    /*
+     * Mark synced only when the current class matched a Fabled
+     * skill (granted, repaired, or prestige-locked). No match
+     * keeps retrying so existing players are not stuck.
+     */
+    if (currentSkillName != "") {
+        writeLastSyncedClass(player, dmzClass);
+    }
 
     var state =
         normalizeName(dmzClass) +
