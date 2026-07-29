@@ -1,15 +1,16 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.6
+ Version: 4.6.7
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
- - Challenge/Rival TP grants now apply the exact announced amount.
-   DMZ's TPGainEvent was re-applying STORY multipliers (HTC, gravity,
-   global TP potion, class, etc.) on top of rival level scaling, so
-   chat could say +3,000,000 TP while the player received ~3,000,000,000.
+ - Challenge/Rival TP keeps DMZ multipliers (HTC, gravity, global TP
+   potion, class, etc.) AND chat now shows the real granted amount
+   after those multipliers (not the pre-boost figure).
+ - Winner / battle report always broadcasts even if reward math throws.
+ - Battle report no longer treats a missing runner-up name as a Draw.
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
    announce locks). Root scripts were missing the rival-v4 spam fix.
  - Only the challenger tick starts FIGHT so both fighters do not
@@ -2072,28 +2073,73 @@ function rivalScaleTpByLevel(data, amount, kind) {
 }
 
 /*
- * Grant an exact TP amount that matches what we announce in chat.
- *
- * DMZ Resources.addTrainingPoints() fires TPGainEvent, and
- * TPGainEvents.onTPGain always runs calculateTPGain(..., STORY),
- * which multiplies again by class/HTC/gravity/weights/global potion/
- * mutant/difficulty/progression. Rival rewards are already scaled
- * by level in-script, so that second pass inflated payouts (e.g.
- * chat +3M, actual +3B). setTrainingPoints bypasses the event.
+ * Predict what DMZ will actually bank after TPGainEvent STORY boosts
+ * (class / HTC / gravity / weights / global TP potion / etc.).
+ * Matches TPGainEvents.onTPGain -> calculateTPGain(..., STORY).
  */
-function rivalGrantExactTrainingPoints(data, amount) {
-    if (data === null || data === undefined) return false;
-    var grant = Math.floor(Number(amount));
-    if (isNaN(grant) || !isFinite(grant) || grant <= 0) return false;
+function rivalPredictDmzGrantedTp(data, baseAmount) {
+    var base = Math.floor(Number(baseAmount));
+    if (isNaN(base) || !isFinite(base) || base <= 0) return 0;
+    if (data === null || data === undefined) return base;
+
+    try {
+        var predicted = Number(data.calculateTPGain(base));
+        if (!isNaN(predicted) && isFinite(predicted) && predicted > 0) {
+            return Math.floor(predicted);
+        }
+    } catch (e1) {}
+
+    try {
+        var TpSource = Java.type("com.dragonminez.common.config.TpSource");
+        if (TpSource != null && TpSource.STORY != null) {
+            var viaStory = Number(data.calculateTPGain(base, TpSource.STORY));
+            if (!isNaN(viaStory) && isFinite(viaStory) && viaStory > 0) {
+                return Math.floor(viaStory);
+            }
+        }
+    } catch (e2) {}
+
+    return base;
+}
+
+/*
+ * Award rival/challenge TP through addTrainingPoints so DMZ multipliers
+ * still apply, but return the post-multiplier amount for chat.
+ */
+function rivalGrantTrainingPoints(data, amount) {
+    var requested = Math.floor(Number(amount));
+    if (isNaN(requested) || !isFinite(requested) || requested <= 0) {
+        return { ok: false, granted: 0, requested: 0 };
+    }
+    if (data === null || data === undefined) {
+        return { ok: false, granted: 0, requested: requested };
+    }
 
     var resources = data.getResources();
-    if (resources === null || resources === undefined) return false;
+    if (resources === null || resources === undefined) {
+        return { ok: false, granted: 0, requested: requested };
+    }
 
+    var predicted = rivalPredictDmzGrantedTp(data, requested);
     var before = Number(resources.getTrainingPoints());
     if (isNaN(before) || !isFinite(before) || before < 0) before = 0;
 
-    resources.setTrainingPoints(before + grant);
-    return true;
+    resources.addTrainingPoints(requested);
+
+    var after = Number(resources.getTrainingPoints());
+    var granted = predicted;
+    if (!isNaN(after) && isFinite(after)) {
+        var delta = Math.floor(after - before);
+        /*
+         * Prefer measured delta when float precision can see it.
+         * Huge TP balances can lose small deltas in float32; keep
+         * calculateTPGain prediction in that case.
+         */
+        if (delta > 0) granted = delta;
+    }
+    if (!(granted > 0)) granted = requested;
+
+    return { ok: true, granted: granted, requested: requested };
 }
 
 function rpAwardTP(player, data, amount, reason, kind) {
@@ -2102,7 +2148,8 @@ function rpAwardTP(player, data, amount, reason, kind) {
         var scaleKind = kind === "drip" ? "drip" : "burst";
         amount = rivalScaleTpByLevel(data, amount, scaleKind);
         if (amount <= 0) return false;
-        if (!rivalGrantExactTrainingPoints(data, amount)) return false;
+        var grant = rivalGrantTrainingPoints(data, amount);
+        if (grant.ok !== true) return false;
         var mcPlayer = player.getMCEntity();
         rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
         if (RP_SHOW_KILL_TP) {
@@ -2113,7 +2160,7 @@ function rpAwardTP(player, data, amount, reason, kind) {
                     "Lv" + rpCommas(lvl) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(data, scaleKind));
             }
-            rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
+            rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(grant.granted) + " TP" +
                 (note ? RP_COLOR + "7 (" + note + ")" : ""));
         }
         return true;
@@ -3166,7 +3213,8 @@ function chAwardTP(player, amount, reason) {
         if (data === null) return false;
         amount = rivalScaleTpByLevel(data, amount, "burst");
         if (amount <= 0) return false;
-        if (!rivalGrantExactTrainingPoints(data, amount)) return false;
+        var grant = rivalGrantTrainingPoints(data, amount);
+        if (grant.ok !== true) return false;
         var mcPlayer = player.getMCEntity();
         chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
         var note = reason ? String(reason) : "";
@@ -3175,7 +3223,7 @@ function chAwardTP(player, amount, reason) {
                 "Lv" + chCommas(rivalGetDmzLevel(data)) + " " +
                 rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst"));
         }
-        chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
+        chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(grant.granted) + " TP" +
             (note ? CH_COLOR + "7 (" + note + ")" : ""));
         return true;
     } catch (error) {
@@ -3640,20 +3688,25 @@ function chBeginBattle(player, db, session) {
     chBroadcast(CH_COLOR + "8--------------------------------");
 }
 
-function chBuildReport(session, winnerName, loserName) {
+function chBuildReport(session, winnerName, loserName, isDraw) {
     var lines = [];
     /* ASCII-only borders - unicode box lines render as ? on many clients */
     lines.push(CH_COLOR + "8--------------------------------");
     lines.push(CH_COLOR + "6" + CH_COLOR + "l RIVAL BATTLE REPORT " + CH_COLOR + "r");
     lines.push(CH_COLOR + "8--------------------------------");
-    if (winnerName === "Draw" || !loserName) {
+    if (isDraw === true || winnerName === "Draw") {
         lines.push(CH_COLOR + "8Result  " + CH_COLOR + "eDraw");
     } else {
-        lines.push(CH_COLOR + "8Winner  " + CH_COLOR + "a" + winnerName);
-        lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
+        lines.push(CH_COLOR + "8Winner  " + CH_COLOR + "a" +
+            (winnerName ? winnerName : "Unknown"));
+        if (loserName) {
+            lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
+        }
     }
+    var plannedMs = chNumber(session.durationMs, CH_DURATION_MS);
+    if (plannedMs < CH_DURATION_MS) plannedMs = CH_DURATION_MS;
     lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
-        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - plannedMs))) +
         CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
@@ -3681,7 +3734,9 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ? session.opponentUuid
             : session.challengerUuid;
         var otherCombat = session.combat[otherUuid] || chFreshCombat();
-        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+        var plannedMs = chNumber(session.durationMs, CH_DURATION_MS);
+        if (plannedMs < CH_DURATION_MS) plannedMs = CH_DURATION_MS;
+        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - plannedMs));
         var payload = {
             won: won === true,
             seasonRp: chNumber(seasonRp, 0),
@@ -3692,7 +3747,7 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ki: chNumber(combat.ki, 0),
             longestCombo: chNumber(combat.longestCombo, 0),
             biggestHit: chNumber(combat.biggestHit, 0),
-            fullDuration: duration >= (CH_DURATION_MS - 1500),
+            fullDuration: duration >= (plannedMs - 1500),
             durationMs: duration,
             knockout: result.knockout === true,
             reason: chString(result.reason),
@@ -3737,7 +3792,9 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
-    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    var plannedBattleMs = chNumber(session.durationMs, CH_DURATION_MS);
+    if (plannedBattleMs < CH_DURATION_MS) plannedBattleMs = CH_DURATION_MS;
+    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - plannedBattleMs));
     function touchDuration(record, wonFlag) {
         if (record === null) return;
         record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
@@ -4000,25 +4057,42 @@ function chEndSession(player, db, session, result) {
     delete db.playerSessions[session.opponentUuid];
     chSaveChallengeDb(player, db);
 
-    chApplyRewards(player, session, result);
+    try {
+        chApplyRewards(player, session, result);
+    } catch (rewardErr) {
+        chLog("Challenge rewards failed: " + rewardErr);
+        try {
+            print("[RivalChallenge] rewards failed: " + rewardErr);
+        } catch (ignoredPrint) {}
+    }
 
     var winnerName = "";
     var loserName = "";
-    if (result.reason === "draw") {
+    var isDraw = result.reason === "draw";
+    if (isDraw) {
         winnerName = "Draw";
     } else {
-        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
-        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+        winnerName = result.winnerUuid === session.challengerUuid
+            ? session.challengerName
+            : session.opponentName;
+        loserName = result.loserUuid === session.challengerUuid
+            ? session.challengerName
+            : session.opponentName;
+        if (!winnerName) {
+            winnerName = result.winnerUuid === session.challengerUuid
+                ? "Challenger"
+                : "Opponent";
+        }
     }
 
-    var report = chBuildReport(session, winnerName, loserName);
+    var report = chBuildReport(session, winnerName, loserName, isDraw);
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
 
     /* Show full report to the whole server */
     if (CH_BROADCAST_REPORT === true) {
         chBroadcastLines(report);
-        if (result.reason === "draw") {
+        if (isDraw) {
             chBroadcast(CH_COLOR + "e[Rival Battle] " + CH_COLOR + "fDraw!");
         } else {
             chBroadcast(CH_COLOR + "a[Rival Battle] " + CH_COLOR + "f" + winnerName +
@@ -4031,7 +4105,7 @@ function chEndSession(player, db, session, result) {
         }
     }
 
-    if (result.reason !== "draw") {
+    if (!isDraw) {
         if (a !== null) {
             if (chUuid(a) === result.winnerUuid) chMessage(a, CH_COLOR + "a[Rival] Victory!");
             else chMessage(a, CH_COLOR + "c[Rival] Defeat!");
@@ -5366,14 +5440,15 @@ function rivalFusionKill(event) {
         if (data == null) return;
         try {
             var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst");
-            rivalGrantExactTrainingPoints(data, killerTp);
+            var killerGrant = rivalGrantTrainingPoints(data, killerTp);
+            var killerShown = killerGrant.ok === true ? killerGrant.granted : killerTp;
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
             var kNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 kNote = RF_C + "7 (Lv" + rivalGetDmzLevel(data) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst")) + ")";
             }
-            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP" + kNote);
+            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerShown + " TP" + kNote);
         } catch (e) {}
 
         var partner = rfFindByUuid(partnerId);
@@ -5382,14 +5457,15 @@ function rivalFusionKill(event) {
         if (pdata == null) return;
         try {
             var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst");
-            rivalGrantExactTrainingPoints(pdata, partnerTp);
+            var partnerGrant = rivalGrantTrainingPoints(pdata, partnerTp);
+            var partnerShown = partnerGrant.ok === true ? partnerGrant.granted : partnerTp;
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
             var pNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 pNote = RF_C + "7 (Lv" + rivalGetDmzLevel(pdata) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(pdata, "burst")) + ")";
             }
-            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerTp + " TP (partner kill)" + pNote);
+            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerShown + " TP (partner kill)" + pNote);
         } catch (e2) {}
     } catch (error) {
         try { print("[RivalDMZHooks] kill " + error); } catch (e3) {}
