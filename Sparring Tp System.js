@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.8
+ Version: 3.0.9
 
  Combat-Based Training (Sparring v3)
 
@@ -9,18 +9,18 @@
   TP comes from real combat actions, not a standing timer.
   Melee, ki, blocks, clashes, and active fighting drive
   progression. Fair rivals and skilled combos pay more.
+  Battle Power is the primary scaler (v2 curve): low BP earns
+  less, high BP earns more so progression stays demanding.
 
  Changelog:
-  - Ki detection hooks MainDamageTypes.isKiblastDamage +
-    getMCDamageSource (fixes ki hits counting as melee).
-  - Combat style is damage-weighted; pure ki TP bursts never
-    display as Melee Specialist.
-  - Beam clashes hook DMZ BeamClashManager.isClashing(UUID).
-  - Style labels use style IDs (not shared multipliers).
+  - Restored v2-style BP curve as the main TP scaler. Hits use a
+    fixed action base × damage quality × BP mult (not raw damage),
+    so low BP is not overpaid and high BP is not flatlined.
+  - Prefer getBattlePowerExact; raise/scale post-BP action caps.
+  - Ki detection via MainDamageTypes.isKiblastDamage.
+  - Beam clashes via BeamClashManager.isClashing(UUID).
+  - Style labels use style IDs; damage-weighted specialists.
   - /spar command cards match Rival System layout.
-  - /spar works without CMI aliases: Bukkit preprocess + chat
-    fallbacks (.spar / !spar / ./spar).
-  - Blocks break attacker combo/Momentum.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -82,19 +82,34 @@ try { JavaUUID = Java.type("java.util.UUID"); } catch (eU) {}
 var DEBUG = false;
 var COLOR_CODE = "\u00A7";
 
-/* ---- Combat TP rates ---- */
-var TP_PER_DAMAGE = 0.06;              // base TP per damage point before multipliers
-var MAX_BASE_TP_PER_HIT = 900;         // softcap on pre-multiplier base
-var MAX_TP_PER_ACTION = 35000;         // hardcap on final TP per action
-var BLOCK_TP_BASE = 18;                // defensive TP when blocking a spar hit
+/*
+ * ---- Combat TP rates (BP-first, like Sparring v2) ----
+ *
+ * v2 paid: BASE_TP_PER_INTERVAL (1500) × BP curve every 5s.
+ * v3 pays on combat actions, but BP must still dominate.
+ * Raw damage already rises with BP, so using damage as the base
+ * flattens rewards (too much early, too little late).
+ *
+ * Formula per scored hit:
+ *   base = BASE_TP_PER_HIT × damageQuality × ki/melee efficiency
+ *   final = base × BP(curve) × rival × release × gravity × ...
+ */
+var BASE_TP_PER_HIT = 280;             // fixed action value before BP curve
+var DAMAGE_QUALITY_REF = 800;          // damage that yields ~1.0x quality
+var MIN_DAMAGE_QUALITY = 0.35;         // weak taps still count a little
+var MAX_DAMAGE_QUALITY = 1.80;         // big hits help, but don't replace BP
+var MAX_BASE_TP_PER_HIT = 700;         // softcap BEFORE BP (keep modest)
+var MAX_TP_PER_ACTION = 250000;        // safety ceiling after BP (was 35k — crushed high BP)
+var MAX_TP_PER_ACTION_BP_SCALE = 4.0;  // also allow up to BASE*BP*this
+var BLOCK_TP_BASE = 40;                // defensive TP before BP curve
 var PERFECT_BLOCK_TP_BONUS = 22;       // stub bonus (reserved; needs DMZ API)
 var BLOCK_BREAKS_COMBO = true;         // blocking resets attacker's combo / Momentum
 var SHOW_COMBO_BREAK_MESSAGES = true;
 var COMBO_BREAK_MSG_COOLDOWN_MS = 1500;
 var K_COMBO_BREAK_MSG = "spar.combo.breakMsg";
-var KNOCKBACK_RECOVERY_TP = 25;        // small bonus when hitting after heavy motion
-var VANISH_CHAIN_TP = 40;              // stub / reserved
-var BEAM_CLASH_TP_PER_TICK = 12;       // clash drip while struggle is active
+var KNOCKBACK_RECOVERY_TP = 45;        // small bonus when hitting after heavy motion
+var VANISH_CHAIN_TP = 55;              // stub / reserved
+var BEAM_CLASH_TP_PER_TICK = 35;       // clash drip before BP curve
 /*
  * Clash sustain:
  * Damage events often pause once beams lock. Do not require a fresh
@@ -561,22 +576,38 @@ function getCurrentBattlePower(playerData) {
     if (playerData == null) return 0;
     if (isAndroidUpgraded(playerData)) return computeBattlePowerFromStats(playerData);
 
+    /*
+     * Prefer Exact (double). getBattlePower() is float and can lose
+     * precision / saturate at high end, which flattens the TP curve.
+     */
     var direct = invokeNumberNoArgs(playerData, [
-        "getCurrentBattlePower", "getBattlePower", "getCurrentPower", "getPowerLevel", "getPower"
+        "getBattlePowerExact",
+        "getCurrentBattlePower",
+        "getBattlePower",
+        "getCurrentPower",
+        "getPowerLevel",
+        "getPower"
     ], -1);
     if (direct >= ANDROID_FAKE_BP_THRESHOLD) return computeBattlePowerFromStats(playerData);
-    if (direct >= 0) return direct;
+    if (direct > 0) return direct;
 
     try {
         var stats = playerData.getStats();
         var fromStats = invokeNumberNoArgs(stats, [
-            "getCurrentBattlePower", "getBattlePower", "getCurrentPower", "getPowerLevel", "getPower"
+            "getBattlePowerExact",
+            "getCurrentBattlePower",
+            "getBattlePower",
+            "getCurrentPower",
+            "getPowerLevel",
+            "getPower"
         ], -1);
         if (fromStats >= ANDROID_FAKE_BP_THRESHOLD) return computeBattlePowerFromStats(playerData);
-        if (fromStats >= 0) return fromStats;
+        if (fromStats > 0) return fromStats;
     } catch (e) {}
 
-    return 0;
+    /* Last resort: rebuild from stats (same formula DMZ uses). */
+    var computed = computeBattlePowerFromStats(playerData);
+    return computed > 0 ? computed : 0;
 }
 
 function getReleasePercent(playerData) {
@@ -678,17 +709,37 @@ function awardTrainingPoints(player, playerData, amount) {
 
 /* ========================= MULTIPLIERS ========================= */
 
+/*
+ * Piecewise log curve (same anchors as Sparring v2):
+ *  100K=2x  1M=5x  10M=12x  100M=25x  1B=50x
+ *  10B=100x 100B=150x  1T=250x  10T=400x  100T=600x
+ */
 function getBattlePowerMultiplier(bp) {
     var battlePower = Math.max(1, Number(bp));
-    var bpAnchors = [1, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000];
+    if (isNaN(battlePower) || battlePower < 1) battlePower = 1;
+
+    var bpAnchors = [
+        1,
+        100000,
+        1000000,
+        10000000,
+        100000000,
+        1000000000,
+        10000000000,
+        100000000000,
+        1000000000000,
+        10000000000000,
+        100000000000000
+    ];
     var multiplierAnchors = [1.0, 2.0, 5.0, 12.0, 25.0, 50.0, 100.0, 150.0, 250.0, 400.0, 600.0];
+
     if (battlePower <= bpAnchors[0]) return multiplierAnchors[0];
     for (var i = 0; i < bpAnchors.length - 1; i++) {
         if (battlePower <= bpAnchors[i + 1]) {
             var lowerLog = Math.log(bpAnchors[i]) / Math.log(10);
             var upperLog = Math.log(bpAnchors[i + 1]) / Math.log(10);
             var currentLog = Math.log(battlePower) / Math.log(10);
-            var progress = (currentLog - lowerLog) / (upperLog - lowerLog);
+            var progress = (currentLog - lowerLog) / Math.max(0.0001, upperLog - lowerLog);
             return multiplierAnchors[i] + (multiplierAnchors[i + 1] - multiplierAnchors[i]) * progress;
         }
     }
@@ -696,6 +747,20 @@ function getBattlePowerMultiplier(bp) {
     var finalMultiplier = multiplierAnchors[multiplierAnchors.length - 1];
     var extraDecades = (Math.log(battlePower) - Math.log(finalBP)) / Math.log(10);
     return Math.min(MAX_BP_MULTIPLIER, finalMultiplier + extraDecades * 200.0);
+}
+
+/* Soft damage quality — influences hit value without replacing BP. */
+function getDamageQuality(damage) {
+    damage = Math.max(0, Number(damage));
+    if (!(damage > 0) || !(DAMAGE_QUALITY_REF > 0)) return MIN_DAMAGE_QUALITY;
+    var quality = Math.sqrt(damage / DAMAGE_QUALITY_REF);
+    return clamp(quality, MIN_DAMAGE_QUALITY, MAX_DAMAGE_QUALITY);
+}
+
+function getMaxTpForAction(bpMult) {
+    var scaled = Math.floor(BASE_TP_PER_HIT * Math.max(1, Number(bpMult)) * MAX_TP_PER_ACTION_BP_SCALE);
+    if (isNaN(scaled) || scaled < 1) scaled = MAX_TP_PER_ACTION;
+    return Math.min(MAX_TP_PER_ACTION, Math.max(BASE_TP_PER_HIT, scaled));
 }
 
 function getRivalMultiplier(bpA, bpB) {
@@ -1241,6 +1306,18 @@ function showEndReport(player, reason) {
     sendMessage(player, sparColor("8") + "Style  " + sparColor("e") + styleName(player));
     var perfect = readNumber(temp, K_SESSION_PERFECT, 0) > 0;
     sendMessage(player, sparColor("8") + "Perfect Training  " + (perfect ? sparColor("a") + "Yes" : sparColor("7") + "No"));
+    try {
+        var partnerObj = (partner != "" && partner != "Unknown") ? getPlayerByName(player, partner) : null;
+        var selfVals = getLiveTrainingValues(player);
+        var partnerVals = partnerObj != null ? getLiveTrainingValues(partnerObj) : null;
+        if (selfVals != null) {
+            var reportBP = selfVals.bp;
+            if (partnerVals != null && partnerVals.bp > 0) reportBP = Math.min(selfVals.bp, partnerVals.bp);
+            if (!(reportBP > 0)) reportBP = selfVals.bp;
+            sendMessage(player, sparColor("8") + "BP Scale  " + sparColor("f") + formatWholeNumber(reportBP) +
+                sparColor("8") + "  (" + sparColor("e") + formatMult(getBattlePowerMultiplier(reportBP)) + sparColor("8") + ")");
+        }
+    } catch (eBp) {}
     sendMessage(player, sparColor("8") + "Total TP Earned  " + sparColor("a") + formatWholeNumber(readNumber(temp, K_SESSION_TP, 0)));
     sendMessage(player, sparColor("8") + "--------------------------------");
 }
@@ -1500,18 +1577,28 @@ function buildCombatMultiplier(player, partner) {
     var valuesB = getLiveTrainingValues(partner);
     if (valuesA == null || valuesB == null) return null;
 
+    /*
+     * Weaker fighter's BP drives the shared training scale (v2).
+     * Stops high-BP players from farming low-BP partners for huge TP,
+     * while equal high-BP spars keep end-game payouts.
+     */
     var trainingBP = Math.min(valuesA.bp, valuesB.bp);
+    if (!(trainingBP > 0)) trainingBP = Math.max(valuesA.bp, valuesB.bp, 1);
+
     var averageRelease = (valuesA.release + valuesB.release) / 2.0;
     var averageGravity = (valuesA.gravity + valuesB.gravity) / 2.0;
     var averageWeight = (valuesA.weight + valuesB.weight) / 2.0;
     var perfect = isPerfectTraining(valuesA, valuesB);
+    var bpMult = getBattlePowerMultiplier(trainingBP);
 
     return {
         valuesA: valuesA,
         valuesB: valuesB,
         perfect: perfect,
+        trainingBP: trainingBP,
+        bpMult: bpMult,
         total:
-            getBattlePowerMultiplier(trainingBP) *
+            bpMult *
             getRivalMultiplier(valuesA.bp, valuesB.bp) *
             getReleaseMultiplier(averageRelease) *
             getGravityMultiplier(averageGravity) *
@@ -1536,7 +1623,9 @@ function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
 
     var amount = Math.floor(baseAmount * built.total);
     if (amount <= 0) return 0;
-    if (amount > MAX_TP_PER_ACTION) amount = MAX_TP_PER_ACTION;
+
+    var actionCap = getMaxTpForAction(built.bpMult);
+    if (amount > actionCap) amount = actionCap;
 
     if (!awardTrainingPoints(player, built.valuesA.data, amount)) return 0;
 
@@ -1551,7 +1640,10 @@ function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
         else if (r == "melee") kind = "melee";
     }
     queueTpMessage(player, amount, kind);
-    debug(player, reason + " +" + amount + " (base " + Math.floor(baseAmount) + ")");
+    debug(player, reason + " +" + amount +
+        " (base " + Math.floor(baseAmount) +
+        " bp " + formatWholeNumber(built.trainingBP) +
+        " x" + formatMult(built.bpMult) + ")");
     return amount;
 }
 
@@ -1594,8 +1686,13 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
         putNumber(temp, K_HEAVY_MOTION_UNTIL, 0);
     }
 
+    /*
+     * BP-first payout (v2 curve):
+     * fixed hit base × mild damage quality × efficiency × BP mult...
+     * Damage no longer drives the bulk of the reward.
+     */
     var eff = isKi ? kiEfficiency(kiKind) : MELEE_EFF;
-    var base = damage * TP_PER_DAMAGE * eff;
+    var base = BASE_TP_PER_HIT * getDamageQuality(damage) * eff;
     awardCombatTp(
         attacker,
         victim,
@@ -2683,7 +2780,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.0.8] BeamClashManager=" +
+            print("[Sparring v3.0.9] BP-curve restored | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
