@@ -1,24 +1,25 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.6
+ Version: 3.0.7
 
  Combat-Based Training (Sparring v3)
 
  Philosophy:
   TP comes from real combat actions, not a standing timer.
-  Melee, ki, blocks, clashes (best-effort), and active fighting
-  drive progression. Fair rivals and skilled combos pay more.
+  Melee, ki, blocks, clashes, and active fighting drive
+  progression. Fair rivals and skilled combos pay more.
 
  Changelog:
-  - /spar command cards match Rival System layout (uiHead / uiProp /
-    uiSection / uiCmd / ranked tops).
-  - /spar works without CMI aliases: Bukkit command preprocess +
-    chat fallbacks (.spar / !spar / ./spar).
-  - /spar commands also via trigger 70 / 72-79 (CMI optional).
-  - Beam/ki clashes no longer die to the hit-activity timer mid-clash.
-  - Fixed ki hits being classified as melee for TP/style/stats.
-  - Successfully blocking an attack breaks the attacker's combo.
+  - Beam clashes hook DMZ BeamClashManager.isClashing(UUID)
+    (real mod clashes cancel damage, so timestamp proxies fail).
+  - Combat style labels use style IDs (fixes ki fighters being
+    shown as "Melee Specialist" when melee/ki share a multiplier).
+  - TP chat shows the combat style clearly (not "ki / Melee...").
+  - /spar command cards match Rival System layout.
+  - /spar works without CMI aliases: Bukkit preprocess + chat
+    fallbacks (.spar / !spar / ./spar).
+  - Blocks break attacker combo/Momentum.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -41,10 +42,11 @@
   - trigger   (70, 72-79)
 
  Detection notes:
-  FULL: melee, ki (binary), blocking, release/gravity/weight/BP
-  BEST-EFFORT: ki subtype (laser vs blast), knockback recovery proxy
-  STUB/LIMITED: beam clash drip (mutual recent laser), vanish,
-                perfect block (no DMZ API yet)
+  FULL: melee, ki (binary), blocking, release/gravity/weight/BP,
+        beam clash via BeamClashManager.isClashing
+  BEST-EFFORT: ki subtype (laser vs blast), knockback recovery proxy,
+               clash fallback if BeamClashManager is unavailable
+  STUB/LIMITED: vanish, perfect block (no DMZ API yet)
 ============================================================
 */
 
@@ -63,9 +65,13 @@ var LocalDate = Java.type("java.time.LocalDate");
 var AbstractKiProjectile = null;
 var KiLaserEntity = null;
 var KiBlastEntity = null;
+var BeamClashManager = null;
+var JavaUUID = null;
 try { AbstractKiProjectile = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile"); } catch (eA) {}
 try { KiLaserEntity = Java.type("com.dragonminez.common.init.entities.ki.KiLaserEntity"); } catch (eL) {}
 try { KiBlastEntity = Java.type("com.dragonminez.common.init.entities.ki.KiBlastEntity"); } catch (eB) {}
+try { BeamClashManager = Java.type("com.dragonminez.common.combat.clash.BeamClashManager"); } catch (eC) {}
+try { JavaUUID = Java.type("java.util.UUID"); } catch (eU) {}
 
 /* ========================= CONFIGURATION ========================= */
 
@@ -148,7 +154,7 @@ var STREAK_BONUS_PER_DAY = 0.02;
 var MAX_STREAK_DAYS_FOR_BONUS = 14;
 var MAX_STREAK_MULTIPLIER = 1.25;
 
-/* Combat style bonuses (small) */
+/* Combat style bonuses (small) — values may match; never reverse-map from them */
 var STYLE_BONUS = {
     melee: 1.08,
     ki: 1.08,
@@ -157,6 +163,15 @@ var STYLE_BONUS = {
     guardian: 1.06,
     speed: 1.05,
     none: 1.00
+};
+var STYLE_NAMES = {
+    melee: "Melee Specialist",
+    ki: "Ki Specialist",
+    balanced: "Balanced Fighter",
+    beam: "Beam Specialist",
+    guardian: "Guardian",
+    speed: "Speed Fighter",
+    none: "Developing"
 };
 var STYLE_SAMPLE_HITS = 12;            // classify after this many scored actions
 
@@ -233,6 +248,7 @@ var K_TP_MSG_NEXT = "spar.tpmsg.next";
 var K_TP_PENDING = "spar.tpmsg.pending";
 var K_TP_PENDING_MELEE = "spar.tpmsg.pendingMelee";
 var K_TP_PENDING_KI = "spar.tpmsg.pendingKi";
+var K_TP_PENDING_CLASH = "spar.tpmsg.pendingClash";
 var K_LAST_HIT_KIND = "spar.lastHit.kind";
 var K_MSG_NEXT = "spar.message.next";
 var K_TICK_NEXT = "spar.tick.next";
@@ -1047,7 +1063,7 @@ function clearSessionData(player) {
         K_SESSION_TP, K_SESSION_MELEE, K_SESSION_KI, K_SESSION_DMG, K_SESSION_TAKEN,
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
         K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_CLASH_UNTIL,
-        K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_LAST_HIT_KIND,
+        K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_TP_PENDING_CLASH, K_LAST_HIT_KIND,
         K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
     ];
     for (var i = 0; i < keys.length; i++) {
@@ -1133,6 +1149,7 @@ function showEndReport(player, reason) {
         sparColor("8") + "   Momentum  " + sparColor("f") + Math.floor(readNumber(temp, K_SESSION_MAX_MOM, 0)));
     sendMessage(player, sparColor("8") + "Blocks  " + sparColor("f") + Math.floor(readNumber(temp, K_SESSION_BLOCKS, 0)) +
         sparColor("8") + "   Clash  " + sparColor("f") + formatDuration(readNumber(temp, K_SESSION_CLASH_MS, 0)));
+    sendMessage(player, sparColor("8") + "Style  " + sparColor("e") + styleName(player));
     var perfect = readNumber(temp, K_SESSION_PERFECT, 0) > 0;
     sendMessage(player, sparColor("8") + "Perfect Training  " + (perfect ? sparColor("a") + "Yes" : sparColor("7") + "No"));
     sendMessage(player, sparColor("8") + "Total TP Earned  " + sparColor("a") + formatWholeNumber(readNumber(temp, K_SESSION_TP, 0)));
@@ -1281,7 +1298,7 @@ function formatMult(v) {
 
 /* ========================= STYLE ========================= */
 
-function getStyleMultiplier(player) {
+function getStyleId(player) {
     var temp = player.getTempdata();
     var melee = readNumber(temp, K_STYLE_MELEE, 0);
     var ki = readNumber(temp, K_STYLE_KI, 0);
@@ -1289,31 +1306,32 @@ function getStyleMultiplier(player) {
     var blocks = readNumber(temp, K_STYLE_BLOCK, 0);
     var move = readNumber(temp, K_STYLE_MOVE, 0);
     var total = melee + ki;
-    if (total < STYLE_SAMPLE_HITS) return STYLE_BONUS.none;
+    if (total < STYLE_SAMPLE_HITS) return "none";
 
     var meleeRatio = melee / Math.max(1, total);
     var kiRatio = ki / Math.max(1, total);
     var beamRatio = beam / Math.max(1, total);
     var blockRatio = blocks / Math.max(1, total + blocks);
 
-    if (beamRatio >= 0.35) return STYLE_BONUS.beam;
-    if (blockRatio >= 0.35) return STYLE_BONUS.guardian;
-    if (meleeRatio >= 0.80) return STYLE_BONUS.melee;
-    if (kiRatio >= 0.80) return STYLE_BONUS.ki;
-    if (meleeRatio >= 0.35 && kiRatio >= 0.35) return STYLE_BONUS.balanced;
-    if (move > total) return STYLE_BONUS.speed;
+    if (beamRatio >= 0.35) return "beam";
+    if (blockRatio >= 0.35) return "guardian";
+    if (meleeRatio >= 0.80) return "melee";
+    if (kiRatio >= 0.80) return "ki";
+    if (meleeRatio >= 0.35 && kiRatio >= 0.35) return "balanced";
+    if (move > total) return "speed";
+    return "none";
+}
+
+function getStyleMultiplier(player) {
+    var id = getStyleId(player);
+    if (STYLE_BONUS[id] != null) return STYLE_BONUS[id];
     return STYLE_BONUS.none;
 }
 
 function styleName(player) {
-    var mult = getStyleMultiplier(player);
-    if (mult == STYLE_BONUS.beam) return "Beam Specialist";
-    if (mult == STYLE_BONUS.guardian) return "Guardian";
-    if (mult == STYLE_BONUS.melee) return "Melee Specialist";
-    if (mult == STYLE_BONUS.ki) return "Ki Specialist";
-    if (mult == STYLE_BONUS.balanced) return "Balanced Fighter";
-    if (mult == STYLE_BONUS.speed) return "Speed Fighter";
-    return "Developing";
+    var id = getStyleId(player);
+    if (STYLE_NAMES[id] != null) return STYLE_NAMES[id];
+    return STYLE_NAMES.none;
 }
 
 /* ========================= TP AWARD FROM COMBAT ========================= */
@@ -1325,21 +1343,26 @@ function flushPendingTpMessage(player) {
     if (pending <= 0) return;
     var pendingMelee = Math.floor(readNumber(temp, K_TP_PENDING_MELEE, 0));
     var pendingKi = Math.floor(readNumber(temp, K_TP_PENDING_KI, 0));
+    var pendingClash = Math.floor(readNumber(temp, K_TP_PENDING_CLASH, 0));
     putNumber(temp, K_TP_PENDING, 0);
     putNumber(temp, K_TP_PENDING_MELEE, 0);
     putNumber(temp, K_TP_PENDING_KI, 0);
+    putNumber(temp, K_TP_PENDING_CLASH, 0);
 
-    var sourceLabel = "mixed";
-    if (pendingKi > 0 && pendingMelee <= 0) sourceLabel = "ki";
-    else if (pendingMelee > 0 && pendingKi <= 0) sourceLabel = "melee";
-    else if (pendingKi <= 0 && pendingMelee <= 0) {
-        sourceLabel = readString(temp, K_LAST_HIT_KIND, "combat");
+    var style = styleName(player);
+    var label = style;
+    if (style == STYLE_NAMES.none) {
+        if (pendingClash > 0 && pendingMelee <= 0 && pendingKi <= 0) label = "Beam Clash";
+        else if (pendingKi > 0 && pendingMelee <= 0) label = "Ki";
+        else if (pendingMelee > 0 && pendingKi <= 0) label = "Melee";
+        else if (pendingKi > 0 && pendingMelee > 0) label = "Mixed";
+        else label = "Combat";
     }
 
     sendMessage(player, sparText(
         sparColor("6"), "[Sparring] ",
         sparColor("a"), "+", formatWholeNumber(pending), " TP",
-        sparColor("8"), "  (", sourceLabel, " / ", styleName(player), ")"
+        sparColor("8"), "  (", label, ")"
     ));
 }
 
@@ -1351,6 +1374,9 @@ function queueTpMessage(player, amount, hitKind) {
     if (kind == "melee") {
         putNumber(temp, K_TP_PENDING_MELEE, readNumber(temp, K_TP_PENDING_MELEE, 0) + amount);
         putString(temp, K_LAST_HIT_KIND, "melee");
+    } else if (kind == "beam" || kind == "clash" || kind == "beam-clash") {
+        putNumber(temp, K_TP_PENDING_CLASH, readNumber(temp, K_TP_PENDING_CLASH, 0) + amount);
+        putString(temp, K_LAST_HIT_KIND, "clash");
     } else if (kind != "") {
         putNumber(temp, K_TP_PENDING_KI, readNumber(temp, K_TP_PENDING_KI, 0) + amount);
         putString(temp, K_LAST_HIT_KIND, "ki");
@@ -1684,13 +1710,68 @@ function refreshClashCombatActivity(player, partner) {
     refreshMovementActivity(partner);
 }
 
+/* Resolve a CNPC player into a java.util.UUID for DMZ clash APIs. */
+function getJavaUUID(player) {
+    if (player == null) return null;
+    try {
+        var mc = null;
+        try { mc = player.getMCEntity(); } catch (eMc) { mc = null; }
+        if (mc != null) {
+            /* Prefer Forge UUID object used by BeamClashManager.CLASHING_OWNERS */
+            try {
+                var forgeId = mc.m_20148_();
+                if (forgeId != null) return forgeId;
+            } catch (eForge) {}
+            try {
+                var uuid = mc.getUUID();
+                if (uuid != null && typeof uuid !== "string") return uuid;
+            } catch (eGet) {}
+        }
+    } catch (e1) {}
+    if (JavaUUID == null) return null;
+    try {
+        var raw = getPlayerUUID(player);
+        if (raw == null || raw == "") return null;
+        return JavaUUID.fromString("" + raw);
+    } catch (e2) {
+        return null;
+    }
+}
+
+function canQueryModClash(player, partner) {
+    return BeamClashManager != null &&
+        getJavaUUID(player) != null &&
+        getJavaUUID(partner) != null;
+}
+
 /*
- * Returns true while a ki/beam clash should keep the spar alive.
- * Starts on mutual recent ki/beam, then holds while fighters stay
- * engaged — even when damage ticks pause during the lock.
+ * Real DMZ clash detection.
+ * BeamClashManager cancels LivingAttackEvent while clashing, so damage
+ * timestamps go stale. Query the mod's active clash set instead.
  */
-function updateBeamClashState(player, partner) {
+function isPlayerBeamClashing(player) {
+    if (player == null || BeamClashManager == null) return false;
+    try {
+        var id = getJavaUUID(player);
+        if (id == null) return false;
+        return BeamClashManager.isClashing(id) === true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/* True when both spar partners are in a real DMZ beam clash. */
+function isModBeamClashActive(player, partner) {
+    return isPlayerBeamClashing(player) && isPlayerBeamClashing(partner);
+}
+
+/*
+ * Fallback when BeamClashManager / UUID lookup is unavailable.
+ * Real clashes cancel damage, so this is best-effort only.
+ */
+function updateBeamClashFallback(player, partner) {
     if (player == null || partner == null) return false;
+
     var now = nowMs();
     var aTemp = player.getTempdata();
     var bTemp = partner.getTempdata();
@@ -1713,15 +1794,10 @@ function updateBeamClashState(player, partner) {
         hasRecentBeamOrKi(partner, BEAM_CLASH_START_WINDOW_MS);
 
     var shouldHold = false;
-    if (mutualRecent) {
-        shouldHold = true;
-    } else if (active && bothCharging) {
-        shouldHold = true;
-    } else if (active && eitherCharging && eitherRecent) {
-        shouldHold = true;
-    } else if (active && eitherRecent) {
-        shouldHold = true;
-    }
+    if (mutualRecent) shouldHold = true;
+    else if (active && bothCharging) shouldHold = true;
+    else if (active && eitherCharging && eitherRecent) shouldHold = true;
+    else if (active && eitherRecent) shouldHold = true;
 
     if (shouldHold) {
         until = now + BEAM_CLASH_HOLD_MS;
@@ -1729,22 +1805,52 @@ function updateBeamClashState(player, partner) {
         putNumber(bTemp, K_CLASH_UNTIL, until);
         return true;
     }
-
     return now <= until;
 }
 
+function updateBeamClashState(player, partner) {
+    if (player == null || partner == null) return false;
+
+    /* Prefer the real mod clash state when UUID lookup works. */
+    if (canQueryModClash(player, partner)) {
+        if (isModBeamClashActive(player, partner)) {
+            var now = nowMs();
+            var holdUntil = now + BEAM_CLASH_HOLD_MS;
+            putNumber(player.getTempdata(), K_CLASH_UNTIL, holdUntil);
+            putNumber(partner.getTempdata(), K_CLASH_UNTIL, holdUntil);
+            return true;
+        }
+        /* Soft linger right after a mod clash ends. */
+        var linger = nowMs();
+        return linger <= readNumber(player.getTempdata(), K_CLASH_UNTIL, 0) ||
+            linger <= readNumber(partner.getTempdata(), K_CLASH_UNTIL, 0);
+    }
+
+    return updateBeamClashFallback(player, partner);
+}
+
 function isBeamClashActive(player, partner) {
+    if (player == null || partner == null) return false;
+    if (isModBeamClashActive(player, partner)) return true;
     var now = nowMs();
     return now <= readNumber(player.getTempdata(), K_CLASH_UNTIL, 0) ||
         now <= readNumber(partner.getTempdata(), K_CLASH_UNTIL, 0);
 }
 
 function processBeamClash(player, partner) {
-    if (!updateBeamClashState(player, partner) && !isBeamClashActive(player, partner)) {
-        return false;
-    }
+    var active = updateBeamClashState(player, partner) || isBeamClashActive(player, partner);
+    if (!active) return false;
 
     refreshClashCombatActivity(player, partner);
+
+    /*
+     * Only drip TP / style while the mod reports an active clash
+     * (or the classpath fallback hold). Soft linger after a lock
+     * ends keeps the session alive without padding payouts.
+     */
+    var paying = isModBeamClashActive(player, partner) ||
+        (!canQueryModClash(player, partner) && updateBeamClashFallback(player, partner));
+    if (!paying) return true;
 
     var now = nowMs();
     var next = readNumber(player.getTempdata(), K_CLASH_NEXT, 0);
@@ -1756,7 +1862,7 @@ function processBeamClash(player, partner) {
     putNumber(player.getTempdata(), K_STYLE_BEAM,
         readNumber(player.getTempdata(), K_STYLE_BEAM, 0) + 1);
 
-    awardCombatTp(player, partner, BEAM_CLASH_TP_PER_TICK, "beam-clash", "ki");
+    awardCombatTp(player, partner, BEAM_CLASH_TP_PER_TICK, "beam-clash", "beam");
     return true;
 }
 
@@ -2466,6 +2572,11 @@ function registerSparSlashCommandHook() {
 function init(event) {
     try {
         registerSparSlashCommandHook();
+        try {
+            print("[Sparring v3.0.7] BeamClashManager=" +
+                (BeamClashManager != null ? "hooked" : "MISSING") +
+                " JavaUUID=" + (JavaUUID != null ? "ok" : "MISSING"));
+        } catch (eLog) {}
     } catch (e) {
         try { print("[Sparring v3] init " + e); } catch (x) {}
     }
