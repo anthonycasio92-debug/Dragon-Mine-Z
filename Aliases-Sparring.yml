@@ -1,81 +1,98 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases (v3)
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3) — OPTIONAL
 # ============================================================
-# Requires Sparring Tp System.js v3.0.4+ (Global Player) with
-# the trigger event enabled (handles ids 70, 72-79).
+# Sparring Tp System.js v3.0.5+ already handles:
+#   /spar ...   (Bukkit slash hook, no CMI needed)
+#   .spar ...   !spar ...   ./spar ...   (chat fallback)
 #
-# Optional: also install Sparring Command Handler.js in a
-# player script-slot (responses are deduped if both exist).
+# Paste these ONLY if you still want CMI aliases / tab-complete.
+# Merge the keys under your existing CustomAlias: section
+# (do NOT paste a second "CustomAlias:" root if one already exists).
 #
-# In-game:
-#   /spar
-#   /spar help
-#   /spar stats [player]
-#   /spar top [tp|streak|session|payout|perfect|time|combo|clash]
-#
-# [playerName] MUST be argument 0 for the script.
-# $1- passes the rest of the typed args.
-#
-# Paste into CMI CustomAlias.yml then: /cmi reload
+# Then: /cmi reload
 # ============================================================
+
+# spar:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# sparstats:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] stats $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# spartop:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] top $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# sparhelp:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] help
+#   AddTabs: true
+#   ExactMatch: true
 
 CustomAlias:
   spar:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] $1-
+    - asFakeOp! noppes script trigger 70 [playerName] $1-
     AddTabs: true
     ExactMatch: false
 
   sparstats:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] stats $1-
+    - asFakeOp! noppes script trigger 70 [playerName] stats $1-
     AddTabs: true
     ExactMatch: false
 
   spartop:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top $1-
+    - asFakeOp! noppes script trigger 70 [playerName] top $1-
     AddTabs: true
     ExactMatch: false
 
   sparstreak:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top streak
+    - asFakeOp! noppes script trigger 70 [playerName] top streak
     AddTabs: true
     ExactMatch: true
 
   sparsession:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top session
+    - asFakeOp! noppes script trigger 70 [playerName] top session
     AddTabs: true
     ExactMatch: true
 
   sparlongest:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top session
+    - asFakeOp! noppes script trigger 70 [playerName] top session
     AddTabs: true
     ExactMatch: true
 
   sparpayout:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top payout
+    - asFakeOp! noppes script trigger 70 [playerName] top payout
     AddTabs: true
     ExactMatch: true
 
   sparperfect:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top perfect
+    - asFakeOp! noppes script trigger 70 [playerName] top perfect
     AddTabs: true
     ExactMatch: true
 
   spartime:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] top time
+    - asFakeOp! noppes script trigger 70 [playerName] top time
     AddTabs: true
     ExactMatch: true
 
   sparhelp:
     Cmds:
-    - asOp! noppes script trigger 70 [playerName] help
+    - asFakeOp! noppes script trigger 70 [playerName] help
     AddTabs: true
     ExactMatch: true
