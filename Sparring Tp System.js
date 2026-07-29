@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.4
+ Version: 3.0.6
 
  Combat-Based Training (Sparring v3)
 
@@ -11,8 +11,11 @@
   drive progression. Fair rivals and skilled combos pay more.
 
  Changelog:
-  - /spar commands now work from this Global Player script alone
-    (trigger 70 / 72-79) with robust player resolution for CMI.
+  - /spar command cards match Rival System layout (uiHead / uiProp /
+    uiSection / uiCmd / ranked tops).
+  - /spar works without CMI aliases: Bukkit command preprocess +
+    chat fallbacks (.spar / !spar / ./spar).
+  - /spar commands also via trigger 70 / 72-79 (CMI optional).
   - Beam/ki clashes no longer die to the hit-activity timer mid-clash.
   - Fixed ki hits being classified as melee for TP/style/stats.
   - Successfully blocking an attack breaks the attacker's combo.
@@ -21,18 +24,20 @@
   CustomNPCs Global Player Script
 
  COMMANDS:
-  Handled here via trigger ids (CMI aliases in Aliases-Sparring.yml):
-    70  = /spar router
-    72-79 = tops / stats shortcuts
+  Native (no CMI required):
+    /spar ...   (Bukkit preprocess hook)
+    .spar ...   or  !spar ...  or  ./spar ...  (chat)
+  Optional CMI aliases (Aliases-Sparring.yml) -> trigger 70
   Optional: Sparring Command Handler.js in a player script-slot
-  (same triggers; either/both can be installed).
 
  REQUIRED EVENTS:
+  - init
   - tick
   - damagedEntity
   - damaged
   - logout
   - died
+  - chat
   - trigger   (70, 72-79)
 
  Detection notes:
@@ -1602,31 +1607,8 @@ function updateSparringLeaderboard(player) {
 }
 
 function showSparringLeaderboard(player) {
-    var store = getLeaderboardStore(player);
-    if (store == null) {
-        sendMessage(player, sparText(sparColor("c"), "[Sparring] No leaderboard data."));
-        return;
-    }
-    var names = readLeaderboardNames(store);
-    var rows = [];
-    for (var i = 0; i < names.length; i++) {
-        var safe = leaderboardSafeName(names[i]);
-        rows.push({ name: names[i], tp: readNumber(store, LB_TP_PREFIX + safe, 0) });
-    }
-    rows.sort(function (a, b) { return b.tp - a.tp; });
-    sendMessage(player, sparColor("8") + "--------------------------------");
-    sendMessage(player, sparColor("6") + sparColor("l") + " TOP SPARRING TP " + sparColor("r"));
-    sendMessage(player, sparColor("8") + "--------------------------------");
-    var limit = Math.min(LEADERBOARD_SIZE, rows.length);
-    if (limit <= 0) {
-        sendMessage(player, sparColor("7") + "No sparring records yet.");
-    } else {
-        for (var r = 0; r < limit; r++) {
-            sendMessage(player, sparColor("e") + (r + 1) + ". " + sparColor("f") + rows[r].name +
-                sparColor("8") + "  " + sparColor("a") + formatWholeNumber(rows[r].tp) + " TP");
-        }
-    }
-    sendMessage(player, sparColor("8") + "--------------------------------");
+    /* Same Rival-style ranked card as /spar top */
+    sparCmdShowTop(player, "tp");
 }
 
 /* ========================= SESSION TICK ========================= */
@@ -2040,24 +2022,66 @@ function resolveSparCommandPlayer(event) {
     return null;
 }
 
-function sparCmdLine(player) {
+/* Rival-style command cards */
+function uiLine(player) {
     sendMessage(player, sparColor("8") + "--------------------------------");
+}
+function uiBlank(player) {
+    sendMessage(player, " ");
+}
+function uiHead(player, title) {
+    uiLine(player);
+    sendMessage(player, sparColor("6") + sparColor("l") + " " + title + " " + sparColor("r"));
+    uiLine(player);
+}
+function uiFoot(player) {
+    uiLine(player);
+}
+function uiSection(player, title) {
+    sendMessage(player, sparColor("6") + title);
+}
+function uiProp(player, label, value) {
+    sendMessage(player, sparColor("8") + label + "  " + value);
+}
+function uiCmd(player, cmd, desc) {
+    if (desc != null && desc != "") {
+        sendMessage(player, sparColor("e") + "  " + cmd + sparColor("8") + "  " + desc);
+    } else {
+        sendMessage(player, sparColor("e") + "  " + cmd);
+    }
+}
+function uiBanner(player, tag, text) {
+    sendMessage(player, sparColor("6") + "[" + tag + "] " + text);
 }
 
 function sparCmdHelp(player) {
-    sparCmdLine(player);
-    sendMessage(player, sparColor("6") + sparColor("l") + " SPARRING SYSTEM v3 " + sparColor("r"));
-    sparCmdLine(player);
-    sendMessage(player, sparColor("8") + "Train  " + sparColor("7") + "Fight each other (melee or ki) to start");
-    sendMessage(player, sparColor("8") + "Pay  " + sparColor("7") + "TP from combat actions, not standing still");
-    sendMessage(player, " ");
-    sendMessage(player, sparColor("6") + "Commands");
-    sendMessage(player, sparColor("e") + "  /spar" + sparColor("8") + "  this help menu");
-    sendMessage(player, sparColor("e") + "  /spar stats [player]" + sparColor("8") + "  personal record");
-    sendMessage(player, sparColor("e") + "  /spar top [tp|streak|session|payout|perfect|time|combo|clash]");
-    sendMessage(player, " ");
-    sendMessage(player, sparColor("8") + "Shortcuts  " + sparColor("7") + "/sparstats /spartop /sparstreak ...");
-    sparCmdLine(player);
+    uiHead(player, "SPARRING SYSTEM");
+    uiProp(player, "Train", sparColor("7") + "Fight each other " + sparColor("8") + "(" +
+        sparColor("f") + "melee" + sparColor("8") + " or " + sparColor("f") + "ki" + sparColor("8") + ") to start");
+    uiProp(player, "Pay", sparColor("7") + "TP from combat actions" + sparColor("8") + "  |  " +
+        sparColor("7") + "not standing still");
+    uiProp(player, "Bonus", sparColor("7") + "Momentum" + sparColor("8") + "  |  " +
+        sparColor("7") + "Session" + sparColor("8") + "  |  " +
+        sparColor("7") + "Streak" + sparColor("8") + "  |  " +
+        sparColor("7") + "Perfect" + sparColor("8") + "  |  " +
+        sparColor("7") + "Style");
+    uiBlank(player);
+    uiSection(player, "Training");
+    uiCmd(player, "/spar", "this help menu");
+    uiCmd(player, "/spar stats [player]", "personal sparring record");
+    uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
+    uiBlank(player);
+    uiSection(player, "Shortcuts");
+    uiCmd(player, "/sparstats", "same as /spar stats");
+    uiCmd(player, "/spartop", "same as /spar top");
+    uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
+    uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
+    uiBlank(player);
+    sendMessage(player, sparColor("8") + "Stay active: trade damage, move, and keep the fight going.");
+    sendMessage(player, sparColor("8") + "Also works  " + sparColor("e") + ".spar" +
+        sparColor("8") + "  /  " + sparColor("e") + "!spar" +
+        sparColor("8") + "  /  " + sparColor("e") + "./spar");
+    uiFoot(player);
 }
 
 function sparCmdLoadProfile(store, playerName) {
@@ -2084,7 +2108,7 @@ function sparCmdLoadProfile(store, playerName) {
 function sparCmdShowPersonal(player, targetName) {
     var store = getLeaderboardStore(player);
     if (store == null) {
-        sendMessage(player, sparText(sparColor("c"), "[Sparring] Could not access stored data."));
+        uiBanner(player, "Sparring", sparColor("c") + "Could not access stored data.");
         return;
     }
     var wanted = String(targetName || "").replace(/^\s+|\s+$/g, "");
@@ -2099,31 +2123,29 @@ function sparCmdShowPersonal(player, targetName) {
         profile.totalTP <= 0 && profile.sessions <= 0 && profile.totalTime <= 0 &&
         streakCurrent <= 0 && streakBest <= 0
     ) {
-        sendMessage(player, sparText(sparColor("c"), "[Sparring] No sparring record for ", displayName));
-        sendMessage(player, sparColor("8") + "Start by fighting another player (melee or ki).");
+        uiBanner(player, "Sparring", sparColor("c") + "No record for " + displayName);
+        sendMessage(player, sparColor("8") + "Start a session by fighting another player (melee or ki).");
         return;
     }
 
-    sparCmdLine(player);
-    sendMessage(player, sparColor("6") + sparColor("l") + " SPARRING STATS " + sparColor("r"));
-    sparCmdLine(player);
-    sendMessage(player, sparColor("8") + "Player  " + sparColor("f") + displayName);
-    sendMessage(player, sparColor("8") + "Total TP  " + sparColor("a") + formatWholeNumber(profile.totalTP));
-    sendMessage(player, sparColor("8") + "Best Session  " + sparColor("a") + formatWholeNumber(profile.bestPayout) + " TP");
-    sendMessage(player, sparColor("8") + "Sessions  " + sparColor("f") + formatWholeNumber(profile.sessions));
-    sendMessage(player, sparColor("8") + "Time  " + sparColor("b") + formatDuration(profile.totalTime));
-    sendMessage(player, sparColor("8") + "Longest  " + sparColor("b") + formatDuration(profile.longest));
-    sendMessage(player, " ");
-    sendMessage(player, sparColor("8") + "Melee  " + sparColor("f") + formatWholeNumber(profile.melee) +
-        sparColor("8") + "   Ki  " + sparColor("b") + formatWholeNumber(profile.ki));
-    sendMessage(player, sparColor("8") + "Blocks  " + sparColor("7") + formatWholeNumber(profile.blocks) +
+    uiHead(player, "SPARRING STATS");
+    uiProp(player, "Player", sparColor("f") + displayName);
+    uiProp(player, "Total TP", sparColor("a") + formatWholeNumber(profile.totalTP) +
+        sparColor("8") + "  Best  " + sparColor("a") + formatWholeNumber(profile.bestPayout) + " TP");
+    uiBlank(player);
+    uiProp(player, "Sessions", sparColor("f") + formatWholeNumber(profile.sessions));
+    uiProp(player, "Time", sparColor("b") + formatDuration(profile.totalTime) +
+        sparColor("8") + "   Longest  " + sparColor("b") + formatDuration(profile.longest));
+    uiProp(player, "Damage", sparColor("f") + formatWholeNumber(profile.melee) + sparColor("7") + " melee" +
+        sparColor("8") + "  " + sparColor("b") + formatWholeNumber(profile.ki) + sparColor("7") + " ki");
+    uiProp(player, "Defense", sparColor("7") + formatWholeNumber(profile.blocks) + " blocks" +
         sparColor("8") + "   Clash  " + sparColor("d") + formatDuration(profile.clash));
-    sendMessage(player, sparColor("8") + "Perfect  " + sparColor("d") + formatWholeNumber(profile.perfect) + " sessions");
-    sendMessage(player, sparColor("8") + "Best Combo  " + sparColor("e") + formatWholeNumber(profile.combo) +
-        sparColor("8") + "   Momentum  " + sparColor("e") + "Tier " + formatWholeNumber(profile.momentum));
-    sendMessage(player, sparColor("8") + "Streak  " + sparColor("6") + formatWholeNumber(streakCurrent) +
-        " days" + sparColor("8") + "   Best  " + sparColor("6") + formatWholeNumber(streakBest) + " days");
-    sparCmdLine(player);
+    uiProp(player, "Perfect", sparColor("d") + formatWholeNumber(profile.perfect) +
+        sparColor("8") + "   Combo  " + sparColor("e") + formatWholeNumber(profile.combo) +
+        sparColor("8") + "   Momentum  " + sparColor("e") + formatWholeNumber(profile.momentum));
+    uiProp(player, "Streak", sparColor("6") + formatWholeNumber(streakCurrent) + " days" +
+        sparColor("8") + "   Best  " + sparColor("6") + formatWholeNumber(streakBest) + " days");
+    uiFoot(player);
 }
 
 function sparCmdTopInfo(category) {
@@ -2158,7 +2180,7 @@ function sparCmdTopInfo(category) {
 function sparCmdShowTop(player, category) {
     var store = getLeaderboardStore(player);
     if (store == null) {
-        sendMessage(player, sparText(sparColor("c"), "[Sparring] Could not access stored data."));
+        uiBanner(player, "Sparring", sparColor("c") + "Could not access stored data.");
         return;
     }
     var info = sparCmdTopInfo(category);
@@ -2173,27 +2195,33 @@ function sparCmdShowTop(player, category) {
     }
     rows.sort(function (a, b) { return b.value - a.value; });
 
-    sparCmdLine(player);
-    sendMessage(player, sparColor("6") + sparColor("l") + " " + info.title + " " + sparColor("r"));
-    sparCmdLine(player);
+    uiHead(player, info.title);
+
+    if (rows.length == 0 || rows[0].value <= 0) {
+        sendMessage(player, sparColor("8") + "No records have been saved yet.");
+        uiFoot(player);
+        return;
+    }
 
     var shown = 0;
     for (var r = 0; r < rows.length && shown < LEADERBOARD_SIZE; r++) {
         if (rows[r].value <= 0) continue;
         shown++;
+        var placeColor = shown == 1 ? "6" : (shown == 2 ? "7" : (shown == 3 ? "e" : "8"));
         var valueText = "";
         if (info.kind == "time") valueText = formatDuration(rows[r].value);
         else if (info.kind == "days") valueText = formatWholeNumber(rows[r].value) + " days";
         else if (info.kind == "tp") valueText = formatWholeNumber(rows[r].value) + " TP";
         else valueText = formatWholeNumber(rows[r].value);
 
-        sendMessage(player, sparColor("e") + "#" + shown + sparColor("f") + "  " + rows[r].name +
-            sparColor("8") + "  ........  " + sparColor("a") + valueText);
+        sendMessage(player,
+            sparColor(placeColor) + "#" + shown +
+            sparColor("f") + "  " + rows[r].name +
+            sparColor("8") + "  ........  " +
+            sparColor("a") + valueText
+        );
     }
-    if (shown <= 0) {
-        sendMessage(player, sparColor("8") + "No records have been saved yet.");
-    }
-    sparCmdLine(player);
+    uiFoot(player);
 }
 
 function claimSparCommand(player) {
@@ -2209,9 +2237,8 @@ function claimSparCommand(player) {
     }
 }
 
-function sparCmdRoute(player, event) {
-    var parts = sparCmdArgsFrom(event, 1);
-    if (parts.length == 0) {
+function sparCmdRouteParts(player, parts) {
+    if (parts == null || parts.length == 0) {
         sparCmdHelp(player);
         return;
     }
@@ -2232,8 +2259,253 @@ function sparCmdRoute(player, event) {
     ) {
         sparCmdShowTop(player, sub);
     } else {
-        sendMessage(player, sparText(sparColor("c"), "[Sparring] Unknown command."));
+        uiBanner(player, "Sparring", sparColor("c") + "Unknown command.");
         sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar help");
+    }
+}
+
+function sparCmdRoute(player, event) {
+    sparCmdRouteParts(player, sparCmdArgsFrom(event, 1));
+}
+
+/*
+ * Parse "/spar help", "./spar stats", ".spar top tp", "!spar", "sparhelp".
+ * Returns parts after the spar keyword, or null if not a spar command.
+ */
+function parseSparCommandLine(line) {
+    if (line == null) return null;
+    var text = String(line).replace(/^\s+/, "").replace(/\s+$/, "");
+    if (text == "") return null;
+
+    /* Normalize ./spar, /.spar, /spar, .spar, !spar */
+    text = text.replace(/^\.\//, "").replace(/^\/\./, "").replace(/^[\/.\!]+/, "");
+    var lower = text.toLowerCase();
+
+    if (lower == "spar" || lower.indexOf("spar ") == 0) {
+        var rest = text.length > 4 ? text.substring(4).replace(/^\s+/, "") : "";
+        if (rest == "") return [];
+        return rest.split(/\s+/);
+    }
+
+    if (lower == "sparhelp" || lower.indexOf("sparhelp ") == 0) return ["help"];
+    if (lower == "sparstats" || lower.indexOf("sparstats ") == 0) {
+        var sRest = text.length > 9 ? text.substring(9).replace(/^\s+/, "") : "";
+        if (sRest == "") return ["stats"];
+        return ["stats"].concat(sRest.split(/\s+/));
+    }
+    if (lower == "spartop" || lower.indexOf("spartop ") == 0) {
+        var tRest = text.length > 7 ? text.substring(7).replace(/^\s+/, "") : "";
+        if (tRest == "") return ["top"];
+        return ["top"].concat(tRest.split(/\s+/));
+    }
+    if (lower == "sparstreak") return ["top", "streak"];
+    if (lower == "sparsession" || lower == "sparlongest") return ["top", "session"];
+    if (lower == "sparpayout") return ["top", "payout"];
+    if (lower == "sparperfect") return ["top", "perfect"];
+    if (lower == "spartime") return ["top", "time"];
+
+    return null;
+}
+
+function handleSparCommandLine(player, line) {
+    if (player == null) return false;
+    var parts = parseSparCommandLine(line);
+    if (parts == null) return false;
+    if (!claimSparCommand(player)) return true;
+    try {
+        sparCmdRouteParts(player, parts);
+    } catch (err) {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring Command Error] ", err));
+    }
+    return true;
+}
+
+function cnpcPlayerFromBukkit(bukkitPlayer) {
+    if (bukkitPlayer == null) return null;
+    try {
+        return getPlayerByName(null, String(bukkitPlayer.getName()));
+    } catch (e) {
+        return null;
+    }
+}
+
+function getSparHookStore() {
+    try {
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var world = NpcAPI.Instance().getIWorld("minecraft:overworld");
+        if (world == null) world = NpcAPI.Instance().getIWorld("overworld");
+        if (world != null) return world.getStoreddata();
+    } catch (e) {}
+    return null;
+}
+
+function findHookPlugin() {
+    var names = ["CustomNPCs", "CustomNPC", "customnpcs", "CMI", "LuckPerms"];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var plugin = Bukkit.getPluginManager().getPlugin(names[i]);
+            if (plugin != null && plugin.isEnabled()) return plugin;
+        } catch (e) {}
+    }
+    try {
+        var all = Bukkit.getPluginManager().getPlugins();
+        if (all != null && all.length > 0) return all[0];
+    } catch (e2) {}
+    return null;
+}
+
+/* In-memory only so script reload re-registers cleanly. */
+var SPAR_SLASH_HOOK_READY = false;
+
+function isSparSlashMessage(msg) {
+    var lower = String(msg || "").toLowerCase();
+    return (
+        lower == "/spar" ||
+        lower.indexOf("/spar ") == 0 ||
+        lower == "/./spar" ||
+        lower.indexOf("/./spar ") == 0 ||
+        lower == "./spar" ||
+        lower.indexOf("./spar ") == 0 ||
+        lower == "/sparhelp" ||
+        lower.indexOf("/sparhelp ") == 0 ||
+        lower == "/sparstats" ||
+        lower.indexOf("/sparstats ") == 0 ||
+        lower == "/spartop" ||
+        lower.indexOf("/spartop ") == 0 ||
+        lower == "/sparstreak" ||
+        lower == "/sparsession" ||
+        lower == "/sparlongest" ||
+        lower == "/sparpayout" ||
+        lower == "/sparperfect" ||
+        lower == "/spartime"
+    );
+}
+
+/*
+ * Intercept /spar before Bukkit prints "Unknown command".
+ */
+function registerSparSlashCommandHook() {
+    if (SPAR_SLASH_HOOK_READY === true) return;
+
+    try {
+        var plugin = findHookPlugin();
+        if (plugin == null) {
+            try { print("[Sparring v3] slash hook: no host plugin found"); } catch (e0) {}
+            return;
+        }
+
+        var Listener = Java.type("org.bukkit.event.Listener");
+        var EventPriority = Java.type("org.bukkit.event.EventPriority");
+        var Preprocess = Java.type("org.bukkit.event.player.PlayerCommandPreprocessEvent");
+        var EventExecutor = Java.type("org.bukkit.plugin.EventExecutor");
+
+        var listener;
+        var executor;
+        try {
+            listener = new JavaAdapter(Listener, {});
+            executor = new JavaAdapter(EventExecutor, {
+                execute: function (l, event) {
+                    try {
+                        if (event == null) return;
+                        var msg = "";
+                        try { msg = String(event.getMessage()); } catch (e1) { return; }
+                        if (!isSparSlashMessage(msg)) return;
+
+                        var bp = null;
+                        try { bp = event.getPlayer(); } catch (e2) { return; }
+                        var player = cnpcPlayerFromBukkit(bp);
+                        if (player == null) return;
+
+                        if (handleSparCommandLine(player, msg)) {
+                            try { event.setCancelled(true); } catch (e3) {
+                                try { event.setCanceled(true); } catch (e4) {}
+                            }
+                        }
+                    } catch (err) {
+                        try { print("[Sparring v3] slash hook " + err); } catch (e5) {}
+                    }
+                }
+            });
+        } catch (adapterErr) {
+            /* Older engines: ScriptObjectMirror / interface implementation */
+            listener = {};
+            executor = {
+                execute: function (l, event) {
+                    try {
+                        if (event == null) return;
+                        var msg = String(event.getMessage());
+                        if (!isSparSlashMessage(msg)) return;
+                        var player = cnpcPlayerFromBukkit(event.getPlayer());
+                        if (player == null) return;
+                        if (handleSparCommandLine(player, msg)) {
+                            try { event.setCancelled(true); } catch (e3) {}
+                        }
+                    } catch (err2) {}
+                }
+            };
+            listener = new Listener(listener);
+            executor = new EventExecutor(executor);
+        }
+
+        Bukkit.getPluginManager().registerEvent(
+            Preprocess.class,
+            listener,
+            EventPriority.NORMAL,
+            executor,
+            plugin,
+            false
+        );
+
+        SPAR_SLASH_HOOK_READY = true;
+        try { print("[Sparring v3] /spar slash command hook registered via " + plugin.getName()); } catch (eLog) {}
+    } catch (err) {
+        try { print("[Sparring v3] slash hook register failed: " + err); } catch (e2) {}
+    }
+}
+
+function init(event) {
+    try {
+        registerSparSlashCommandHook();
+    } catch (e) {
+        try { print("[Sparring v3] init " + e); } catch (x) {}
+    }
+}
+
+function chat(event) {
+    try {
+        var player = event.player;
+        if (player == null) return;
+        var message = "";
+        try { message = String(event.message); } catch (e1) {
+            try { message = String(event.getMessage()); } catch (e2) { return; }
+        }
+        if (message == "") return;
+
+        var lower = message.toLowerCase().replace(/^\s+/, "");
+        /*
+         * Chat fallbacks when slash aliases are missing:
+         * .spar / !spar / ./spar  (and bare shortcuts)
+         */
+        if (!(
+            lower.indexOf(".spar") == 0 ||
+            lower.indexOf("!spar") == 0 ||
+            lower.indexOf("./spar") == 0 ||
+            lower == "spar" ||
+            lower.indexOf("spar ") == 0 ||
+            lower.indexOf("sparhelp") == 0 ||
+            lower.indexOf("sparstats") == 0 ||
+            lower.indexOf("spartop") == 0
+        )) {
+            return;
+        }
+
+        if (handleSparCommandLine(player, message)) {
+            try { event.setCanceled(true); } catch (e3) {
+                try { event.setCancelled(true); } catch (e4) {}
+            }
+        }
+    } catch (err) {
+        try { print("[Sparring v3] chat " + err); } catch (x) {}
     }
 }
 

@@ -1,15 +1,17 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.0.4
+ Version: 3.0.6
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.0.4+):
-  Sparring Tp System.js (Global Player) now also handles /spar
+ NOTE (v3.0.6+):
+  Command cards match Rival System layout (uiHead / uiProp /
+  uiSection / uiCmd / ranked tops).
+  Sparring Tp System.js (Global Player) also handles /spar
   triggers 70 / 72-79. This script-slot handler is OPTIONAL.
   If both are installed, responses are deduped.
 
@@ -475,9 +477,11 @@ function topCategory(category) {
 /* ========================= COMMANDS ========================= */
 
 function cmdHelp(player) {
-    uiHead(player, "SPARRING SYSTEM v3");
-    uiProp(player, "Train", C + "7Fight each other (melee or ki) to start");
-    uiProp(player, "Pay", C + "7TP from combat actions, not standing still");
+    uiHead(player, "SPARRING SYSTEM");
+    uiProp(player, "Train", C + "7Fight each other " + C + "8(" +
+        C + "fmelee" + C + "8 or " + C + "fki" + C + "8) to start");
+    uiProp(player, "Pay", C + "7TP from combat actions" + C + "8  |  " +
+        C + "7not standing still");
     uiProp(
         player,
         "Bonus",
@@ -488,18 +492,20 @@ function cmdHelp(player) {
         C + "7Style"
     );
     uiBlank(player);
-    uiSection(player, "Commands");
+    uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
-    uiCmd(player, "/spar stats [player]", "personal record");
+    uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
     uiCmd(player, "/spartop", "same as /spar top");
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
-    uiCmd(player, "/sparperfect | /spartime", "");
+    uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
     msg(player, C + "8Stay active: trade damage, move, and keep the fight going.");
+    msg(player, C + "8Also works  " + C + "e.spar" + C + "8  /  " +
+        C + "e!spar" + C + "8  /  " + C + "e./spar");
     uiFoot(player);
 }
 
@@ -527,28 +533,26 @@ function showPersonal(player, targetName) {
         streak.best > 0;
 
     if (!hasAny) {
-        uiBanner(player, "Sparring", C + "cNo sparring record for " + displayName);
+        uiBanner(player, "Sparring", C + "cNo record for " + displayName);
         msg(player, C + "8Start a session by fighting another player (melee or ki).");
         return;
     }
 
     uiHead(player, "SPARRING STATS");
     uiProp(player, "Player", C + "f" + displayName);
+    uiProp(player, "Total TP", C + "a" + commas(profile.totalTP) +
+        C + "8  Best  " + C + "a" + commas(profile.bestPayout) + " TP");
     uiBlank(player);
-    uiProp(player, "Total TP", C + "a" + commas(profile.totalTP));
-    uiProp(player, "Best Session", C + "a" + commas(profile.bestPayout) + " TP");
     uiProp(player, "Sessions", C + "f" + commas(profile.sessions));
-    uiProp(player, "Time", C + "b" + duration(profile.totalTime));
-    uiProp(player, "Longest", C + "b" + duration(profile.longest));
-    uiBlank(player);
-    uiProp(player, "Melee Dmg", C + "f" + commas(profile.melee));
-    uiProp(player, "Ki Dmg", C + "b" + commas(profile.ki));
-    uiProp(player, "Blocks", C + "7" + commas(profile.blocks));
-    uiProp(player, "Clash Time", C + "d" + duration(profile.clash));
-    uiBlank(player);
-    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) + C + "7 sessions");
-    uiProp(player, "Best Combo", C + "e" + commas(profile.combo) + " hits");
-    uiProp(player, "Best Momentum", C + "e" + "Tier " + commas(profile.momentum));
+    uiProp(player, "Time", C + "b" + duration(profile.totalTime) +
+        C + "8   Longest  " + C + "b" + duration(profile.longest));
+    uiProp(player, "Damage", C + "f" + commas(profile.melee) + C + "7 melee" +
+        C + "8  " + C + "b" + commas(profile.ki) + C + "7 ki");
+    uiProp(player, "Defense", C + "7" + commas(profile.blocks) + " blocks" +
+        C + "8   Clash  " + C + "d" + duration(profile.clash));
+    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) +
+        C + "8   Combo  " + C + "e" + commas(profile.combo) +
+        C + "8   Momentum  " + C + "e" + commas(profile.momentum));
     uiProp(
         player,
         "Streak",
