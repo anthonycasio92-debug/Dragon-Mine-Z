@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.0
+ Version: 3.0.1
 
  Combat-Based Training (Sparring v3)
 
@@ -9,6 +9,10 @@
   TP comes from real combat actions, not a standing timer.
   Melee, ki, blocks, clashes (best-effort), and active fighting
   drive progression. Fair rivals and skilled combos pay more.
+
+ Changelog:
+  - Successfully blocking an attack breaks the attacker's combo
+    and Momentum.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -61,6 +65,10 @@ var MAX_BASE_TP_PER_HIT = 900;         // softcap on pre-multiplier base
 var MAX_TP_PER_ACTION = 35000;         // hardcap on final TP per action
 var BLOCK_TP_BASE = 18;                // defensive TP when blocking a spar hit
 var PERFECT_BLOCK_TP_BONUS = 22;       // stub bonus (reserved; needs DMZ API)
+var BLOCK_BREAKS_COMBO = true;         // blocking resets attacker's combo / Momentum
+var SHOW_COMBO_BREAK_MESSAGES = true;
+var COMBO_BREAK_MSG_COOLDOWN_MS = 1500;
+var K_COMBO_BREAK_MSG = "spar.combo.breakMsg";
 var KNOCKBACK_RECOVERY_TP = 25;        // small bonus when hitting after heavy motion
 var VANISH_CHAIN_TP = 40;              // stub / reserved
 var BEAM_CLASH_TP_PER_TICK = 12;       // best-effort clash drip while mutual lasers
@@ -300,35 +308,22 @@ function isSamePlayer(a, b) {
 }
 
 function getPlayerByName(player, name) {
-    if (player == null || name == null || String(name) == "") return null;
-    var wanted = String(name);
+    if (name == null || String(name) == "") return null;
+    var wanted = String(name).toLowerCase();
     try {
-        var worlds = player.getWorld().getAPI().getIWorlds();
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var worlds = NpcAPI.Instance().getIWorlds();
         for (var i = 0; i < worlds.length; i++) {
             try {
                 var players = worlds[i].getAllPlayers();
                 for (var p = 0; p < players.length; p++) {
                     try {
-                        if (String(players[p].getName()).equalsIgnoreCase(wanted)) return players[p];
-                    } catch (e1) {
-                        if (String(players[p].getName()).toLowerCase() == wanted.toLowerCase()) return players[p];
-                    }
+                        if (String(players[p].getName()).toLowerCase() == wanted) return players[p];
+                    } catch (e1) {}
                 }
             } catch (e2) {}
         }
     } catch (e) {}
-    try {
-        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
-        var worlds2 = NpcAPI.Instance().getIWorlds();
-        for (var w = 0; w < worlds2.length; w++) {
-            try {
-                var plist = worlds2[w].getAllPlayers();
-                for (var j = 0; j < plist.length; j++) {
-                    if (String(plist[j].getName()).toLowerCase() == wanted.toLowerCase()) return plist[j];
-                }
-            } catch (e3) {}
-        }
-    } catch (e4) {}
     return null;
 }
 
@@ -1059,6 +1054,41 @@ function registerCombatHit(player) {
     }
 }
 
+/*
+ * Reset combo + Momentum (e.g. attack was blocked).
+ * Returns true if there was something to break.
+ */
+function breakCombo(player, reason) {
+    if (player == null || BLOCK_BREAKS_COMBO !== true) return false;
+    var temp = player.getTempdata();
+    var combo = Math.floor(readNumber(temp, K_COMBO, 0));
+    var momentum = Math.floor(readNumber(temp, K_MOMENTUM, 0));
+    var hadCombo = combo > 0 || momentum > 0 ||
+        nowMs() <= readNumber(temp, K_COMBO_UNTIL, 0) ||
+        nowMs() <= readNumber(temp, K_MOMENTUM_UNTIL, 0);
+
+    putNumber(temp, K_COMBO, 0);
+    putNumber(temp, K_COMBO_UNTIL, 0);
+    putNumber(temp, K_MOMENTUM, 0);
+    putNumber(temp, K_MOMENTUM_UNTIL, 0);
+
+    if (!hadCombo) return false;
+
+    if (SHOW_COMBO_BREAK_MESSAGES === true) {
+        var now = nowMs();
+        if (now >= readNumber(temp, K_COMBO_BREAK_MSG, 0)) {
+            putNumber(temp, K_COMBO_BREAK_MSG, now + COMBO_BREAK_MSG_COOLDOWN_MS);
+            var note = reason ? String(reason) : "combo broken";
+            sendMessage(player, sparText(
+                sparColor("6"), "[Sparring] ",
+                sparColor("c"), "Combo broken",
+                sparColor("8"), " - ", note
+            ));
+        }
+    }
+    return true;
+}
+
 function roman(n) {
     var r = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
     if (n >= 1 && n <= r.length) return r[n - 1];
@@ -1204,8 +1234,15 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
         putNumber(temp, K_STYLE_MELEE, readNumber(temp, K_STYLE_MELEE, 0) + 1);
     }
 
-    registerCombatHit(attacker);
     refreshMovementActivity(attacker);
+
+    /* Blocked attacks break combo / Momentum instead of extending them. */
+    if (isPlayerBlocking(victim)) {
+        breakCombo(attacker, "attack blocked");
+        return;
+    }
+
+    registerCombatHit(attacker);
 
     /* Knockback recovery proxy: hit shortly after heavy motion */
     var now = nowMs();
@@ -1600,6 +1637,22 @@ function damaged(event) {
         putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
         refreshMovementActivity(victim);
         awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
+
+        /* Successful block snaps the attacker's combo / Momentum. */
+        if (breakCombo(partner, "attack blocked")) {
+            if (SHOW_COMBO_BREAK_MESSAGES === true) {
+                throttleMessage(
+                    victim,
+                    K_COMBO_BREAK_MSG,
+                    COMBO_BREAK_MSG_COOLDOWN_MS,
+                    sparText(
+                        sparColor("6"), "[Sparring] ",
+                        sparColor("a"), "Block! ",
+                        sparColor("7"), "Opponent combo broken"
+                    )
+                );
+            }
+        }
 
         /*
          * Perfect block: no DMZ API available yet.
