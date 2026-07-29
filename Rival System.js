@@ -1,11 +1,13 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.0
+ Version: 4.7.1
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Nearby rival presence/kill bonuses require that rival to have killed
+   a mob within the last 30 seconds (blocks AFK parking for proximity TP).
  - Nearby rivals that boost / grant TP are capped at 2 (strongest
    links win: Nemesis > Mutual > Declared, then RP points).
  - All Rival System TP awards are scaled to 60% of previous values.
@@ -1648,6 +1650,12 @@ var RP_SHOW_KILL_TP = true;
  * proximity offense pick. Extra rivals in range are ignored for rewards.
  */
 var RP_NEAR_RIVAL_TP_CAP = 2;
+/*
+ * AFK gate: a rival only counts for nearby rewards if they have killed
+ * a non-player mob within this window.
+ */
+var RP_NEAR_ACTIVE_KILL_MS = 30 * 1000;
+var RP_LAST_MOB_KILL_KEY = "rival.v4.lastMobKillAt";
 
 /*
  * Global Rival System TP scale (presence, kill, challenge, surpass, etc.)
@@ -2342,6 +2350,27 @@ function rpNearRivalTpCap() {
     return cap;
 }
 
+function rpMarkMobKill(player) {
+    if (!rpIsPlayer(player)) return;
+    try {
+        rpTempPut(rpTemp(player), RP_LAST_MOB_KILL_KEY, rpNow());
+    } catch (ignored) {}
+}
+
+/*
+ * True if this player killed a mob recently enough to count as "active"
+ * for nearby-rival rewards (blocks AFK parking).
+ */
+function rpHasRecentMobKill(player, nowMs) {
+    if (!rpIsPlayer(player)) return false;
+    var now = nowMs > 0 ? nowMs : rpNow();
+    var windowMs = Math.floor(Number(RP_NEAR_ACTIVE_KILL_MS));
+    if (isNaN(windowMs) || !isFinite(windowMs) || windowMs < 1000) windowMs = 30000;
+    var last = rpTempNumber(rpTemp(player), RP_LAST_MOB_KILL_KEY, 0);
+    if (last <= 0) return false;
+    return (now - last) <= windowMs;
+}
+
 function rpTemp(player) {
     return player.getTempdata();
 }
@@ -2427,6 +2456,9 @@ function rpProcessPlayer(player) {
         link.presenceMs = rpNumber(link.presenceMs, 0) + RP_TICK_MS;
         if (record.career === null || typeof record.career !== "object") record.career = {};
         record.career.presenceMs = rpNumber(record.career.presenceMs, 0) + RP_TICK_MS;
+
+        /* AFK rivals do not grant nearby reward / multiplier credit. */
+        if (!rpHasRecentMobKill(rivalPlayer, now)) continue;
 
         var rivalData = rpGetDMZ(rivalPlayer);
         var rivalReleased = rpGetReleasedBP(rivalData);
@@ -2618,6 +2650,8 @@ function rpHandleKillNearRivals(killer, victim) {
         var rivalPlayer = rpFindOnlineByUuid(rivalUuid);
         if (rivalPlayer === null) continue;
         if (rpDistance(killer, rivalPlayer) > rpRangeForPoints(link.points)) continue;
+        /* AFK rivals do not grant kill-near-rival TP. */
+        if (!rpHasRecentMobKill(rivalPlayer, rpNow())) continue;
 
         nearKillList.push({
             rivalUuid: rivalUuid,
@@ -2865,6 +2899,10 @@ function rivalProxKill(event) {
         var killer = event.player;
         var victim = event.entity;
         if (!rpIsPlayer(killer) || victim === null) return;
+        /* Track mob kills so nearby presence rewards require recent activity. */
+        if (!rpIsPlayer(victim)) {
+            rpMarkMobKill(killer);
+        }
         rpHandleKillNearRivals(killer, victim);
     } catch (error) {
         rpLog("kill failed: " + error);
