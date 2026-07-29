@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.2
+ Version: 3.0.3
 
  Combat-Based Training (Sparring v3)
 
@@ -11,6 +11,9 @@
   drive progression. Fair rivals and skilled combos pay more.
 
  Changelog:
+  - Beam/ki clashes no longer die to the hit-activity timer mid-clash.
+    Active clashes refresh combat activity and keep awarding drip TP
+    while both fighters keep the beam struggle going.
   - Fixed ki hits being classified as melee for TP/style/stats
     (broader damage-source + projectile detection).
   - Successfully blocking an attack breaks the attacker's combo
@@ -74,7 +77,15 @@ var COMBO_BREAK_MSG_COOLDOWN_MS = 1500;
 var K_COMBO_BREAK_MSG = "spar.combo.breakMsg";
 var KNOCKBACK_RECOVERY_TP = 25;        // small bonus when hitting after heavy motion
 var VANISH_CHAIN_TP = 40;              // stub / reserved
-var BEAM_CLASH_TP_PER_TICK = 12;       // best-effort clash drip while mutual lasers
+var BEAM_CLASH_TP_PER_TICK = 12;       // clash drip while struggle is active
+/*
+ * Clash sustain:
+ * Damage events often pause once beams lock. Do not require a fresh
+ * hit every few seconds — hold the clash while both stay engaged.
+ */
+var BEAM_CLASH_START_WINDOW_MS = 8000; // mutual recent beam/ki to enter clash
+var BEAM_CLASH_HOLD_MS = 4000;         // keep clash alive without new hits
+var BEAM_CLASH_TICK_MS = 500;
 var RELEASE_CONTROL_TP_PER_SEC = 4;    // passive while fighting at high release
 var HIGH_RELEASE_THRESHOLD = 180.0;
 
@@ -188,6 +199,7 @@ var K_LAST_IN_PARTNER = "spar.lastIn.partner";
 var K_LAST_IN_TIME = "spar.lastIn.time";
 var K_LAST_KI_OUT = "spar.lastKiOut.time";
 var K_LAST_LASER_OUT = "spar.lastLaserOut.time";
+var K_CLASH_UNTIL = "spar.clash.until";
 var K_MOVE_X = "spar.move.x";
 var K_MOVE_Y = "spar.move.y";
 var K_MOVE_Z = "spar.move.z";
@@ -605,6 +617,22 @@ function isPlayerBlocking(player) {
     } catch (e) { return false; }
 }
 
+function isPlayerChargingKi(player) {
+    try {
+        var data = getDMZData(player);
+        if (data == null) return false;
+        var status = data.getStatus();
+        if (status == null) return false;
+        try {
+            if (status.isChargingKi() === true) return true;
+        } catch (e1) {}
+        try {
+            if (status.isActionCharging() === true) return true;
+        } catch (e2) {}
+    } catch (e) {}
+    return false;
+}
+
 function awardTrainingPoints(player, playerData, amount) {
     try {
         amount = Math.floor(Number(amount));
@@ -1011,7 +1039,7 @@ function clearSessionData(player) {
         K_COMBO, K_COMBO_UNTIL, K_MOMENTUM, K_MOMENTUM_UNTIL,
         K_SESSION_TP, K_SESSION_MELEE, K_SESSION_KI, K_SESSION_DMG, K_SESSION_TAKEN,
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
-        K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT,
+        K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_CLASH_UNTIL,
         K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_LAST_HIT_KIND,
         K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
     ];
@@ -1452,7 +1480,13 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
 
     if (isKi) {
         putNumber(aTemp, K_LAST_KI_OUT, now);
-        if (kiKind == "beam") putNumber(aTemp, K_LAST_LASER_OUT, now);
+        /*
+         * Beams often classify as "beam" or "other". Stamp laser time for
+         * beam/charge and any ki so clash sustain can start from mutual ki.
+         */
+        if (kiKind == "beam" || kiKind == "charge" || kiKind == "other" || kiKind == "basic") {
+            putNumber(aTemp, K_LAST_LASER_OUT, now);
+        }
     }
 
     if (isSessionActive(attacker) && isSessionActive(target)) return;
@@ -1641,28 +1675,112 @@ function handleRecoverableFailure(player, partner, reason) {
     if (now >= until) endSession(player, partner, reason);
 }
 
-function processBeamClash(player, partner) {
+function hasRecentBeamOrKi(player, windowMs) {
+    var temp = player.getTempdata();
     var now = nowMs();
-    var aLaser = readNumber(player.getTempdata(), K_LAST_LASER_OUT, 0);
-    var bLaser = readNumber(partner.getTempdata(), K_LAST_LASER_OUT, 0);
-    if (now - aLaser > 1200 || now - bLaser > 1200) return;
+    var laserAge = now - readNumber(temp, K_LAST_LASER_OUT, 0);
+    var kiAge = now - readNumber(temp, K_LAST_KI_OUT, 0);
+    return laserAge <= windowMs || kiAge <= windowMs;
+}
 
+function refreshClashCombatActivity(player, partner) {
+    if (player == null || partner == null) return;
+    var now = nowMs();
+    var aTemp = player.getTempdata();
+    var bTemp = partner.getTempdata();
+    var aName = getPlayerName(player);
+    var bName = getPlayerName(partner);
+
+    /* Keep hit-activity alive so the session timer cannot expire mid-clash. */
+    putString(aTemp, K_LAST_OUT_PARTNER, bName);
+    putNumber(aTemp, K_LAST_OUT_TIME, now);
+    putString(bTemp, K_LAST_OUT_PARTNER, aName);
+    putNumber(bTemp, K_LAST_OUT_TIME, now);
+    refreshMovementActivity(player);
+    refreshMovementActivity(partner);
+}
+
+/*
+ * Returns true while a ki/beam clash should keep the spar alive.
+ * Starts on mutual recent ki/beam, then holds while fighters stay
+ * engaged — even when damage ticks pause during the lock.
+ */
+function updateBeamClashState(player, partner) {
+    if (player == null || partner == null) return false;
+    var now = nowMs();
+    var aTemp = player.getTempdata();
+    var bTemp = partner.getTempdata();
+    var until = Math.max(
+        readNumber(aTemp, K_CLASH_UNTIL, 0),
+        readNumber(bTemp, K_CLASH_UNTIL, 0)
+    );
+    var active = now <= until;
+
+    var mutualRecent =
+        hasRecentBeamOrKi(player, BEAM_CLASH_START_WINDOW_MS) &&
+        hasRecentBeamOrKi(partner, BEAM_CLASH_START_WINDOW_MS);
+
+    var aCharge = isPlayerChargingKi(player);
+    var bCharge = isPlayerChargingKi(partner);
+    var bothCharging = aCharge && bCharge;
+    var eitherCharging = aCharge || bCharge;
+    var eitherRecent =
+        hasRecentBeamOrKi(player, BEAM_CLASH_START_WINDOW_MS) ||
+        hasRecentBeamOrKi(partner, BEAM_CLASH_START_WINDOW_MS);
+
+    var shouldHold = false;
+    if (mutualRecent) {
+        shouldHold = true;
+    } else if (active && bothCharging) {
+        shouldHold = true;
+    } else if (active && eitherCharging && eitherRecent) {
+        shouldHold = true;
+    } else if (active && eitherRecent) {
+        shouldHold = true;
+    }
+
+    if (shouldHold) {
+        until = now + BEAM_CLASH_HOLD_MS;
+        putNumber(aTemp, K_CLASH_UNTIL, until);
+        putNumber(bTemp, K_CLASH_UNTIL, until);
+        return true;
+    }
+
+    return now <= until;
+}
+
+function isBeamClashActive(player, partner) {
+    var now = nowMs();
+    return now <= readNumber(player.getTempdata(), K_CLASH_UNTIL, 0) ||
+        now <= readNumber(partner.getTempdata(), K_CLASH_UNTIL, 0);
+}
+
+function processBeamClash(player, partner) {
+    if (!updateBeamClashState(player, partner) && !isBeamClashActive(player, partner)) {
+        return false;
+    }
+
+    refreshClashCombatActivity(player, partner);
+
+    var now = nowMs();
     var next = readNumber(player.getTempdata(), K_CLASH_NEXT, 0);
-    if (now < next) return;
-    putNumber(player.getTempdata(), K_CLASH_NEXT, now + 500);
+    if (now < next) return true;
+    putNumber(player.getTempdata(), K_CLASH_NEXT, now + BEAM_CLASH_TICK_MS);
 
     putNumber(player.getTempdata(), K_SESSION_CLASH_MS,
-        readNumber(player.getTempdata(), K_SESSION_CLASH_MS, 0) + 500);
+        readNumber(player.getTempdata(), K_SESSION_CLASH_MS, 0) + BEAM_CLASH_TICK_MS);
     putNumber(player.getTempdata(), K_STYLE_BEAM,
         readNumber(player.getTempdata(), K_STYLE_BEAM, 0) + 1);
 
-    awardCombatTp(player, partner, BEAM_CLASH_TP_PER_TICK, "beam-clash");
+    awardCombatTp(player, partner, BEAM_CLASH_TP_PER_TICK, "beam-clash", "ki");
+    return true;
 }
 
 function processReleaseControl(player, partner) {
     var values = getLiveTrainingValues(player);
     if (values == null || values.release < HIGH_RELEASE_THRESHOLD) return;
-    if (!hasRecentOutgoingHit(player, getPartnerName(player))) return;
+    if (!hasRecentOutgoingHit(player, getPartnerName(player)) &&
+        !isBeamClashActive(player, partner)) return;
 
     var now = nowMs();
     var next = readNumber(player.getTempdata(), K_RELEASE_CTRL_NEXT, 0);
@@ -1713,16 +1831,24 @@ function processSession(player) {
 
     updateMovement(player);
 
+    /*
+     * Clash first: beam locks often stop damage ticks, which used to trip
+     * the hit-activity timer and end the spar before the clash finished.
+     */
+    var inClash = processBeamClash(player, partner);
+
     var failureReason = "";
     if (distanceBetween(player, partner) > MAX_SPAR_DISTANCE) {
         failureReason = "fighters moved too far apart";
-    } else if (
-        !hasRecentOutgoingHit(player, partnerName) ||
-        !hasRecentOutgoingHit(partner, getPlayerName(player))
-    ) {
-        failureReason = "both fighters must resume exchanging damage";
-    } else if (!hasRecentMovement(player) || !hasRecentMovement(partner)) {
-        failureReason = "both fighters must resume moving";
+    } else if (!inClash) {
+        if (
+            !hasRecentOutgoingHit(player, partnerName) ||
+            !hasRecentOutgoingHit(partner, getPlayerName(player))
+        ) {
+            failureReason = "both fighters must resume exchanging damage";
+        } else if (!hasRecentMovement(player) || !hasRecentMovement(partner)) {
+            failureReason = "both fighters must resume moving";
+        }
     }
 
     if (failureReason != "") {
@@ -1735,7 +1861,6 @@ function processSession(player) {
     /* Expire momentum visually */
     getMomentumMultiplier(player);
 
-    processBeamClash(player, partner);
     processReleaseControl(player, partner);
     processPerfectBanner(player, partner);
 
