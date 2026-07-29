@@ -1,11 +1,17 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.8
+ Version: 4.6.9
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Challenge report Time uses the chosen fight length (not always 60s).
+ - Challenges longer than 2 minutes broadcast live score every 1 minute
+   (short fights keep the faster cadence).
+ - Challenge/Rival TP keeps DMZ multipliers AND chat shows the real
+   granted amount after those multipliers (not the pre-boost figure).
+ - Winner / battle report always broadcasts even if reward math throws.
  - Kill TP chat (mobs near rivals / End settle) can be toggled per
    player with /rival tpmsg [on|off]. Preference persists in storeddata.
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
@@ -2100,15 +2106,84 @@ function rivalScaleTpByLevel(data, amount, kind) {
     return Math.max(1, Math.floor(base * mult));
 }
 
+/*
+ * Predict what DMZ will actually bank after TPGainEvent STORY boosts
+ * (class / HTC / gravity / weights / global TP potion / etc.).
+ * Matches TPGainEvents.onTPGain -> calculateTPGain(..., STORY).
+ */
+function rivalPredictDmzGrantedTp(data, baseAmount) {
+    var base = Math.floor(Number(baseAmount));
+    if (isNaN(base) || !isFinite(base) || base <= 0) return 0;
+    if (data === null || data === undefined) return base;
+
+    try {
+        var predicted = Number(data.calculateTPGain(base));
+        if (!isNaN(predicted) && isFinite(predicted) && predicted > 0) {
+            return Math.floor(predicted);
+        }
+    } catch (e1) {}
+
+    try {
+        var TpSource = Java.type("com.dragonminez.common.config.TpSource");
+        if (TpSource != null && TpSource.STORY != null) {
+            var viaStory = Number(data.calculateTPGain(base, TpSource.STORY));
+            if (!isNaN(viaStory) && isFinite(viaStory) && viaStory > 0) {
+                return Math.floor(viaStory);
+            }
+        }
+    } catch (e2) {}
+
+    return base;
+}
+
+/*
+ * Award rival/challenge TP through addTrainingPoints so DMZ multipliers
+ * still apply, but return the post-multiplier amount for chat.
+ */
+function rivalGrantTrainingPoints(data, amount) {
+    var requested = Math.floor(Number(amount));
+    if (isNaN(requested) || !isFinite(requested) || requested <= 0) {
+        return { ok: false, granted: 0, requested: 0 };
+    }
+    if (data === null || data === undefined) {
+        return { ok: false, granted: 0, requested: requested };
+    }
+
+    var resources = data.getResources();
+    if (resources === null || resources === undefined) {
+        return { ok: false, granted: 0, requested: requested };
+    }
+
+    var predicted = rivalPredictDmzGrantedTp(data, requested);
+    var before = Number(resources.getTrainingPoints());
+    if (isNaN(before) || !isFinite(before) || before < 0) before = 0;
+
+    resources.addTrainingPoints(requested);
+
+    var after = Number(resources.getTrainingPoints());
+    var granted = predicted;
+    if (!isNaN(after) && isFinite(after)) {
+        var delta = Math.floor(after - before);
+        /*
+         * Prefer measured delta when float precision can see it.
+         * Huge TP balances can lose small deltas in float32; keep
+         * calculateTPGain prediction in that case.
+         */
+        if (delta > 0) granted = delta;
+    }
+    if (!(granted > 0)) granted = requested;
+
+    return { ok: true, granted: granted, requested: requested };
+}
+
 function rpAwardTP(player, data, amount, reason, kind, killChat) {
     try {
         if (data === null || data === undefined) return false;
         var scaleKind = kind === "drip" ? "drip" : "burst";
         amount = rivalScaleTpByLevel(data, amount, scaleKind);
         if (amount <= 0) return false;
-        var resources = data.getResources();
-        if (resources === null) return false;
-        resources.addTrainingPoints(amount);
+        var grant = rivalGrantTrainingPoints(data, amount);
+        if (grant.ok !== true) return false;
         var mcPlayer = player.getMCEntity();
         rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
         var show = RP_SHOW_KILL_TP === true;
@@ -2123,7 +2198,7 @@ function rpAwardTP(player, data, amount, reason, kind, killChat) {
                     "Lv" + rpCommas(lvl) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(data, scaleKind));
             }
-            rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(amount) + " TP" +
+            rpMessage(player, RP_COLOR + "a[Rival] +" + rpCommas(grant.granted) + " TP" +
                 (note ? RP_COLOR + "7 (" + note + ")" : ""));
         }
         return true;
@@ -2810,13 +2885,18 @@ var CH_DB_BACKUP_KEY = "dlr.rivalry.v4.challenges.backup";
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
 var CH_COUNTDOWN_MS = 5 * 1000;
 var CH_DURATION_MS = 60 * 1000;
+var CH_MIN_MINUTES = 1;
+var CH_MAX_MINUTES = 10;
+/* Live score cadence: short fights stay frequent; long fights quiet down. */
+var CH_LONG_FIGHT_MS = 2 * 60 * 1000;
+var CH_BROADCAST_SCORE_LONG_MS = 60 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
 /* Server-wide rival battle display */
 var CH_BROADCAST_ENABLED = true;
-var CH_BROADCAST_SCORE_MS = 15 * 1000;
+var CH_BROADCAST_SCORE_MS = 15 * 1000; /* fights <= 2 minutes */
 var CH_BROADCAST_REPORT = true;
 
 var CH_WIN_TP = 5500;
@@ -2932,15 +3012,36 @@ function chBroadcastLines(lines) {
     for (var i = 0; i < lines.length; i++) chBroadcast(lines[i]);
 }
 
+function chPlannedDurationMs(session) {
+    var planned = chNumber(session == null ? 0 : session.durationMs, CH_DURATION_MS);
+    if (planned < CH_DURATION_MS) planned = CH_DURATION_MS;
+    return planned;
+}
+
+function chBattleElapsedMs(session) {
+    if (session == null) return 0;
+    var ended = chNumber(session.endedAt, chNow());
+    var started = chNumber(session.battleStartedAt, 0);
+    if (started > 0) return Math.max(0, ended - started);
+    var planned = chPlannedDurationMs(session);
+    return Math.max(0, ended - (chNumber(session.battleEndsAt, ended) - planned));
+}
+
+function chScoreBroadcastIntervalMs(session) {
+    if (chPlannedDurationMs(session) > CH_LONG_FIGHT_MS) return CH_BROADCAST_SCORE_LONG_MS;
+    return CH_BROADCAST_SCORE_MS;
+}
+
 function chScoreLine(session) {
     var c = session.combat[session.challengerUuid] || chFreshCombat();
     var o = session.combat[session.opponentUuid] || chFreshCombat();
-    var left = Math.max(0, Math.ceil((chNumber(session.battleEndsAt, chNow()) - chNow()) / 1000));
+    var leftMs = Math.max(0, chNumber(session.battleEndsAt, chNow()) - chNow());
+    var leftLabel = chFormatMs(leftMs);
     return CH_COLOR + "6[Live] " +
         CH_COLOR + "f" + session.challengerName + CH_COLOR + "e " + chCommas(c.damage) +
         CH_COLOR + "8  vs  " +
         CH_COLOR + "f" + session.opponentName + CH_COLOR + "e " + chCommas(o.damage) +
-        CH_COLOR + "8   " + left + "s";
+        CH_COLOR + "8   " + leftLabel + " left";
 }
 
 function chMessage(player, message) {
@@ -3176,7 +3277,8 @@ function chAwardTP(player, amount, reason) {
         if (data === null) return false;
         amount = rivalScaleTpByLevel(data, amount, "burst");
         if (amount <= 0) return false;
-        data.getResources().addTrainingPoints(amount);
+        var grant = rivalGrantTrainingPoints(data, amount);
+        if (grant.ok !== true) return false;
         var mcPlayer = player.getMCEntity();
         chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
         var note = reason ? String(reason) : "";
@@ -3185,7 +3287,7 @@ function chAwardTP(player, amount, reason) {
                 "Lv" + chCommas(rivalGetDmzLevel(data)) + " " +
                 rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst"));
         }
-        chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(amount) + " TP" +
+        chMessage(player, CH_COLOR + "a[Challenge] +" + chCommas(grant.granted) + " TP" +
             (note ? CH_COLOR + "7 (" + note + ")" : ""));
         return true;
     } catch (error) {
@@ -3448,6 +3550,11 @@ function chStartCountdown(player, db, pending) {
 
     var sessionId = String(db.nextId++);
     var now = chNow();
+    var minutes = Math.max(CH_MIN_MINUTES, Math.floor(chNumber(pending.durationMinutes, CH_MIN_MINUTES)));
+    if (minutes > CH_MAX_MINUTES) minutes = CH_MAX_MINUTES;
+    var durationMs = chNumber(pending.durationMs, minutes * 60 * 1000);
+    if (durationMs < CH_DURATION_MS) durationMs = Math.max(CH_DURATION_MS, minutes * 60 * 1000);
+    if (durationMs > CH_MAX_MINUTES * 60 * 1000) durationMs = CH_MAX_MINUTES * 60 * 1000;
     var session = {
         id: sessionId,
         state: "countdown",
@@ -3459,6 +3566,9 @@ function chStartCountdown(player, db, pending) {
         createdAt: now,
         countdownEndsAt: now + CH_COUNTDOWN_MS,
         battleEndsAt: 0,
+        battleStartedAt: 0,
+        durationMinutes: minutes,
+        durationMs: durationMs,
         endedAt: 0,
         endReason: "",
         winnerUuid: "",
@@ -3476,8 +3586,11 @@ function chStartCountdown(player, db, pending) {
 
     var a = chFindOnlineByUuid(pending.fromUuid);
     var b = chFindOnlineByUuid(pending.toUuid);
-    if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
-    if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! Countdown...");
+    var fightLabel = minutes === 1 ? "60 seconds" : (minutes + " minutes");
+    if (a !== null) chMessage(a, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! " +
+        CH_COLOR + "f" + fightLabel + CH_COLOR + "e  Countdown...");
+    if (b !== null) chMessage(b, CH_COLOR + "6[Challenge] " + CH_COLOR + "eAccepted! " +
+        CH_COLOR + "f" + fightLabel + CH_COLOR + "e  Countdown...");
 
     /*
      * Pair-key lock so accept spam / dual handlers cannot
@@ -3488,7 +3601,7 @@ function chStartCountdown(player, db, pending) {
         chBroadcast(CH_COLOR + "8--------------------------------");
         chBroadcast(CH_COLOR + "6[Rival Battle] " + CH_COLOR + "e" + pending.fromName +
             CH_COLOR + "7  vs  " + CH_COLOR + "e" + pending.toName);
-        chBroadcast(CH_COLOR + "8Countdown..." + CH_COLOR + "7  Watch: " +
+        chBroadcast(CH_COLOR + "8" + fightLabel + CH_COLOR + "7  Watch: " +
             CH_COLOR + "f/spectaterival " + pending.fromName);
 
         try {
@@ -3609,10 +3722,12 @@ function chBeginBattle(player, db, session) {
     if (!chClaimCountdownAnnounce(fightKey)) return;
 
     session.state = "active";
-    var durationMs = chNumber(session.durationMs, CH_DURATION_MS);
-    if (durationMs < CH_DURATION_MS) durationMs = CH_DURATION_MS;
-    session.battleEndsAt = chNow() + durationMs;
-    session.lastScoreBroadcastAt = 0;
+    var durationMs = chPlannedDurationMs(session);
+    session.durationMs = durationMs;
+    session.battleStartedAt = chNow();
+    session.battleEndsAt = session.battleStartedAt + durationMs;
+    /* Seed so the first live line waits one full interval (avoids FIGHT + Live spam). */
+    session.lastScoreBroadcastAt = session.battleStartedAt;
     session.announcedFight = true;
     chSaveChallengeDb(player, db);
 
@@ -3650,20 +3765,23 @@ function chBeginBattle(player, db, session) {
     chBroadcast(CH_COLOR + "8--------------------------------");
 }
 
-function chBuildReport(session, winnerName, loserName) {
+function chBuildReport(session, winnerName, loserName, isDraw) {
     var lines = [];
     /* ASCII-only borders - unicode box lines render as ? on many clients */
     lines.push(CH_COLOR + "8--------------------------------");
     lines.push(CH_COLOR + "6" + CH_COLOR + "l RIVAL BATTLE REPORT " + CH_COLOR + "r");
     lines.push(CH_COLOR + "8--------------------------------");
-    if (winnerName === "Draw" || !loserName) {
+    if (isDraw === true || winnerName === "Draw") {
         lines.push(CH_COLOR + "8Result  " + CH_COLOR + "eDraw");
     } else {
-        lines.push(CH_COLOR + "8Winner  " + CH_COLOR + "a" + winnerName);
-        lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
+        lines.push(CH_COLOR + "8Winner  " + CH_COLOR + "a" +
+            (winnerName ? winnerName : "Unknown"));
+        if (loserName) {
+            lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
+        }
     }
     lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
-        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        chFormatMs(chBattleElapsedMs(session)) +
         CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
@@ -3691,7 +3809,8 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ? session.opponentUuid
             : session.challengerUuid;
         var otherCombat = session.combat[otherUuid] || chFreshCombat();
-        var duration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+        var plannedMs = chPlannedDurationMs(session);
+        var duration = chBattleElapsedMs(session);
         var payload = {
             won: won === true,
             seasonRp: chNumber(seasonRp, 0),
@@ -3702,7 +3821,7 @@ function chWriteBattleResult(onlinePlayer, session, result, won, seasonRp, journ
             ki: chNumber(combat.ki, 0),
             longestCombo: chNumber(combat.longestCombo, 0),
             biggestHit: chNumber(combat.biggestHit, 0),
-            fullDuration: duration >= (CH_DURATION_MS - 1500),
+            fullDuration: duration >= (plannedMs - 1500),
             durationMs: duration,
             knockout: result.knockout === true,
             reason: chString(result.reason),
@@ -3747,7 +3866,7 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
-    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    var battleDuration = chBattleElapsedMs(session);
     function touchDuration(record, wonFlag) {
         if (record === null) return;
         record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
@@ -4010,25 +4129,42 @@ function chEndSession(player, db, session, result) {
     delete db.playerSessions[session.opponentUuid];
     chSaveChallengeDb(player, db);
 
-    chApplyRewards(player, session, result);
+    try {
+        chApplyRewards(player, session, result);
+    } catch (rewardErr) {
+        chLog("Challenge rewards failed: " + rewardErr);
+        try {
+            print("[RivalChallenge] rewards failed: " + rewardErr);
+        } catch (ignoredPrint) {}
+    }
 
     var winnerName = "";
     var loserName = "";
-    if (result.reason === "draw") {
+    var isDraw = result.reason === "draw";
+    if (isDraw) {
         winnerName = "Draw";
     } else {
-        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
-        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+        winnerName = result.winnerUuid === session.challengerUuid
+            ? session.challengerName
+            : session.opponentName;
+        loserName = result.loserUuid === session.challengerUuid
+            ? session.challengerName
+            : session.opponentName;
+        if (!winnerName) {
+            winnerName = result.winnerUuid === session.challengerUuid
+                ? "Challenger"
+                : "Opponent";
+        }
     }
 
-    var report = chBuildReport(session, winnerName, loserName);
+    var report = chBuildReport(session, winnerName, loserName, isDraw);
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
 
     /* Show full report to the whole server */
     if (CH_BROADCAST_REPORT === true) {
         chBroadcastLines(report);
-        if (result.reason === "draw") {
+        if (isDraw) {
             chBroadcast(CH_COLOR + "e[Rival Battle] " + CH_COLOR + "fDraw!");
         } else {
             chBroadcast(CH_COLOR + "a[Rival Battle] " + CH_COLOR + "f" + winnerName +
@@ -4041,7 +4177,7 @@ function chEndSession(player, db, session, result) {
         }
     }
 
-    if (result.reason !== "draw") {
+    if (!isDraw) {
         if (a !== null) {
             if (chUuid(a) === result.winnerUuid) chMessage(a, CH_COLOR + "a[Rival] Victory!");
             else chMessage(a, CH_COLOR + "c[Rival] Defeat!");
@@ -4206,10 +4342,12 @@ function rivalChTick(event) {
                 }
             }
 
-            /* Live scoreboard for the whole server (challenger tick only). */
+            /* Live scoreboard for the whole server (challenger tick only).
+             * Short fights: every 15s. Longer than 2 minutes: every 1 minute. */
             if (CH_BROADCAST_ENABLED === true && chUuid(player) === session.challengerUuid) {
                 var lastScore = chNumber(session.lastScoreBroadcastAt, 0);
-                if (lastScore <= 0 || now - lastScore >= CH_BROADCAST_SCORE_MS) {
+                var scoreInterval = chScoreBroadcastIntervalMs(session);
+                if (lastScore <= 0 || now - lastScore >= scoreInterval) {
                     session.lastScoreBroadcastAt = now;
                     chSaveChallengeDb(player, db);
                     chBroadcast(chScoreLine(session));
@@ -5376,14 +5514,15 @@ function rivalFusionKill(event) {
         if (data == null) return;
         try {
             var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst");
-            data.getResources().addTrainingPoints(killerTp);
+            var killerGrant = rivalGrantTrainingPoints(data, killerTp);
+            var killerShown = killerGrant.ok === true ? killerGrant.granted : killerTp;
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
             var kNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 kNote = RF_C + "7 (Lv" + rivalGetDmzLevel(data) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(data, "burst")) + ")";
             }
-            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerTp + " TP" + kNote);
+            rfMsg(killer, RF_C + "a[Rival Fusion] +" + killerShown + " TP" + kNote);
         } catch (e) {}
 
         var partner = rfFindByUuid(partnerId);
@@ -5392,14 +5531,15 @@ function rivalFusionKill(event) {
         if (pdata == null) return;
         try {
             var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst");
-            pdata.getResources().addTrainingPoints(partnerTp);
+            var partnerGrant = rivalGrantTrainingPoints(pdata, partnerTp);
+            var partnerShown = partnerGrant.ok === true ? partnerGrant.granted : partnerTp;
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
             var pNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 pNote = RF_C + "7 (Lv" + rivalGetDmzLevel(pdata) + " " +
                     rivalFormatMult(rivalEffectiveTpMultiplier(pdata, "burst")) + ")";
             }
-            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerTp + " TP (partner kill)" + pNote);
+            rfMsg(partner, RF_C + "a[Rival Fusion] +" + partnerShown + " TP (partner kill)" + pNote);
         } catch (e2) {}
     } catch (error) {
         try { print("[RivalDMZHooks] kill " + error); } catch (e3) {}

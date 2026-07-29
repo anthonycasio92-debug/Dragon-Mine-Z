@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.13
+ Version: 4.6.14
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -1235,8 +1235,10 @@ function startCountdown(ch, pending) {
         createdAt: t,
         countdownEndsAt: t + CH_COUNTDOWN_MS,
         battleEndsAt: 0,
+        battleStartedAt: 0,
         durationMinutes: minutes,
         durationMs: durationMs,
+        lastScoreBroadcastAt: 0,
         endedAt: 0,
         endReason: "",
         winnerUuid: "",
