@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.1
+ Version: 3.0.2
 
  Combat-Based Training (Sparring v3)
 
@@ -11,6 +11,8 @@
   drive progression. Fair rivals and skilled combos pay more.
 
  Changelog:
+  - Fixed ki hits being classified as melee for TP/style/stats
+    (broader damage-source + projectile detection).
   - Successfully blocking an attack breaks the attacker's combo
     and Momentum.
 
@@ -42,15 +44,16 @@ var StatsProvider = Java.type("com.dragonminez.common.stats.StatsProvider");
 var StatsCapability = Java.type("com.dragonminez.common.stats.StatsCapability");
 var StatsSyncS2C = Java.type("com.dragonminez.common.network.S2C.StatsSyncS2C");
 var NetworkHandler = Java.type("com.dragonminez.common.network.NetworkHandler");
-var AbstractKiProjectile = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile");
 var GravityLogic = Java.type("com.dragonminez.server.util.GravityLogic");
 var MCPlayerClass = Java.type("net.minecraft.world.entity.player.Player");
 var Bukkit = Java.type("org.bukkit.Bukkit");
 var System = Java.type("java.lang.System");
 var LocalDate = Java.type("java.time.LocalDate");
 
+var AbstractKiProjectile = null;
 var KiLaserEntity = null;
 var KiBlastEntity = null;
+try { AbstractKiProjectile = Java.type("com.dragonminez.common.init.entities.ki.AbstractKiProjectile"); } catch (eA) {}
 try { KiLaserEntity = Java.type("com.dragonminez.common.init.entities.ki.KiLaserEntity"); } catch (eL) {}
 try { KiBlastEntity = Java.type("com.dragonminez.common.init.entities.ki.KiBlastEntity"); } catch (eB) {}
 
@@ -209,6 +212,9 @@ var K_SESSION_MAX_MOM = "spar.session.maxMom";
 var K_SESSION_PERFECT = "spar.session.perfect";
 var K_TP_MSG_NEXT = "spar.tpmsg.next";
 var K_TP_PENDING = "spar.tpmsg.pending";
+var K_TP_PENDING_MELEE = "spar.tpmsg.pendingMelee";
+var K_TP_PENDING_KI = "spar.tpmsg.pendingKi";
+var K_LAST_HIT_KIND = "spar.lastHit.kind";
 var K_MSG_NEXT = "spar.message.next";
 var K_TICK_NEXT = "spar.tick.next";
 var K_PERFECT_NEXT = "spar.perfect.nextMsg";
@@ -807,39 +813,177 @@ function hasRecentMovement(player) {
 
 /* ========================= COMBAT CLASSIFY ========================= */
 
-function getImmediateMC(event) {
+function unwrapMcEntity(entity) {
+    if (entity == null) return null;
     try {
-        var source = event.damageSource;
-        if (source == null) return null;
-        var immediate = source.getImmediateSource();
-        if (immediate == null) return null;
-        try { return immediate.getMCEntity(); } catch (e) { return immediate; }
-    } catch (e2) { return null; }
+        if (typeof entity.getMCEntity == "function") {
+            var mc = entity.getMCEntity();
+            if (mc != null) return mc;
+        }
+    } catch (e) {}
+    return entity;
+}
+
+function getDamageSource(event) {
+    if (event == null) return null;
+    try { if (event.damageSource != null) return event.damageSource; } catch (e1) {}
+    try { if (event.source != null) return event.source; } catch (e2) {}
+    return null;
+}
+
+/*
+ * Collect possible damage-type strings the way KiWeapons / Rival do.
+ * 1.20.1 may expose getType(), msg id, or obfuscated m_19385_().
+ */
+function getDamageTypeStrings(event) {
+    var out = [];
+    var source = getDamageSource(event);
+    if (source == null) return out;
+
+    function pushType(value) {
+        if (value == null) return;
+        var s = String(value).toLowerCase();
+        if (s == "" || s == "null" || s == "undefined") return;
+        out.push(s);
+    }
+
+    try { if (source.getType != null) pushType(source.getType()); } catch (e1) {}
+    try { if (source.getMsgId != null) pushType(source.getMsgId()); } catch (e2) {}
+    try { pushType(source.m_19385_()); } catch (e3) {}
+    try { if (source.type != null) pushType(source.type); } catch (e4) {}
+    try {
+        if (source.typeHolder != null) {
+            var holder = source.typeHolder();
+            if (holder != null) pushType(holder);
+        }
+    } catch (e5) {}
+
+    return out;
+}
+
+function damageTypeLooksLikeKi(typeStr) {
+    if (typeStr == null || typeStr == "") return false;
+    var t = String(typeStr).toLowerCase();
+    if (t == "kiblast" || t == "dragonminez:kiblast") return true;
+    if (t == "kilaser" || t == "dragonminez:kilaser") return true;
+    if (t.indexOf("kiblast") >= 0) return true;
+    if (t.indexOf("kilaser") >= 0) return true;
+    if (t.indexOf("dragonminez") >= 0 && t.indexOf("ki") >= 0) return true;
+    if (t.indexOf("ki_blast") >= 0 || t.indexOf("ki-blast") >= 0) return true;
+    if (t.indexOf("energy") >= 0 && t.indexOf("player") < 0) return true;
+    /* bare "ki" token / path segment */
+    if (/(^|[:/_\\.])ki($|[:/_\\.])/.test(t)) return true;
+    if (t.indexOf("beam") >= 0 || t.indexOf("laser") >= 0) return true;
+    return false;
+}
+
+function getSourceEntities(event) {
+    var list = [];
+    var source = getDamageSource(event);
+    if (source == null) return list;
+
+    var getters = [
+        "getImmediateSource",
+        "getDirectEntity",
+        "getTrueSource",
+        "getEntity",
+        "getSourceEntity"
+    ];
+    for (var i = 0; i < getters.length; i++) {
+        try {
+            var fn = source[getters[i]];
+            if (typeof fn == "function") {
+                var ent = fn.call(source);
+                if (ent != null) list.push(ent);
+            }
+        } catch (e) {}
+    }
+    return list;
+}
+
+function entityIsKiProjectile(entity) {
+    if (entity == null) return false;
+    var mc = unwrapMcEntity(entity);
+    if (mc == null) return false;
+
+    try {
+        if (AbstractKiProjectile != null && AbstractKiProjectile.class.isInstance(mc)) {
+            return true;
+        }
+    } catch (e1) {}
+
+    try {
+        if (KiLaserEntity != null && KiLaserEntity.class.isInstance(mc)) return true;
+    } catch (e2) {}
+    try {
+        if (KiBlastEntity != null && KiBlastEntity.class.isInstance(mc)) return true;
+    } catch (e3) {}
+
+    /* Class-name fallback if Java.type bindings differ by DMZ build. */
+    try {
+        var cn = String(mc.getClass().getName()).toLowerCase();
+        if (cn.indexOf("abstractkiprojectile") >= 0) return true;
+        if (cn.indexOf("kiprojectile") >= 0) return true;
+        if (cn.indexOf("kiblast") >= 0 || cn.indexOf("kilaser") >= 0) return true;
+        if (cn.indexOf(".ki.") >= 0 && cn.indexOf("entity") >= 0) return true;
+    } catch (e4) {}
+
+    return false;
+}
+
+function getImmediateMC(event) {
+    var ents = getSourceEntities(event);
+    for (var i = 0; i < ents.length; i++) {
+        var mc = unwrapMcEntity(ents[i]);
+        if (mc != null) return mc;
+    }
+    return null;
 }
 
 function isKiAttack(event) {
     try {
-        var mc = getImmediateMC(event);
-        if (mc != null && AbstractKiProjectile.class.isInstance(mc)) return true;
-        var type = "";
-        try { type = String(event.damageSource.getType()).toLowerCase(); } catch (e) {}
-        if (type.indexOf("ki") >= 0 || type.indexOf("energy") >= 0 || type.indexOf("kiblast") >= 0) return true;
-    } catch (e2) {}
+        var ents = getSourceEntities(event);
+        for (var i = 0; i < ents.length; i++) {
+            if (entityIsKiProjectile(ents[i])) return true;
+        }
+
+        var types = getDamageTypeStrings(event);
+        for (var t = 0; t < types.length; t++) {
+            if (damageTypeLooksLikeKi(types[t])) return true;
+        }
+    } catch (e) {}
     return false;
 }
 
 function classifyKiType(event) {
     try {
-        var mc = getImmediateMC(event);
-        if (mc != null && KiLaserEntity != null && KiLaserEntity.class.isInstance(mc)) return "beam";
-        if (mc != null && KiBlastEntity != null && KiBlastEntity.class.isInstance(mc)) return "basic";
-        var type = "";
-        try { type = String(event.damageSource.getType()).toLowerCase(); } catch (e) {}
-        if (type.indexOf("scatter") >= 0) return "scatter";
-        if (type.indexOf("charge") >= 0) return "charge";
-        if (type.indexOf("explosive") >= 0 || type.indexOf("wave") >= 0) return "explosive";
-        if (type.indexOf("barrage") >= 0 || type.indexOf("rapid") >= 0) return "barrage";
-        if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0) return "beam";
+        var ents = getSourceEntities(event);
+        for (var i = 0; i < ents.length; i++) {
+            var mc = unwrapMcEntity(ents[i]);
+            if (mc == null) continue;
+            try {
+                if (KiLaserEntity != null && KiLaserEntity.class.isInstance(mc)) return "beam";
+            } catch (eL) {}
+            try {
+                if (KiBlastEntity != null && KiBlastEntity.class.isInstance(mc)) return "basic";
+            } catch (eB) {}
+            try {
+                var cn = String(mc.getClass().getName()).toLowerCase();
+                if (cn.indexOf("laser") >= 0 || cn.indexOf("beam") >= 0) return "beam";
+                if (cn.indexOf("blast") >= 0) return "basic";
+            } catch (eC) {}
+        }
+
+        var types = getDamageTypeStrings(event);
+        for (var t = 0; t < types.length; t++) {
+            var type = types[t];
+            if (type.indexOf("scatter") >= 0) return "scatter";
+            if (type.indexOf("charge") >= 0) return "charge";
+            if (type.indexOf("explosive") >= 0 || type.indexOf("wave") >= 0) return "explosive";
+            if (type.indexOf("barrage") >= 0 || type.indexOf("rapid") >= 0) return "barrage";
+            if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0) return "beam";
+            if (type.indexOf("kiblast") >= 0 || type.indexOf("blast") >= 0) return "basic";
+        }
     } catch (e2) {}
     return "other";
 }
@@ -868,7 +1012,8 @@ function clearSessionData(player) {
         K_SESSION_TP, K_SESSION_MELEE, K_SESSION_KI, K_SESSION_DMG, K_SESSION_TAKEN,
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
         K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT,
-        K_TP_PENDING, K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
+        K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_LAST_HIT_KIND,
+        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
     ];
     for (var i = 0; i < keys.length; i++) {
         try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
@@ -1143,18 +1288,38 @@ function flushPendingTpMessage(player) {
     var temp = player.getTempdata();
     var pending = Math.floor(readNumber(temp, K_TP_PENDING, 0));
     if (pending <= 0) return;
+    var pendingMelee = Math.floor(readNumber(temp, K_TP_PENDING_MELEE, 0));
+    var pendingKi = Math.floor(readNumber(temp, K_TP_PENDING_KI, 0));
     putNumber(temp, K_TP_PENDING, 0);
+    putNumber(temp, K_TP_PENDING_MELEE, 0);
+    putNumber(temp, K_TP_PENDING_KI, 0);
+
+    var sourceLabel = "mixed";
+    if (pendingKi > 0 && pendingMelee <= 0) sourceLabel = "ki";
+    else if (pendingMelee > 0 && pendingKi <= 0) sourceLabel = "melee";
+    else if (pendingKi <= 0 && pendingMelee <= 0) {
+        sourceLabel = readString(temp, K_LAST_HIT_KIND, "combat");
+    }
+
     sendMessage(player, sparText(
         sparColor("6"), "[Sparring] ",
         sparColor("a"), "+", formatWholeNumber(pending), " TP",
-        sparColor("8"), "  (", styleName(player), ")"
+        sparColor("8"), "  (", sourceLabel, " / ", styleName(player), ")"
     ));
 }
 
-function queueTpMessage(player, amount) {
+function queueTpMessage(player, amount, hitKind) {
     if (!SHOW_TP_MESSAGES) return;
     var temp = player.getTempdata();
     putNumber(temp, K_TP_PENDING, readNumber(temp, K_TP_PENDING, 0) + amount);
+    var kind = hitKind ? String(hitKind).toLowerCase() : "";
+    if (kind == "melee") {
+        putNumber(temp, K_TP_PENDING_MELEE, readNumber(temp, K_TP_PENDING_MELEE, 0) + amount);
+        putString(temp, K_LAST_HIT_KIND, "melee");
+    } else if (kind != "") {
+        putNumber(temp, K_TP_PENDING_KI, readNumber(temp, K_TP_PENDING_KI, 0) + amount);
+        putString(temp, K_LAST_HIT_KIND, "ki");
+    }
     var now = nowMs();
     if (now >= readNumber(temp, K_TP_MSG_NEXT, 0)) {
         putNumber(temp, K_TP_MSG_NEXT, now + TP_MESSAGE_COOLDOWN_MS);
@@ -1192,7 +1357,7 @@ function buildCombatMultiplier(player, partner) {
     };
 }
 
-function awardCombatTp(player, partner, baseAmount, reason) {
+function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
     if (player == null || partner == null || !isSessionActive(player)) return 0;
     baseAmount = Number(baseAmount);
     if (isNaN(baseAmount) || baseAmount <= 0) return 0;
@@ -1211,7 +1376,13 @@ function awardCombatTp(player, partner, baseAmount, reason) {
     putNumber(temp, K_SESSION_TP, readNumber(temp, K_SESSION_TP, 0) + amount);
     if (built.perfect) putNumber(temp, K_SESSION_PERFECT, 1);
 
-    queueTpMessage(player, amount);
+    var kind = hitKind ? String(hitKind) : "";
+    if (kind == "" && reason) {
+        var r = String(reason).toLowerCase();
+        if (r.indexOf("ki") == 0 || r.indexOf("beam") >= 0) kind = "ki";
+        else if (r == "melee") kind = "melee";
+    }
+    queueTpMessage(player, amount, kind);
     debug(player, reason + " +" + amount + " (base " + Math.floor(baseAmount) + ")");
     return amount;
 }
@@ -1254,7 +1425,13 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
 
     var eff = isKi ? kiEfficiency(kiKind) : MELEE_EFF;
     var base = damage * TP_PER_DAMAGE * eff;
-    awardCombatTp(attacker, victim, base, isKi ? ("ki:" + kiKind) : "melee");
+    awardCombatTp(
+        attacker,
+        victim,
+        base,
+        isKi ? ("ki:" + kiKind) : "melee",
+        isKi ? "ki" : "melee"
+    );
 }
 
 /* ========================= HIT TRACKING / START ========================= */
