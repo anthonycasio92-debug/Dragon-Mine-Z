@@ -1,72 +1,34 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 2.0.5
+ Version: 3.0.0
 
- Changelog:
- - Combat knockback, flight motion, and melee hits now count as movement
-   so grounded trading / aerial spars no longer false-timeout both fighters.
- - Fixed recover-warning and session-end chat colors (COLOR_CODE builder).
- - Recover warnings now show the correct grace seconds (3s normal, 4s distance).
- - Prevented duplicate "Session ended" / "Recover within" spam from both ticks.
- - Prevented players from selecting themselves as sparring partners.
- - Self-inflicted melee and projectile hits are ignored before sparring activity is recorded.
- - Added UUID-based safeguards when starting, processing, and rewarding sessions.
- - Invalid pre-existing self-pair sessions are cleared automatically.
- - Added complete persistent sparring statistics for command displays.
- - Added total sessions, rewarded sparring time, best payout, perfect payouts,
-   highest combo, current streak, and best streak tracking.
- - Added separate command-handler script for reliable /noppes triggers.
- - Added daily Training Streaks requiring one continuous 5-minute session.
- - Streak bonus increases by 2% per day and caps at x1.25.
- - Added late-session Combo tiers beginning at 5 minutes.
- - Combo tier messages only appear when reaching a new tier.
- - No title or chat-prefix system was added.
- - Fixed Android/high-BP partners massively inflating sparring TP.
- - Android upgraded flag makes DMZ return Float.MAX_VALUE BP; sparring
-   now computes real BP from stats for those players instead.
- - BP rewards now use the weaker fighter's BP instead of the pair average.
- - Fixed weight multiplier using the wrong maximum setting.
- - Replaced tiered BP rewards with smooth logarithmic interpolation.
- - Removed sudden TP jumps when crossing Battle Power thresholds.
- - Battle Power above 100T continues scaling instead of hard-capping.
- - Steepened Battle Power TP scaling for end-game progression.
- - High BP players can now earn 100k+ TP per payout before additional bonuses.
- - Added long-session TP scaling: +10% per full minute, capped at 2x.
- - Added persistent top-10 sparring TP leaderboard.
- - Leaderboard also records each player's longest active session.
- - Use trigger ID 72 to display the leaderboard.
- - Base TP increased to 750.
- - Removed minimum TP floor system.
- - Fixed reward messages using the correct SHOW_TP_MESSAGES setting.
- - Replaced fragile section-sign characters with \u00A7 color escapes (v2.0.2).
- - Added visible error messages when DMZ data, calculation, or payout fails.
- - Fixed minimum TP handling: calculations stay unchanged and the 750 minimum is applied only when TP is awarded.
- - Cleaned reward messages and restored Minecraft colors via unicode escapes.
- - Added functional 3-second recovery grace period.
- - Added Perfect Training x2 bonus.
- - Perfect Training requires matching gravity/weight, 200% release,
-   and Battle Power within 10%.
- - Gravity, weight and Limit Release now recalculate live.
- - Changing gravity, weight or release no longer ends a session.
- - Increased hit, movement, start and distance allowances.
- - Minimum TP reward raised to 750.
+ Combat-Based Training (Sparring v3)
+
+ Philosophy:
+  TP comes from real combat actions, not a standing timer.
+  Melee, ki, blocks, clashes (best-effort), and active fighting
+  drive progression. Fair rivals and skilled combos pay more.
 
  PLACE AS:
- CustomNPCs Global Player Script
+  CustomNPCs Global Player Script
 
  COMMAND DISPLAY:
- Use the separate Sparring_Command_Handler_v2.0.0.js file.
+  Sparring Command Handler.js (script-slot / triggers)
 
  REQUIRED EVENTS:
- - tick
- - damagedEntity
- - logout
- - died
+  - tick
+  - damagedEntity
+  - damaged
+  - logout
+  - died
+  - trigger   (legacy leaderboard id 72)
 
- IMPORTANT:
- - Directly awards DMZ Training Points. No commands.
- - Only exchanged player-vs-player melee hits start sparring.
+ Detection notes:
+  FULL: melee, ki (binary), blocking, release/gravity/weight/BP
+  BEST-EFFORT: ki subtype (laser vs blast), knockback recovery proxy
+  STUB/LIMITED: beam clash drip (mutual recent laser), vanish,
+                perfect block (no DMZ API yet)
 ============================================================
 */
 
@@ -83,150 +45,176 @@ var Bukkit = Java.type("org.bukkit.Bukkit");
 var System = Java.type("java.lang.System");
 var LocalDate = Java.type("java.time.LocalDate");
 
+var KiLaserEntity = null;
+var KiBlastEntity = null;
+try { KiLaserEntity = Java.type("com.dragonminez.common.init.entities.ki.KiLaserEntity"); } catch (eL) {}
+try { KiBlastEntity = Java.type("com.dragonminez.common.init.entities.ki.KiBlastEntity"); } catch (eB) {}
+
 /* ========================= CONFIGURATION ========================= */
 
 var DEBUG = false;
 var COLOR_CODE = "\u00A7";
 
-/* TP is paid once per active interval. */
-var BASE_TP_PER_INTERVAL = 1500;
+/* ---- Combat TP rates ---- */
+var TP_PER_DAMAGE = 0.06;              // base TP per damage point before multipliers
+var MAX_BASE_TP_PER_HIT = 900;         // softcap on pre-multiplier base
+var MAX_TP_PER_ACTION = 35000;         // hardcap on final TP per action
+var BLOCK_TP_BASE = 18;                // defensive TP when blocking a spar hit
+var PERFECT_BLOCK_TP_BONUS = 22;       // stub bonus (reserved; needs DMZ API)
+var KNOCKBACK_RECOVERY_TP = 25;        // small bonus when hitting after heavy motion
+var VANISH_CHAIN_TP = 40;              // stub / reserved
+var BEAM_CLASH_TP_PER_TICK = 12;       // best-effort clash drip while mutual lasers
+var RELEASE_CONTROL_TP_PER_SEC = 4;    // passive while fighting at high release
+var HIGH_RELEASE_THRESHOLD = 180.0;
 
-var AWARD_INTERVAL_MS = 5000;
+/* Ki type efficiency (unknown types use OTHER) */
+var KI_EFF = {
+    basic: 1.00,
+    charge: 1.10,
+    scatter: 1.20,
+    beam: 1.30,
+    explosive: 0.75,
+    barrage: 0.90,
+    other: 0.95
+};
+var MELEE_EFF = 1.00;
 
-/*
- * Long-session TP bonus:
- * +10% for every completed minute, capped at 2x after 10 minutes.
- */
-var DURATION_BONUS_INTERVAL_MS = 60000;
-var DURATION_BONUS_PER_INTERVAL = 0.10;
-var MAX_DURATION_MULTIPLIER = 2.0;
+/* Session / activity */
+var MAX_SPAR_DISTANCE = 30.0;
+var HIT_ACTIVITY_WINDOW_MS = 6000;
+var SESSION_START_WINDOW_MS = 15000;
+var PAIR_RESTART_COOLDOWN_MS = 3000;
+var SESSION_GRACE_PERIOD_MS = 3000;
+var DISTANCE_GRACE_PERIOD_MS = 4000;
+var SHOW_GRACE_WARNING = true;
+var MOVEMENT_ACTIVITY_WINDOW_MS = 10000;
+var MIN_MOVEMENT_DISTANCE = 0.35;
+var MIN_MOTION_SPEED = 0.08;
+var HEAVY_MOTION_SPEED = 0.55;         // for knockback-recovery proxy
 
-/*
- * Late-session Combo bonus.
- * Combos do not begin until the session reaches five minutes.
- */
-var ENABLE_COMBO_BONUS = true;
-var COMBO_TIME_MS = [
-    300000,   // 5 minutes
-    420000,   // 7 minutes
-    600000,   // 10 minutes
-    900000,   // 15 minutes
-    1200000,  // 20 minutes
-    1800000,  // 30 minutes
-    2700000   // 45 minutes
-];
-var COMBO_MULTIPLIERS = [
-    1.05,
-    1.10,
-    1.20,
-    1.35,
-    1.50,
-    1.75,
-    2.00
-];
-var SHOW_COMBO_MESSAGES = true;
+/* Combo / Momentum */
+var COMBO_TIMEOUT_MS = 2500;
+var MOMENTUM_DURATION_MS = 10000;
+var MOMENTUM_THRESHOLDS = [5, 10, 15, 20, 30, 40];
+var MOMENTUM_MULTIPLIERS = [1.05, 1.10, 1.20, 1.35, 1.50, 2.00];
 
-/*
- * Daily Training Streak.
- * One uninterrupted five-minute sparring session secures the day.
- */
+/* Long session bonus: +5%/min, max +50% */
+var SESSION_BONUS_PER_MINUTE = 0.05;
+var MAX_SESSION_BONUS = 0.50;
+
+/* Perfect Training */
+var ENABLE_PERFECT_TRAINING = true;
+var PERFECT_TRAINING_MULTIPLIER = 2.0;
+var PERFECT_BP_DIFFERENCE = 0.10;
+var PERFECT_RELEASE_MIN = 180.0;
+var PERFECT_RELEASE_MAX = 200.0;
+var PERFECT_GRAVITY_TOLERANCE = 0.01;
+var PERFECT_WEIGHT_TOLERANCE = 1.0;
+var PERFECT_ACTIONBAR_MS = 2500;
+
+/* Daily streak */
 var ENABLE_TRAINING_STREAK = true;
 var STREAK_MIN_SESSION_MS = 300000;
 var STREAK_BONUS_PER_DAY = 0.02;
 var MAX_STREAK_DAYS_FOR_BONUS = 14;
 var MAX_STREAK_MULTIPLIER = 1.25;
-var SHOW_STREAK_MESSAGES = true;
 
-/* Persistent sparring leaderboard. */
-var ENABLE_SPARRING_LEADERBOARD = true;
-var LEADERBOARD_TRIGGER_ID = 72;
-var LEADERBOARD_SIZE = 10;
+/* Combat style bonuses (small) */
+var STYLE_BONUS = {
+    melee: 1.08,
+    ki: 1.08,
+    balanced: 1.12,
+    beam: 1.10,
+    guardian: 1.06,
+    speed: 1.05,
+    none: 1.00
+};
+var STYLE_SAMPLE_HITS = 12;            // classify after this many scored actions
 
-
-/* Both players must exchange melee hits within this time. */
-var HIT_ACTIVITY_WINDOW_MS = 5000;
-
-/* Initial reciprocal hit required within this time. */
-var SESSION_START_WINDOW_MS = 15000;
-
-/*
- * Position change needed to refresh movement activity.
- * Kept low so knockback slides and aerial drift still count.
- */
-var MIN_MOVEMENT_DISTANCE = 0.35;
-var MOVEMENT_ACTIVITY_WINDOW_MS = 8000;
-
-/* Horizontal/vertical speed that counts as combat motion (knockback/flight). */
-var MIN_MOTION_SPEED = 0.08;
-
-/* Maximum distance between sparring partners. */
-var MAX_SPAR_DISTANCE = 30.0;
-
-/* Prevent instant re-pairing after a session ends. */
-var PAIR_RESTART_COOLDOWN_MS = 3000;
-
-
-/* Recoverable failures must remain invalid this long before the session ends. */
-var SESSION_GRACE_PERIOD_MS = 3000;
-var DISTANCE_GRACE_PERIOD_MS = 4000;
-var SHOW_GRACE_WARNING = true;
-
-/* Perfect Training bonus. */
-var ENABLE_PERFECT_TRAINING = true;
-var PERFECT_TRAINING_MULTIPLIER = 2.0;
-var PERFECT_BP_DIFFERENCE = 0.10;       // Maximum 10% BP difference.
-var PERFECT_RELEASE_PERCENT = 200.0;     // Both fighters must be at 200%.
-var PERFECT_RELEASE_TOLERANCE = 0.5;
-var PERFECT_GRAVITY_TOLERANCE = 0.01;
-var PERFECT_WEIGHT_TOLERANCE = 1.0;
-
-/* Snapshot comparison tolerances. */
-var BP_CHANGE_TOLERANCE_PERCENT = 0.02;
-var RELEASE_CHANGE_TOLERANCE = 0.01;
-var GRAVITY_CHANGE_TOLERANCE = 0.01;
-var WEIGHT_CHANGE_TOLERANCE = 1.0;
-
-/* Safety cap for malformed or abnormally large DMZ Battle Power values. */
-var MAX_BP_MULTIPLIER = 600.0;
-
-/* Rival multiplier cap. */
+/* Rival quality */
 var MAX_RIVAL_MULTIPLIER = 3.0;
 
-/* Gravity: 1G = 1x, 1000G = 5x. */
+/* Gravity / weight / release / prestige / BP */
+var MAX_BP_MULTIPLIER = 600.0;
 var MAX_GRAVITY = 1000.0;
 var MAX_GRAVITY_MULTIPLIER = 5.0;
-
-/* Effective weight: 0 = 1x, 1000 = 2x. */
 var MAX_EFFECTIVE_WEIGHT = 1000.0;
 var MAX_WEIGHT_MULTIPLIER = 2.0;
-
-/* Limit Release: 100% = 1x, 200% = 2x. */
 var MIN_RELEASE_PERCENT = 100.0;
 var MAX_RELEASE_PERCENT = 200.0;
 var MAX_RELEASE_MULTIPLIER = 2.0;
-
-/* Prestige: +10% per Prestige, capped at Prestige 10. */
 var FABLED_PRESTIGE_CLASS_NAME = "Prestige";
 var FABLED_PRESTIGE_LEVEL_OFFSET = 1;
 var MAX_PRESTIGE_LEVEL = 10;
 var PRESTIGE_MULTIPLIER_PER_LEVEL = 0.10;
+var ANDROID_FAKE_BP_THRESHOLD = 1.0e30;
 
-/* Player-facing messages. */
+/* Messaging */
 var SHOW_SESSION_MESSAGES = true;
 var SHOW_TP_MESSAGES = true;
-var SHOW_MULTIPLIER_BREAKDOWN = false;
-var MESSAGE_COOLDOWN_MS = 5000;
+var SHOW_MOMENTUM_MESSAGES = true;
+var SHOW_END_REPORT = true;
+var TP_MESSAGE_COOLDOWN_MS = 2000;
+var MESSAGE_COOLDOWN_MS = 4000;
+
+/* Leaderboard */
+var ENABLE_SPARRING_LEADERBOARD = true;
+var LEADERBOARD_TRIGGER_ID = 72;
+var LEADERBOARD_SIZE = 10;
 
 /* ========================= DATA KEYS ========================= */
 
 var K_PARTNER = "spar.partner";
 var K_SESSION_ACTIVE = "spar.active";
 var K_SESSION_START = "spar.start";
-var K_NEXT_AWARD = "spar.nextAward";
 var K_COOLDOWN = "spar.restartCooldown";
 var K_GRACE_UNTIL = "spar.grace.until";
 var K_GRACE_REASON = "spar.grace.reason";
 var K_GRACE_WARNED = "spar.grace.warned";
+var K_LAST_OUT_PARTNER = "spar.lastOut.partner";
+var K_LAST_OUT_TIME = "spar.lastOut.time";
+var K_LAST_IN_PARTNER = "spar.lastIn.partner";
+var K_LAST_IN_TIME = "spar.lastIn.time";
+var K_LAST_KI_OUT = "spar.lastKiOut.time";
+var K_LAST_LASER_OUT = "spar.lastLaserOut.time";
+var K_MOVE_X = "spar.move.x";
+var K_MOVE_Y = "spar.move.y";
+var K_MOVE_Z = "spar.move.z";
+var K_MOVE_VALID_UNTIL = "spar.move.validUntil";
+var K_HEAVY_MOTION_UNTIL = "spar.move.heavyUntil";
+var K_COMBO = "spar.combo.count";
+var K_COMBO_UNTIL = "spar.combo.until";
+var K_MOMENTUM = "spar.momentum.tier";
+var K_MOMENTUM_UNTIL = "spar.momentum.until";
+var K_SESSION_TP = "spar.session.tp";
+var K_SESSION_MELEE = "spar.session.melee";
+var K_SESSION_KI = "spar.session.ki";
+var K_SESSION_DMG = "spar.session.dmg";
+var K_SESSION_TAKEN = "spar.session.taken";
+var K_SESSION_BLOCKS = "spar.session.blocks";
+var K_SESSION_PBLOCKS = "spar.session.pblocks";
+var K_SESSION_CLASH_MS = "spar.session.clashMs";
+var K_SESSION_VANISH = "spar.session.vanish";
+var K_SESSION_KB = "spar.session.kb";
+var K_SESSION_MAX_COMBO = "spar.session.maxCombo";
+var K_SESSION_MAX_MOM = "spar.session.maxMom";
+var K_SESSION_PERFECT = "spar.session.perfect";
+var K_TP_MSG_NEXT = "spar.tpmsg.next";
+var K_TP_PENDING = "spar.tpmsg.pending";
+var K_MSG_NEXT = "spar.message.next";
+var K_TICK_NEXT = "spar.tick.next";
+var K_PERFECT_NEXT = "spar.perfect.nextMsg";
+var K_STYLE_MELEE = "spar.style.melee";
+var K_STYLE_KI = "spar.style.ki";
+var K_STYLE_BEAM = "spar.style.beam";
+var K_STYLE_BLOCK = "spar.style.block";
+var K_STYLE_MOVE = "spar.style.move";
+var K_RELEASE_CTRL_NEXT = "spar.releaseCtrl.next";
+var K_CLASH_NEXT = "spar.clash.next";
+
+var S_STREAK_CURRENT = "spar.streak.current";
+var S_STREAK_BEST = "spar.streak.best";
+var S_STREAK_LAST_DAY = "spar.streak.lastDay";
 
 var LB_NAMES_KEY = "spar.leaderboard.names";
 var LB_TP_PREFIX = "spar.leaderboard.tp.";
@@ -238,43 +226,23 @@ var LB_PERFECT_PREFIX = "spar.leaderboard.perfectPayouts.";
 var LB_HIGHEST_COMBO_PREFIX = "spar.leaderboard.highestCombo.";
 var LB_STREAK_PREFIX = "spar.leaderboard.currentStreak.";
 var LB_BEST_STREAK_PREFIX = "spar.leaderboard.bestStreak.";
-
-
-var K_LAST_OUT_PARTNER = "spar.lastOut.partner";
-var K_LAST_OUT_TIME = "spar.lastOut.time";
-var K_LAST_IN_PARTNER = "spar.lastIn.partner";
-var K_LAST_IN_TIME = "spar.lastIn.time";
-
-var K_MOVE_X = "spar.move.x";
-var K_MOVE_Y = "spar.move.y";
-var K_MOVE_Z = "spar.move.z";
-var K_MOVE_VALID_UNTIL = "spar.move.validUntil";
-
-var K_SNAP_BP = "spar.snapshot.bp";
-var K_SNAP_RELEASE = "spar.snapshot.release";
-var K_SNAP_GRAVITY = "spar.snapshot.gravity";
-var K_SNAP_WEIGHT = "spar.snapshot.weight";
-var K_SNAP_PRESTIGE = "spar.snapshot.prestige";
-
-var K_MESSAGE_NEXT = "spar.message.next";
-var K_TICK_NEXT = "spar.tick.next";
-var K_COMBO_TIER = "spar.combo.tier";
-
-var S_STREAK_CURRENT = "spar.streak.current";
-var S_STREAK_BEST = "spar.streak.best";
-var S_STREAK_LAST_DAY = "spar.streak.lastDay";
+var LB_MELEE_PREFIX = "spar.leaderboard.melee.";
+var LB_KI_PREFIX = "spar.leaderboard.ki.";
+var LB_CLASH_PREFIX = "spar.leaderboard.clash.";
+var LB_BLOCKS_PREFIX = "spar.leaderboard.blocks.";
+var LB_MOMENTUM_PREFIX = "spar.leaderboard.momentum.";
 
 /* ========================= BASIC HELPERS ========================= */
 
 function nowMs() {
-    return Number(System.currentTimeMillis());
+    try { return Number(System.currentTimeMillis()); } catch (e) { return Number(new Date().getTime()); }
 }
 
 function readNumber(data, key, fallback) {
     try {
         if (data != null && data.has(key)) {
-            var value = Number("" + data.get(key));
-            if (!isNaN(value)) return value;
+            var value = Number(String(data.get(key)));
+            if (!isNaN(value) && isFinite(value)) return value;
         }
     } catch (e) {}
     return fallback;
@@ -282,23 +250,17 @@ function readNumber(data, key, fallback) {
 
 function readString(data, key, fallback) {
     try {
-        if (data != null && data.has(key)) {
-            return String(data.get(key));
-        }
+        if (data != null && data.has(key)) return String(data.get(key));
     } catch (e) {}
     return fallback;
 }
 
 function putNumber(data, key, value) {
-    try {
-        data.put(key, "" + value);
-    } catch (e) {}
+    try { data.put(key, String(value)); } catch (e) {}
 }
 
 function putString(data, key, value) {
-    try {
-        data.put(key, "" + value);
-    } catch (e) {}
+    try { data.put(key, String(value)); } catch (e) {}
 }
 
 function clamp(value, minimum, maximum) {
@@ -314,149 +276,65 @@ function nearlyEqual(a, b, tolerance) {
 }
 
 function percentDifference(a, b) {
-    a = Math.abs(Number(a));
-    b = Math.abs(Number(b));
-    var largest = Math.max(a, b);
-    if (largest <= 0) return 0;
-    return Math.abs(a - b) / largest;
+    a = Math.max(0, Number(a));
+    b = Math.max(0, Number(b));
+    var highest = Math.max(a, b);
+    if (highest <= 0) return 0;
+    return Math.abs(a - b) / highest;
 }
 
 function getPlayerName(player) {
-    try {
-        return String(player.getName());
-    } catch (e) {
-        return "";
-    }
+    try { return String(player.getName()); } catch (e) { return ""; }
 }
 
-/*
- * Returns the player's UUID as a stable string.
- *
- * UUID comparison is used instead of relying only on names or wrapper
- * identity because projectile events can create separate script wrappers
- * for the same underlying player.
- */
 function getPlayerUUID(player) {
-    try {
-        if (player == null) {
-            return "";
-        }
-
-        return String(player.getUUID());
-    } catch (e) {
-        return "";
-    }
+    try { return String(player.getUUID()); } catch (e) { return ""; }
 }
 
-/*
- * True when both script objects represent the same Minecraft player.
- *
- * The checks are ordered from strongest to weakest:
- * 1. Direct wrapper identity.
- * 2. UUID equality.
- * 3. Underlying Minecraft entity identity.
- * 4. Case-insensitive player-name equality as a final fallback.
- */
 function isSamePlayer(a, b) {
-    if (a == null || b == null) {
-        return false;
-    }
-
-    try {
-        if (a === b) {
-            return true;
-        }
-    } catch (e) {}
-
-    var uuidA = getPlayerUUID(a);
-    var uuidB = getPlayerUUID(b);
-
-    if (
-        uuidA != "" &&
-        uuidB != "" &&
-        uuidA.toLowerCase() == uuidB.toLowerCase()
-    ) {
-        return true;
-    }
-
-    try {
-        var mcA = a.getMCEntity();
-        var mcB = b.getMCEntity();
-
-        if (mcA != null && mcB != null && mcA === mcB) {
-            return true;
-        }
-    } catch (e2) {}
-
-    var nameA = getPlayerName(a);
-    var nameB = getPlayerName(b);
-
-    return (
-        nameA != "" &&
-        nameB != "" &&
-        nameA.toLowerCase() == nameB.toLowerCase()
-    );
-}
-
-/*
- * Removes only stale self-hit records.
- *
- * Valid hit history against another player is left untouched.
- */
-function clearSelfHitTracking(player) {
-    if (player == null) {
-        return;
-    }
-
-    try {
-        var temp = player.getTempdata();
-        var ownName = getPlayerName(player);
-
-        if (
-            readString(temp, K_LAST_OUT_PARTNER, "").toLowerCase() ==
-            ownName.toLowerCase()
-        ) {
-            temp.remove(K_LAST_OUT_PARTNER);
-            temp.remove(K_LAST_OUT_TIME);
-        }
-
-        if (
-            readString(temp, K_LAST_IN_PARTNER, "").toLowerCase() ==
-            ownName.toLowerCase()
-        ) {
-            temp.remove(K_LAST_IN_PARTNER);
-            temp.remove(K_LAST_IN_TIME);
-        }
-    } catch (e) {}
+    if (a == null || b == null) return false;
+    var ua = getPlayerUUID(a);
+    var ub = getPlayerUUID(b);
+    if (ua != "" && ub != "" && ua == ub) return true;
+    return getPlayerName(a).toLowerCase() == getPlayerName(b).toLowerCase();
 }
 
 function getPlayerByName(player, name) {
+    if (player == null || name == null || String(name) == "") return null;
+    var wanted = String(name);
     try {
-        var world = player.getWorld();
-        if (world != null) {
-            var found = world.getPlayer(String(name));
-            if (found != null) return found;
+        var worlds = player.getWorld().getAPI().getIWorlds();
+        for (var i = 0; i < worlds.length; i++) {
+            try {
+                var players = worlds[i].getAllPlayers();
+                for (var p = 0; p < players.length; p++) {
+                    try {
+                        if (String(players[p].getName()).equalsIgnoreCase(wanted)) return players[p];
+                    } catch (e1) {
+                        if (String(players[p].getName()).toLowerCase() == wanted.toLowerCase()) return players[p];
+                    }
+                }
+            } catch (e2) {}
         }
     } catch (e) {}
-
     try {
-        var bukkitPlayer = Bukkit.getPlayerExact(String(name));
-        if (bukkitPlayer == null) return null;
-
-        /*
-         * CustomNPCs wrappers are normally available through the
-         * current player's world. This fallback only confirms online.
-         */
-    } catch (e2) {}
-
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var worlds2 = NpcAPI.Instance().getIWorlds();
+        for (var w = 0; w < worlds2.length; w++) {
+            try {
+                var plist = worlds2[w].getAllPlayers();
+                for (var j = 0; j < plist.length; j++) {
+                    if (String(plist[j].getName()).toLowerCase() == wanted.toLowerCase()) return plist[j];
+                }
+            } catch (e3) {}
+        }
+    } catch (e4) {}
     return null;
 }
 
 function isAlive(player) {
-    try {
-        return player != null && player.getHealth() > 0;
-    } catch (e) {
-        return false;
+    try { return player.isAlive() === true || Number(player.getHealth()) > 0; } catch (e) {
+        try { return Number(player.getHealth()) > 0; } catch (e2) { return false; }
     }
 }
 
@@ -466,40 +344,55 @@ function distanceBetween(a, b) {
         var dy = Number(a.getY()) - Number(b.getY());
         var dz = Number(a.getZ()) - Number(b.getZ());
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
-    } catch (e) {
-        return 999999;
-    }
+    } catch (e) { return 999999; }
 }
 
 function sendMessage(player, text) {
-    try {
-        player.message(text);
-    } catch (e) {}
+    try { if (player != null) player.message(text); } catch (e) {}
 }
 
-/*
- * Build Minecraft color codes with COLOR_CODE + letter.
- * Avoid embedding section-sign escapes inside long string literals;
- * those are the messages that were showing garbled in chat.
- */
-function sparColor(code) {
-    return COLOR_CODE + String(code);
-}
+function sparColor(code) { return COLOR_CODE + String(code); }
 
 function sparText() {
     var out = "";
-    for (var i = 0; i < arguments.length; i++) {
-        out += String(arguments[i]);
-    }
+    for (var i = 0; i < arguments.length; i++) out += String(arguments[i]);
     return out;
 }
 
 function debug(player, text) {
     if (!DEBUG) return;
-    sendMessage(
-        player,
-        sparText(sparColor("8"), "[Spar Debug] ", sparColor("7"), text)
-    );
+    sendMessage(player, sparText(sparColor("8"), "[SparDebug] ", text));
+}
+
+function formatWholeNumber(value) {
+    value = Math.floor(Number(value));
+    if (isNaN(value)) return "0";
+    var s = String(value);
+    var out = "";
+    var count = 0;
+    for (var i = s.length - 1; i >= 0; i--) {
+        out = s.charAt(i) + out;
+        count++;
+        if (count == 3 && i > 0) { out = "," + out; count = 0; }
+    }
+    return out;
+}
+
+function formatDuration(durationMs) {
+    var total = Math.max(0, Math.floor(Number(durationMs) / 1000));
+    var m = Math.floor(total / 60);
+    var s = total % 60;
+    if (m <= 0) return s + "s";
+    return m + "m " + s + "s";
+}
+
+function throttleMessage(player, key, cooldown, text) {
+    var temp = player.getTempdata();
+    var now = nowMs();
+    if (now < readNumber(temp, key, 0)) return false;
+    putNumber(temp, key, now + cooldown);
+    sendMessage(player, text);
+    return true;
 }
 
 /* ========================= DMZ DATA ========================= */
@@ -508,25 +401,18 @@ function getDMZData(player) {
     try {
         var mcPlayer = player.getMCEntity();
         if (mcPlayer == null) return null;
-
-        return StatsProvider
-            .get(StatsCapability.INSTANCE, mcPlayer)
-            .orElse(null);
-    } catch (e) {
-        return null;
-    }
+        return StatsProvider.get(StatsCapability.INSTANCE, mcPlayer).orElse(null);
+    } catch (e) { return null; }
 }
 
 function invokeNumberNoArgs(object, methodNames, fallback) {
     if (object == null) return fallback;
-
     for (var i = 0; i < methodNames.length; i++) {
         try {
             var method = object.getClass().getMethod(methodNames[i]);
             var value = Number(method.invoke(object));
             if (!isNaN(value)) return value;
         } catch (e) {}
-
         try {
             var direct = object[methodNames[i]];
             if (typeof direct == "function") {
@@ -535,43 +421,24 @@ function invokeNumberNoArgs(object, methodNames, fallback) {
             }
         } catch (e2) {}
     }
-
     return fallback;
 }
-
-/*
- * DMZ StatsData.getBattlePowerExact() returns ~3.4e38 when
- * status.isAndroidUpgraded() is true (intentional "unreadable" BP).
- * That blows up sparring TP (two androids -> 600x BP mult every 5s).
- * For sparring rewards, compute the normal stat-based BP instead.
- */
-var ANDROID_FAKE_BP_THRESHOLD = 1.0e30;
 
 function isAndroidUpgraded(playerData) {
     if (playerData == null) return false;
     try {
         var status = playerData.getStatus();
         return status != null && status.isAndroidUpgraded() === true;
-    } catch (err) {
-        return false;
-    }
+    } catch (err) { return false; }
 }
 
 function safeStatBonus(bonusStats, stat, base, multiplicable) {
     if (bonusStats == null) return 0;
     try {
-        var value = Number(
-            bonusStats.calculateBonus(
-                stat,
-                Math.round(base),
-                multiplicable === true
-            )
-        );
+        var value = Number(bonusStats.calculateBonus(stat, Math.round(base), multiplicable === true));
         if (isNaN(value)) return 0;
         return value;
-    } catch (err) {
-        return 0;
-    }
+    } catch (err) { return 0; }
 }
 
 function safeScaling(playerData, stat) {
@@ -579,9 +446,7 @@ function safeScaling(playerData, stat) {
         var value = Number(playerData.getStatScaling(stat));
         if (isNaN(value) || value <= 0) return 1.0;
         return value;
-    } catch (err) {
-        return 1.0;
-    }
+    } catch (err) { return 1.0; }
 }
 
 function safeTotalMultiplier(playerData, stat) {
@@ -589,40 +454,23 @@ function safeTotalMultiplier(playerData, stat) {
         var value = Number(playerData.getTotalMultiplier(stat));
         if (isNaN(value) || value <= 0) return 1.0;
         return value;
-    } catch (err) {
-        return 1.0;
-    }
+    } catch (err) { return 1.0; }
 }
 
-/*
- * Mirrors dragonminez StatsData.getBattlePowerExact() after the
- * android early-return. Verified against dragonminez-2.1.3.
- */
 function computeBattlePowerFromStats(playerData) {
     if (playerData == null) return 0;
-
     try {
         var stats = playerData.getStats();
         if (stats == null) return 0;
-
         var bonusStats = null;
-        try {
-            bonusStats = playerData.getBonusStats();
-        } catch (bonusErr) {}
+        try { bonusStats = playerData.getBonusStats(); } catch (bonusErr) {}
 
-        var str = Number(stats.getStrength());
-        var skp = Number(stats.getStrikePower());
-        var res = Number(stats.getResistance());
-        var vit = Number(stats.getVitality());
-        var pwr = Number(stats.getKiPower());
-        var ene = Number(stats.getEnergy());
-
-        if (isNaN(str)) str = 0;
-        if (isNaN(skp)) skp = 0;
-        if (isNaN(res)) res = 0;
-        if (isNaN(vit)) vit = 0;
-        if (isNaN(pwr)) pwr = 0;
-        if (isNaN(ene)) ene = 0;
+        var str = Number(stats.getStrength()); if (isNaN(str)) str = 0;
+        var skp = Number(stats.getStrikePower()); if (isNaN(skp)) skp = 0;
+        var res = Number(stats.getResistance()); if (isNaN(res)) res = 0;
+        var vit = Number(stats.getVitality()); if (isNaN(vit)) vit = 0;
+        var pwr = Number(stats.getKiPower()); if (isNaN(pwr)) pwr = 0;
+        var ene = Number(stats.getEnergy()); if (isNaN(ene)) ene = 0;
 
         var multBonusStr = safeStatBonus(bonusStats, "STR", str, true);
         var flatBonusStr = safeStatBonus(bonusStats, "STR", str, false);
@@ -638,176 +486,71 @@ function computeBattlePowerFromStats(playerData) {
         var flatBonusEne = safeStatBonus(bonusStats, "ENE", ene, false);
 
         var rawPower =
-            (str + multBonusStr) *
-                safeScaling(playerData, "STR") *
-                safeTotalMultiplier(playerData, "STR") +
+            (str + multBonusStr) * safeScaling(playerData, "STR") * safeTotalMultiplier(playerData, "STR") +
             flatBonusStr * safeScaling(playerData, "STR") +
-            (skp + multBonusSkp) *
-                safeScaling(playerData, "SKP") *
-                safeTotalMultiplier(playerData, "SKP") +
+            (skp + multBonusSkp) * safeScaling(playerData, "SKP") * safeTotalMultiplier(playerData, "SKP") +
             flatBonusSkp * safeScaling(playerData, "SKP") +
-            (res + multBonusDef) *
-                safeScaling(playerData, "DEF") *
-                safeTotalMultiplier(playerData, "RES") +
+            (res + multBonusDef) * safeScaling(playerData, "DEF") * safeTotalMultiplier(playerData, "RES") +
             flatBonusDef * safeScaling(playerData, "DEF") +
-            (pwr + multBonusPwr) *
-                safeScaling(playerData, "PWR") *
-                safeTotalMultiplier(playerData, "PWR") +
+            (pwr + multBonusPwr) * safeScaling(playerData, "PWR") * safeTotalMultiplier(playerData, "PWR") +
             flatBonusPwr * safeScaling(playerData, "PWR");
 
-        rawPower +=
-            0.5 *
-            (
-                (vit + multBonusVit) *
-                    safeScaling(playerData, "VIT") *
-                    safeTotalMultiplier(playerData, "VIT") +
-                flatBonusVit * safeScaling(playerData, "VIT") +
-                (ene + multBonusEne) *
-                    safeScaling(playerData, "ENE") *
-                    safeTotalMultiplier(playerData, "ENE") +
-                flatBonusEne * safeScaling(playerData, "ENE")
-            );
+        rawPower += 0.5 * (
+            (vit + multBonusVit) * safeScaling(playerData, "VIT") * safeTotalMultiplier(playerData, "VIT") +
+            flatBonusVit * safeScaling(playerData, "VIT") +
+            (ene + multBonusEne) * safeScaling(playerData, "ENE") * safeTotalMultiplier(playerData, "ENE") +
+            flatBonusEne * safeScaling(playerData, "ENE")
+        );
 
-        if (isNaN(rawPower) || rawPower <= 0.0) {
-            return 0;
-        }
+        if (isNaN(rawPower) || rawPower <= 0.0) return 0;
 
         var releaseMultiplier = 1.0;
         try {
             var resources = playerData.getResources();
-            if (resources != null) {
-                releaseMultiplier =
-                    Number(resources.getPowerRelease()) / 100.0;
-            }
-        } catch (releaseErr) {
-            releaseMultiplier = 1.0;
-        }
+            if (resources != null) releaseMultiplier = Number(resources.getPowerRelease()) / 100.0;
+        } catch (releaseErr) { releaseMultiplier = 1.0; }
+        if (isNaN(releaseMultiplier) || releaseMultiplier < 0) releaseMultiplier = 1.0;
 
-        if (isNaN(releaseMultiplier) || releaseMultiplier < 0) {
-            releaseMultiplier = 1.0;
-        }
-
-        var bp =
-            1200.0 *
-            Math.pow(rawPower / 100.0, 1.2) *
-            releaseMultiplier;
-
-        if (isNaN(bp) || bp <= 0.0) {
-            return 0;
-        }
-
+        var bp = 1200.0 * Math.pow(rawPower / 100.0, 1.2) * releaseMultiplier;
+        if (isNaN(bp) || bp <= 0.0) return 0;
         return bp;
-    } catch (err) {
-        return 0;
-    }
+    } catch (err) { return 0; }
 }
 
-/*
- * DMZ builds have used different public names for Battle Power.
- * The first available method is used.
- *
- * Android upgraded players: ignore DMZ's fake max BP and use
- * the real stat-based formula instead.
- */
 function getCurrentBattlePower(playerData) {
     if (playerData == null) return 0;
+    if (isAndroidUpgraded(playerData)) return computeBattlePowerFromStats(playerData);
 
-    if (isAndroidUpgraded(playerData)) {
-        return computeBattlePowerFromStats(playerData);
-    }
-
-    var direct = invokeNumberNoArgs(
-        playerData,
-        [
-            "getCurrentBattlePower",
-            "getBattlePower",
-            "getCurrentPower",
-            "getPowerLevel",
-            "getPower"
-        ],
-        -1
-    );
-
-    /*
-     * Safety net: any absurd "infinite" BP value (android flag
-     * missed, or other fake BP) falls back to stat calculation.
-     */
-    if (direct >= ANDROID_FAKE_BP_THRESHOLD) {
-        return computeBattlePowerFromStats(playerData);
-    }
-
+    var direct = invokeNumberNoArgs(playerData, [
+        "getCurrentBattlePower", "getBattlePower", "getCurrentPower", "getPowerLevel", "getPower"
+    ], -1);
+    if (direct >= ANDROID_FAKE_BP_THRESHOLD) return computeBattlePowerFromStats(playerData);
     if (direct >= 0) return direct;
 
     try {
         var stats = playerData.getStats();
-        var fromStats = invokeNumberNoArgs(
-            stats,
-            [
-                "getCurrentBattlePower",
-                "getBattlePower",
-                "getCurrentPower",
-                "getPowerLevel",
-                "getPower"
-            ],
-            -1
-        );
-        if (fromStats >= ANDROID_FAKE_BP_THRESHOLD) {
-            return computeBattlePowerFromStats(playerData);
-        }
+        var fromStats = invokeNumberNoArgs(stats, [
+            "getCurrentBattlePower", "getBattlePower", "getCurrentPower", "getPowerLevel", "getPower"
+        ], -1);
+        if (fromStats >= ANDROID_FAKE_BP_THRESHOLD) return computeBattlePowerFromStats(playerData);
         if (fromStats >= 0) return fromStats;
     } catch (e) {}
-
-    try {
-        var status = playerData.getStatus();
-        var fromStatus = invokeNumberNoArgs(
-            status,
-            [
-                "getCurrentBattlePower",
-                "getBattlePower",
-                "getCurrentPower",
-                "getPowerLevel",
-                "getPower"
-            ],
-            -1
-        );
-        if (fromStatus >= ANDROID_FAKE_BP_THRESHOLD) {
-            return computeBattlePowerFromStats(playerData);
-        }
-        if (fromStatus >= 0) return fromStatus;
-    } catch (e2) {}
 
     return 0;
 }
 
-/*
- * Reads actual Limit Release from DMZ.
- * Handles either 1.0-2.0 or 100-200 storage.
- */
 function getReleasePercent(playerData) {
     if (playerData == null) return 100.0;
-
-    var release = invokeNumberNoArgs(
-        playerData,
-        ["getRelease", "getPowerRelease", "getReleaseLimit"],
-        -1
-    );
-
-    if (release < 0) {
-        try {
-            release = invokeNumberNoArgs(
-                playerData.getStatus(),
-                ["getRelease", "getPowerRelease", "getReleaseLimit"],
-                -1
-            );
-        } catch (e) {}
+    var release = -1;
+    try {
+        var resources = playerData.getResources();
+        if (resources != null) release = Number(resources.getPowerRelease());
+    } catch (e) {}
+    if (isNaN(release) || release < 0) {
+        release = invokeNumberNoArgs(playerData, ["getRelease", "getPowerRelease", "getReleaseLimit"], -1);
     }
-
     if (release < 0) return 100.0;
-
-    if (release > 0 && release <= 3.0) {
-        release *= 100.0;
-    }
-
+    if (release > 0 && release <= 3.0) release *= 100.0;
     return clamp(release, 0.0, MAX_RELEASE_PERCENT);
 }
 
@@ -816,28 +559,14 @@ function getNetGravity(mcPlayer) {
         var value = Number(GravityLogic.getNetGravity(mcPlayer));
         if (!isNaN(value) && value > 0) return value;
     } catch (e) {}
-
-    try {
-        var multiplier = Number(
-            GravityLogic.getTrainingGravityMultiplier(mcPlayer)
-        );
-        if (!isNaN(multiplier) && multiplier > 0) return multiplier;
-    } catch (e2) {}
-
     return 1.0;
 }
 
 function getEffectiveWeight(mcPlayer) {
     try {
         var value = Number(GravityLogic.getEffectiveWeight(mcPlayer));
-        if (!isNaN(value) && value > 0) return value;
+        if (!isNaN(value) && value >= 0) return value;
     } catch (e) {}
-
-    try {
-        var total = Number(GravityLogic.getTotalWeight(mcPlayer));
-        if (!isNaN(total) && total > 0) return total;
-    } catch (e2) {}
-
     return 0.0;
 }
 
@@ -845,1580 +574,908 @@ function getFabledPrestigeLevel(player) {
     try {
         var plugin = Bukkit.getPluginManager().getPlugin("Fabled");
         if (plugin == null || !plugin.isEnabled()) return 0;
-
         var bukkitPlayer = Bukkit.getPlayerExact(getPlayerName(player));
         if (bukkitPlayer == null) return 0;
-
         var methods = plugin.getClass().getMethods();
         var getDataMethod = null;
-
         for (var i = 0; i < methods.length; i++) {
-            if (
-                String(methods[i].getName()) == "getData" &&
-                methods[i].getParameterTypes().length == 1
-            ) {
+            if (String(methods[i].getName()) == "getData" && methods[i].getParameterTypes().length == 1) {
                 getDataMethod = methods[i];
                 break;
             }
         }
-
         if (getDataMethod == null) return 0;
-
         var fabledData = getDataMethod.invoke(null, bukkitPlayer);
         if (fabledData == null) return 0;
-
-        var prestigeClass = fabledData.getClass(
-            FABLED_PRESTIGE_CLASS_NAME
-        );
+        var prestigeClass = fabledData.getClass(FABLED_PRESTIGE_CLASS_NAME);
         if (prestigeClass == null) return 0;
-
         var level = Number(prestigeClass.getLevel());
         if (isNaN(level)) return 0;
+        return Math.floor(clamp(level - FABLED_PRESTIGE_LEVEL_OFFSET, 0, MAX_PRESTIGE_LEVEL));
+    } catch (e) { return 0; }
+}
 
-        return Math.floor(
-            clamp(
-                level - FABLED_PRESTIGE_LEVEL_OFFSET,
-                0,
-                MAX_PRESTIGE_LEVEL
-            )
-        );
-    } catch (e) {
-        return 0;
-    }
+function isPlayerBlocking(player) {
+    try {
+        var data = getDMZData(player);
+        if (data == null) return false;
+        var status = data.getStatus();
+        return status != null && status.isBlocking() === true;
+    } catch (e) { return false; }
 }
 
 function awardTrainingPoints(player, playerData, amount) {
     try {
         amount = Math.floor(Number(amount));
         if (isNaN(amount) || amount <= 0) return false;
-
         var resources = playerData.getResources();
         if (resources == null) return false;
-
         resources.addTrainingPoints(amount);
-
         var mcPlayer = player.getMCEntity();
-        NetworkHandler.sendToTrackingEntityAndSelf(
-            new StatsSyncS2C(mcPlayer),
-            mcPlayer
-        );
-
+        NetworkHandler.sendToTrackingEntityAndSelf(new StatsSyncS2C(mcPlayer), mcPlayer);
         return true;
     } catch (e) {
-        sendMessage(
-            player,
-            sparText(sparColor("c"), "[Sparring] Failed to award TP: ", e)
-        );
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] Failed to award TP: ", e));
         return false;
     }
 }
 
 /* ========================= MULTIPLIERS ========================= */
 
-/*
- * Piecewise logarithmic-style curve:
- *
- * 100K = 1.0x
- * 1M   = 1.3x
- * 10M  = 1.7x
- * 100M = 2.2x
- * 1B   = 2.8x
- * 10B  = 3.5x
- * 100B = 4.2x
- * 1T   = 5.0x
- */
 function getBattlePowerMultiplier(bp) {
-    /*
-     * Smooth logarithmic interpolation between progression anchors.
-     *
-     * This removes sudden reward jumps at exact BP thresholds while
-     * preserving the intended early-, mid-, and end-game scaling.
-     */
     var battlePower = Math.max(1, Number(bp));
-
-    var bpAnchors = [
-        1,
-        100000,
-        1000000,
-        10000000,
-        100000000,
-        1000000000,
-        10000000000,
-        100000000000,
-        1000000000000,
-        10000000000000,
-        100000000000000
-    ];
-
-    var multiplierAnchors = [
-        1.0,
-        2.0,
-        5.0,
-        12.0,
-        25.0,
-        50.0,
-        100.0,
-        150.0,
-        250.0,
-        400.0,
-        600.0
-    ];
-
-    if (battlePower <= bpAnchors[0]) {
-        return multiplierAnchors[0];
-    }
-
+    var bpAnchors = [1, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000];
+    var multiplierAnchors = [1.0, 2.0, 5.0, 12.0, 25.0, 50.0, 100.0, 150.0, 250.0, 400.0, 600.0];
+    if (battlePower <= bpAnchors[0]) return multiplierAnchors[0];
     for (var i = 0; i < bpAnchors.length - 1; i++) {
-        var lowerBP = bpAnchors[i];
-        var upperBP = bpAnchors[i + 1];
-
-        if (battlePower <= upperBP) {
-            var lowerMultiplier = multiplierAnchors[i];
-            var upperMultiplier = multiplierAnchors[i + 1];
-
-            var lowerLog = Math.log(lowerBP) / Math.log(10);
-            var upperLog = Math.log(upperBP) / Math.log(10);
+        if (battlePower <= bpAnchors[i + 1]) {
+            var lowerLog = Math.log(bpAnchors[i]) / Math.log(10);
+            var upperLog = Math.log(bpAnchors[i + 1]) / Math.log(10);
             var currentLog = Math.log(battlePower) / Math.log(10);
-
-            var progress =
-                (currentLog - lowerLog) /
-                (upperLog - lowerLog);
-
-            return lowerMultiplier +
-                (upperMultiplier - lowerMultiplier) *
-                progress;
+            var progress = (currentLog - lowerLog) / (upperLog - lowerLog);
+            return multiplierAnchors[i] + (multiplierAnchors[i + 1] - multiplierAnchors[i]) * progress;
         }
     }
-
-    /*
-     * Continue scaling smoothly beyond 100T BP rather than hard-capping.
-     * Each additional 10x BP adds another 200x multiplier.
-     */
-    var finalBP =
-        bpAnchors[bpAnchors.length - 1];
-
-    var finalMultiplier =
-        multiplierAnchors[multiplierAnchors.length - 1];
-
-    var extraDecades =
-        (Math.log(battlePower) - Math.log(finalBP)) /
-        Math.log(10);
-
-    return Math.min(
-        MAX_BP_MULTIPLIER,
-        finalMultiplier + extraDecades * 200.0
-    );
+    var finalBP = bpAnchors[bpAnchors.length - 1];
+    var finalMultiplier = multiplierAnchors[multiplierAnchors.length - 1];
+    var extraDecades = (Math.log(battlePower) - Math.log(finalBP)) / Math.log(10);
+    return Math.min(MAX_BP_MULTIPLIER, finalMultiplier + extraDecades * 200.0);
 }
 
 function getRivalMultiplier(bpA, bpB) {
     bpA = Math.max(0, Number(bpA));
     bpB = Math.max(0, Number(bpB));
-
     var highest = Math.max(bpA, bpB);
     if (highest <= 0) return 1.0;
-
     var ratio = Math.min(bpA, bpB) / highest;
-
     if (ratio >= 0.90) return Math.min(3.0, MAX_RIVAL_MULTIPLIER);
-    if (ratio >= 0.75) return Math.min(2.5, MAX_RIVAL_MULTIPLIER);
+    if (ratio >= 0.80) return Math.min(2.5, MAX_RIVAL_MULTIPLIER);
     if (ratio >= 0.50) return Math.min(2.0, MAX_RIVAL_MULTIPLIER);
     if (ratio >= 0.25) return Math.min(1.5, MAX_RIVAL_MULTIPLIER);
     return 1.0;
 }
 
 function getReleaseMultiplier(releasePercent) {
-    var release = clamp(
-        Number(releasePercent),
-        MIN_RELEASE_PERCENT,
-        MAX_RELEASE_PERCENT
-    );
-
-    var progress =
-        (release - MIN_RELEASE_PERCENT) /
-        (MAX_RELEASE_PERCENT - MIN_RELEASE_PERCENT);
-
-    return clamp(
-        1.0 + progress * (MAX_RELEASE_MULTIPLIER - 1.0),
-        1.0,
-        MAX_RELEASE_MULTIPLIER
-    );
+    var release = clamp(Number(releasePercent), MIN_RELEASE_PERCENT, MAX_RELEASE_PERCENT);
+    var progress = (release - MIN_RELEASE_PERCENT) / (MAX_RELEASE_PERCENT - MIN_RELEASE_PERCENT);
+    return clamp(1.0 + progress * (MAX_RELEASE_MULTIPLIER - 1.0), 1.0, MAX_RELEASE_MULTIPLIER);
 }
 
 function getGravityMultiplier(gravity) {
     var g = clamp(Number(gravity), 1.0, MAX_GRAVITY);
     var progress = (g - 1.0) / (MAX_GRAVITY - 1.0);
-
-    return clamp(
-        1.0 + progress * (MAX_GRAVITY_MULTIPLIER - 1.0),
-        1.0,
-        MAX_GRAVITY_MULTIPLIER
-    );
+    return clamp(1.0 + progress * (MAX_GRAVITY_MULTIPLIER - 1.0), 1.0, MAX_GRAVITY_MULTIPLIER);
 }
 
 function getWeightMultiplier(weight) {
     var w = clamp(Number(weight), 0.0, MAX_EFFECTIVE_WEIGHT);
     var progress = w / MAX_EFFECTIVE_WEIGHT;
-
-    return clamp(
-        1.0 + progress * (MAX_WEIGHT_MULTIPLIER - 1.0),
-        1.0,
-        MAX_WEIGHT_MULTIPLIER
-    );
+    return clamp(1.0 + progress * (MAX_WEIGHT_MULTIPLIER - 1.0), 1.0, MAX_WEIGHT_MULTIPLIER);
 }
 
 function getPrestigeMultiplier(prestige) {
-    prestige = clamp(
-        Math.floor(Number(prestige)),
-        0,
-        MAX_PRESTIGE_LEVEL
-    );
-
+    prestige = clamp(Math.floor(Number(prestige)), 0, MAX_PRESTIGE_LEVEL);
     return 1.0 + prestige * PRESTIGE_MULTIPLIER_PER_LEVEL;
 }
 
-/* ========================= MOVEMENT ========================= */
-
-/*
- * Melee hits, knockback, and flight all count as "moving" for sparring.
- * Standing still while trading blows used to fail the 1.5-block walk check
- * and force both fighters into the 3-second recover timer.
- */
-function refreshMovementActivity(player) {
-    if (player == null) return;
-
-    try {
-        var temp = player.getTempdata();
-        var now = nowMs();
-
-        putNumber(
-            temp,
-            K_MOVE_VALID_UNTIL,
-            now + MOVEMENT_ACTIVITY_WINDOW_MS
-        );
-
-        putNumber(temp, K_MOVE_X, Number(player.getX()));
-        putNumber(temp, K_MOVE_Y, Number(player.getY()));
-        putNumber(temp, K_MOVE_Z, Number(player.getZ()));
-    } catch (e) {}
-}
-
-function readPlayerMotionSpeed(player) {
-    try {
-        var mcPlayer = player.getMCEntity ? player.getMCEntity() : null;
-        if (mcPlayer == null) return 0;
-
-        var motion = null;
-        if (typeof mcPlayer.getDeltaMovement == "function") {
-            motion = mcPlayer.getDeltaMovement();
-        } else if (typeof mcPlayer.m_20184_ == "function") {
-            motion = mcPlayer.m_20184_();
-        }
-
-        if (motion == null) {
-            try {
-                var mx = Number(player.getMotionX());
-                var my = Number(player.getMotionY());
-                var mz = Number(player.getMotionZ());
-                if (!isNaN(mx) && !isNaN(my) && !isNaN(mz)) {
-                    return Math.sqrt(mx * mx + my * my + mz * mz);
-                }
-            } catch (cnpcErr) {}
-            return 0;
-        }
-
-        var x = NaN;
-        var y = NaN;
-        var z = NaN;
-
-        try {
-            if (typeof motion.x == "function") x = Number(motion.x());
-            else x = Number(motion.x);
-        } catch (ex) {}
-        try {
-            if (typeof motion.y == "function") y = Number(motion.y());
-            else y = Number(motion.y);
-        } catch (ey) {}
-        try {
-            if (typeof motion.z == "function") z = Number(motion.z());
-            else z = Number(motion.z);
-        } catch (ez) {}
-
-        if (isNaN(x) || isNaN(y) || isNaN(z)) return 0;
-        return Math.sqrt(x * x + y * y + z * z);
-    } catch (e) {
-        return 0;
-    }
-}
-
-function updateMovement(player) {
-    try {
-        var temp = player.getTempdata();
-        var now = nowMs();
-
-        var x = Number(player.getX());
-        var y = Number(player.getY());
-        var z = Number(player.getZ());
-
-        if (
-            !temp.has(K_MOVE_X) ||
-            !temp.has(K_MOVE_Y) ||
-            !temp.has(K_MOVE_Z)
-        ) {
-            putNumber(temp, K_MOVE_X, x);
-            putNumber(temp, K_MOVE_Y, y);
-            putNumber(temp, K_MOVE_Z, z);
-            return;
-        }
-
-        var oldX = readNumber(temp, K_MOVE_X, x);
-        var oldY = readNumber(temp, K_MOVE_Y, y);
-        var oldZ = readNumber(temp, K_MOVE_Z, z);
-
-        var dx = x - oldX;
-        var dy = y - oldY;
-        var dz = z - oldZ;
-        var moved = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        var speed = readPlayerMotionSpeed(player);
-
-        /*
-         * Count small knockback slides, flight drift, and normal walking.
-         */
-        if (moved >= MIN_MOVEMENT_DISTANCE || speed >= MIN_MOTION_SPEED) {
-            refreshMovementActivity(player);
-        }
-    } catch (e) {}
-}
-
-function hasRecentMovement(player) {
-    try {
-        return nowMs() <
-            readNumber(
-                player.getTempdata(),
-                K_MOVE_VALID_UNTIL,
-                0
-            );
-    } catch (e) {
-        return false;
-    }
-}
-
-/* ========================= SESSION DATA ========================= */
-
-function isSessionActive(player) {
-    try {
-        return readString(
-            player.getTempdata(),
-            K_SESSION_ACTIVE,
-            "0"
-        ) == "1";
-    } catch (e) {
-        return false;
-    }
-}
-
-function getPartnerName(player) {
-    try {
-        return readString(
-            player.getTempdata(),
-            K_PARTNER,
-            ""
-        );
-    } catch (e) {
-        return "";
-    }
-}
-
-function clearSessionData(player) {
-    try {
-        var temp = player.getTempdata();
-
-        temp.remove(K_PARTNER);
-        temp.remove(K_SESSION_ACTIVE);
-        temp.remove(K_SESSION_START);
-        temp.remove(K_NEXT_AWARD);
-        temp.remove(K_GRACE_UNTIL);
-        temp.remove(K_GRACE_REASON);
-        temp.remove(K_GRACE_WARNED);
-        temp.remove(K_COMBO_TIER);
-
-        temp.remove(K_SNAP_BP);
-        temp.remove(K_SNAP_RELEASE);
-        temp.remove(K_SNAP_GRAVITY);
-        temp.remove(K_SNAP_WEIGHT);
-        temp.remove(K_SNAP_PRESTIGE);
-    } catch (e) {}
-}
-
-function snapshotPlayer(player) {
-    var data = getDMZData(player);
-    if (data == null) return false;
-
-    try {
-        var mc = player.getMCEntity();
-        var temp = player.getTempdata();
-
-        putNumber(temp, K_SNAP_BP, getCurrentBattlePower(data));
-        putNumber(temp, K_SNAP_RELEASE, getReleasePercent(data));
-        putNumber(temp, K_SNAP_GRAVITY, getNetGravity(mc));
-        putNumber(temp, K_SNAP_WEIGHT, getEffectiveWeight(mc));
-        putNumber(temp, K_SNAP_PRESTIGE, getFabledPrestigeLevel(player));
-
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
-function startSession(a, b) {
-    if (a == null || b == null) return false;
-
-    /*
-     * A player can never be their own sparring partner.
-     */
-    if (isSamePlayer(a, b)) {
-        clearSelfHitTracking(a);
-        clearSelfHitTracking(b);
-        return false;
-    }
-
-    var now = nowMs();
-    var aTemp = a.getTempdata();
-    var bTemp = b.getTempdata();
-
-    if (
-        now < readNumber(aTemp, K_COOLDOWN, 0) ||
-        now < readNumber(bTemp, K_COOLDOWN, 0)
-    ) {
-        return false;
-    }
-
-    if (!snapshotPlayer(a) || !snapshotPlayer(b)) {
-        return false;
-    }
-
-    var aName = getPlayerName(a);
-    var bName = getPlayerName(b);
-
-    if (
-        aName == "" ||
-        bName == "" ||
-        aName.toLowerCase() == bName.toLowerCase()
-    ) {
-        clearSelfHitTracking(a);
-        clearSelfHitTracking(b);
-        return false;
-    }
-
-    putString(aTemp, K_PARTNER, bName);
-    putString(bTemp, K_PARTNER, aName);
-
-    putString(aTemp, K_SESSION_ACTIVE, "1");
-    putString(bTemp, K_SESSION_ACTIVE, "1");
-
-    putNumber(aTemp, K_SESSION_START, now);
-    putNumber(bTemp, K_SESSION_START, now);
-
-    putNumber(aTemp, K_NEXT_AWARD, now + AWARD_INTERVAL_MS);
-    putNumber(bTemp, K_NEXT_AWARD, now + AWARD_INTERVAL_MS);
-    putNumber(aTemp, K_COMBO_TIER, 0);
-    putNumber(bTemp, K_COMBO_TIER, 0);
-
-    /*
-     * Seed movement validity so the session does not instantly enter
-     * "both fighters must resume moving" before the first knockback.
-     */
-    refreshMovementActivity(a);
-    refreshMovementActivity(b);
-
-    recordSparringSessionStarted(a);
-    recordSparringSessionStarted(b);
-
-    if (SHOW_SESSION_MESSAGES) {
-        sendMessage(
-            a,
-            sparText(
-                sparColor("6"), "[Sparring] ",
-                sparColor("e"), "Training session started with ",
-                sparColor("f"), bName,
-                sparColor("e"), "."
-            )
-        );
-        sendMessage(
-            b,
-            sparText(
-                sparColor("6"), "[Sparring] ",
-                sparColor("e"), "Training session started with ",
-                sparColor("f"), aName,
-                sparColor("e"), "."
-            )
-        );
-    }
-
-    return true;
-}
-
-function endSession(player, partner, reason) {
-    /*
-     * Only the first endSession call for an active pair should announce.
-     * Both partners tick independently; without this guard they both
-     * broadcast "Session ended" and the chat looks broken.
-     */
-    var wasActive = false;
-    try {
-        wasActive =
-            isSessionActive(player) ||
-            (partner != null && isSessionActive(partner));
-    } catch (activeErr) {
-        wasActive = true;
-    }
-
-    if (!wasActive) {
-        try {
-            clearSessionData(player);
-        } catch (eClear) {}
-        if (partner != null) {
-            try {
-                clearSessionData(partner);
-            } catch (eClear2) {}
-        }
-        return;
-    }
-
-    var now = nowMs();
-
-    try {
-        putNumber(
-            player.getTempdata(),
-            K_COOLDOWN,
-            now + PAIR_RESTART_COOLDOWN_MS
-        );
-        clearSessionData(player);
-    } catch (e) {}
-
-    if (partner != null) {
-        try {
-            putNumber(
-                partner.getTempdata(),
-                K_COOLDOWN,
-                now + PAIR_RESTART_COOLDOWN_MS
-            );
-            clearSessionData(partner);
-        } catch (e2) {}
-    }
-
-    if (SHOW_SESSION_MESSAGES && reason != null && reason != "") {
-        var endText = sparText(
-            sparColor("6"), "[Sparring] ",
-            sparColor("e"), "Session ended: ",
-            sparColor("f"), reason,
-            sparColor("e"), "."
-        );
-
-        sendMessage(player, endText);
-
-        if (partner != null) {
-            sendMessage(partner, endText);
-        }
-    }
-}
-
-/* ========================= HIT TRACKING ========================= */
-
-function isKiAttack(event) {
-    try {
-        var immediate =
-            event.damageSource != null
-                ? event.damageSource.getImmediateSource()
-                : null;
-
-        var immediateMC =
-            immediate != null
-                ? immediate.getMCEntity()
-                : null;
-
-        return (
-            immediateMC != null &&
-            AbstractKiProjectile.class.isInstance(immediateMC)
-        );
-    } catch (e) {
-        return false;
-    }
-}
-
-function recordMeleeHit(attacker, target) {
-    if (attacker == null || target == null) {
-        return;
-    }
-
-    /*
-     * Never record self-inflicted damage as outgoing or incoming sparring
-     * activity. This check runs before any reciprocal-hit data is written.
-     */
-    if (isSamePlayer(attacker, target)) {
-        clearSelfHitTracking(attacker);
-        clearSelfHitTracking(target);
-        return;
-    }
-
-    var now = nowMs();
-    var attackerName = getPlayerName(attacker);
-    var targetName = getPlayerName(target);
-
-    if (
-        attackerName == "" ||
-        targetName == "" ||
-        attackerName.toLowerCase() == targetName.toLowerCase()
-    ) {
-        clearSelfHitTracking(attacker);
-        clearSelfHitTracking(target);
-        return;
-    }
-
-    var attackerTemp = attacker.getTempdata();
-    var targetTemp = target.getTempdata();
-
-    putString(attackerTemp, K_LAST_OUT_PARTNER, targetName);
-    putNumber(attackerTemp, K_LAST_OUT_TIME, now);
-
-    putString(targetTemp, K_LAST_IN_PARTNER, attackerName);
-    putNumber(targetTemp, K_LAST_IN_TIME, now);
-
-    /*
-     * Grounded knockback combat and aerial spars often keep one fighter
-     * planted while the other is shoved. Count the hit itself as movement
-     * activity for both so the recover timer does not false-trigger.
-     */
-    refreshMovementActivity(attacker);
-    refreshMovementActivity(target);
-
-    /*
-     * Start only after the target has recently hit the attacker.
-     */
-    var reciprocalName = readString(
-        targetTemp,
-        K_LAST_OUT_PARTNER,
-        ""
-    );
-    var reciprocalTime = readNumber(
-        targetTemp,
-        K_LAST_OUT_TIME,
-        0
-    );
-
-    if (
-        reciprocalName == attackerName &&
-        now - reciprocalTime <= SESSION_START_WINDOW_MS
-    ) {
-        if (
-            !isSessionActive(attacker) &&
-            !isSessionActive(target)
-        ) {
-            startSession(attacker, target);
-        }
-    }
-}
-
-function hasRecentOutgoingHit(player, partnerName) {
-    try {
-        if (
-            player == null ||
-            partnerName == null ||
-            String(partnerName) == "" ||
-            getPlayerName(player).toLowerCase() ==
-                String(partnerName).toLowerCase()
-        ) {
-            return false;
-        }
-
-        var temp = player.getTempdata();
-
-        return (
-            readString(temp, K_LAST_OUT_PARTNER, "") == partnerName &&
-            nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0)
-                <= HIT_ACTIVITY_WINDOW_MS
-        );
-    } catch (e) {
-        return false;
-    }
-}
-
-/* ========================= SNAPSHOT VALIDATION ========================= */
-
-function validateSnapshot(player) {
-    var data = getDMZData(player);
-    if (data == null) return "DMZ data unavailable";
-
-    try {
-        var temp = player.getTempdata();
-
-        var oldBP = readNumber(temp, K_SNAP_BP, 0);
-        var oldPrestige = readNumber(temp, K_SNAP_PRESTIGE, 0);
-
-        var newBP = getCurrentBattlePower(data);
-        var newPrestige = getFabledPrestigeLevel(player);
-
-        /*
-         * A significant BP change normally means a form or major power
-         * state changed, so the matchup must be restarted.
-         *
-         * Release, gravity and weight are intentionally live values.
-         * Changing those no longer ends the session.
-         */
-        if (
-            percentDifference(oldBP, newBP) >
-            BP_CHANGE_TOLERANCE_PERCENT
-        ) {
-            return "Battle Power changed";
-        }
-
-        if (Math.floor(oldPrestige) != Math.floor(newPrestige)) {
-            return "Prestige changed";
-        }
-
-        return "";
-    } catch (e) {
-        return "snapshot validation failed";
-    }
+function getSessionBonusMultiplier(player) {
+    var start = readNumber(player.getTempdata(), K_SESSION_START, 0);
+    if (start <= 0) return 1.0;
+    var minutes = Math.floor(Math.max(0, nowMs() - start) / 60000);
+    var bonus = Math.min(MAX_SESSION_BONUS, minutes * SESSION_BONUS_PER_MINUTE);
+    return 1.0 + bonus;
 }
 
 function getLiveTrainingValues(player) {
     var data = getDMZData(player);
     if (data == null) return null;
-
-    try {
-        var mc = player.getMCEntity();
-
-        return {
-            bp: getCurrentBattlePower(data),
-            release: getReleasePercent(data),
-            gravity: getNetGravity(mc),
-            weight: getEffectiveWeight(mc),
-            prestige: getFabledPrestigeLevel(player)
-        };
-    } catch (e) {
-        return null;
-    }
+    var mc = null;
+    try { mc = player.getMCEntity(); } catch (e) {}
+    return {
+        bp: getCurrentBattlePower(data),
+        release: getReleasePercent(data),
+        gravity: getNetGravity(mc),
+        weight: getEffectiveWeight(mc),
+        prestige: getFabledPrestigeLevel(player),
+        data: data
+    };
 }
 
 function isPerfectTraining(valuesA, valuesB) {
-    if (!ENABLE_PERFECT_TRAINING) return false;
-    if (valuesA == null || valuesB == null) return false;
-
-    if (
-        percentDifference(valuesA.bp, valuesB.bp) >
-        PERFECT_BP_DIFFERENCE
-    ) {
-        return false;
-    }
-
-    if (
-        Math.abs(valuesA.release - PERFECT_RELEASE_PERCENT) >
-            PERFECT_RELEASE_TOLERANCE ||
-        Math.abs(valuesB.release - PERFECT_RELEASE_PERCENT) >
-            PERFECT_RELEASE_TOLERANCE
-    ) {
-        return false;
-    }
-
-    if (
-        !nearlyEqual(
-            valuesA.gravity,
-            valuesB.gravity,
-            PERFECT_GRAVITY_TOLERANCE
-        )
-    ) {
-        return false;
-    }
-
-    if (
-        !nearlyEqual(
-            valuesA.weight,
-            valuesB.weight,
-            PERFECT_WEIGHT_TOLERANCE
-        )
-    ) {
-        return false;
-    }
-
+    if (!ENABLE_PERFECT_TRAINING || valuesA == null || valuesB == null) return false;
+    if (percentDifference(valuesA.bp, valuesB.bp) > PERFECT_BP_DIFFERENCE) return false;
+    if (valuesA.release < PERFECT_RELEASE_MIN || valuesA.release > PERFECT_RELEASE_MAX) return false;
+    if (valuesB.release < PERFECT_RELEASE_MIN || valuesB.release > PERFECT_RELEASE_MAX) return false;
+    if (!nearlyEqual(valuesA.gravity, valuesB.gravity, PERFECT_GRAVITY_TOLERANCE)) return false;
+    if (!nearlyEqual(valuesA.weight, valuesB.weight, PERFECT_WEIGHT_TOLERANCE)) return false;
     return true;
 }
 
-/* ========================= TP CALCULATION ========================= */
-
-function getSessionDurationMs(player) {
-    try {
-        var started = readNumber(
-            player.getTempdata(),
-            K_SESSION_START,
-            nowMs()
-        );
-
-        return Math.max(0, nowMs() - started);
-    } catch (e) {
-        return 0;
-    }
-}
-
-function getDurationMultiplier(player) {
-    var completedIntervals = Math.floor(
-        getSessionDurationMs(player) /
-        DURATION_BONUS_INTERVAL_MS
-    );
-
-    var multiplier =
-        1.0 +
-        completedIntervals *
-        DURATION_BONUS_PER_INTERVAL;
-
-    return clamp(
-        multiplier,
-        1.0,
-        MAX_DURATION_MULTIPLIER
-    );
-}
-
-function getComboTier(player) {
-    if (!ENABLE_COMBO_BONUS) return 0;
-
-    var duration = getSessionDurationMs(player);
-    var tier = 0;
-
-    for (var i = 0; i < COMBO_TIME_MS.length; i++) {
-        if (duration >= COMBO_TIME_MS[i]) {
-            tier = i + 1;
-        } else {
-            break;
-        }
-    }
-
-    return tier;
-}
-
-function getComboMultiplier(player) {
-    var tier = getComboTier(player);
-    if (tier <= 0) return 1.0;
-
-    var index = tier - 1;
-    if (index >= COMBO_MULTIPLIERS.length) {
-        index = COMBO_MULTIPLIERS.length - 1;
-    }
-
-    return Number(COMBO_MULTIPLIERS[index]);
-}
-
-function announceComboTier(player) {
-    if (!ENABLE_COMBO_BONUS || !SHOW_COMBO_MESSAGES) return;
-
-    var tier = getComboTier(player);
-    var temp = player.getTempdata();
-    var announced = readNumber(temp, K_COMBO_TIER, 0);
-
-    if (tier <= announced) return;
-
-    putNumber(temp, K_COMBO_TIER, tier);
-
-    sendMessage(
-        player,
-        COLOR_CODE + "6[Sparring] " +
-        COLOR_CODE + "eCombo " + tier +
-        COLOR_CODE + "7 reached! " +
-        COLOR_CODE + "a" +
-        formatMultiplier(getComboMultiplier(player)) +
-        COLOR_CODE + "7 TP."
-    );
-}
+/* ========================= STREAK ========================= */
 
 function getTodayEpochDay() {
-    try {
-        return Number(LocalDate.now().toEpochDay());
-    } catch (e) {
-        return Math.floor(nowMs() / 86400000);
-    }
-}
-
-function getStreakStoreddata(player) {
-    try {
-        return player.getStoreddata();
-    } catch (e) {
-        return null;
-    }
+    try { return Number(LocalDate.now().toEpochDay()); } catch (e) { return Math.floor(nowMs() / 86400000); }
 }
 
 function getCurrentTrainingStreak(player) {
-    if (!ENABLE_TRAINING_STREAK) return 0;
-
-    var stored = getStreakStoreddata(player);
-    if (stored == null) return 0;
-
-    var current = Math.floor(
-        readNumber(stored, S_STREAK_CURRENT, 0)
-    );
-    var lastDay = Math.floor(
-        readNumber(stored, S_STREAK_LAST_DAY, -999999)
-    );
-    var today = getTodayEpochDay();
-
-    /*
-     * The bonus remains valid today and the following day.
-     * It resets only after a full calendar day was missed.
-     */
-    if (lastDay >= 0 && today - lastDay > 1) {
-        return 0;
-    }
-
+    var stored = player.getStoreddata();
+    var current = Math.floor(readNumber(stored, S_STREAK_CURRENT, 0));
+    var last = Math.floor(readNumber(stored, S_STREAK_LAST_DAY, -999999));
+    if (last >= 0 && getTodayEpochDay() - last > 1) return 0;
     return Math.max(0, current);
 }
 
 function getTrainingStreakMultiplier(player) {
     if (!ENABLE_TRAINING_STREAK) return 1.0;
-
-    var streak = getCurrentTrainingStreak(player);
-    if (streak <= 0) return 1.0;
-
-    var bonusDays = Math.min(
-        streak,
-        MAX_STREAK_DAYS_FOR_BONUS
-    );
-
-    return clamp(
-        1.0 + bonusDays * STREAK_BONUS_PER_DAY,
-        1.0,
-        MAX_STREAK_MULTIPLIER
-    );
+    var days = Math.min(MAX_STREAK_DAYS_FOR_BONUS, getCurrentTrainingStreak(player));
+    return Math.min(MAX_STREAK_MULTIPLIER, 1.0 + days * STREAK_BONUS_PER_DAY);
 }
 
 function qualifyDailyTrainingStreak(player) {
     if (!ENABLE_TRAINING_STREAK) return;
+    var stored = player.getStoreddata();
+    var today = getTodayEpochDay();
+    var last = Math.floor(readNumber(stored, S_STREAK_LAST_DAY, -999999));
+    if (last == today) return;
+    var current = Math.floor(readNumber(stored, S_STREAK_CURRENT, 0));
+    if (last == today - 1) current += 1;
+    else current = 1;
+    var best = Math.max(current, Math.floor(readNumber(stored, S_STREAK_BEST, 0)));
+    putNumber(stored, S_STREAK_CURRENT, current);
+    putNumber(stored, S_STREAK_BEST, best);
+    putNumber(stored, S_STREAK_LAST_DAY, today);
+    if (SHOW_SESSION_MESSAGES) {
+        sendMessage(player, sparText(
+            sparColor("6"), "[Sparring] ",
+            sparColor("a"), "Daily training secured! ",
+            sparColor("e"), "Streak ", current, " day", (current == 1 ? "" : "s")
+        ));
+    }
+}
 
-    if (getSessionDurationMs(player) < STREAK_MIN_SESSION_MS) {
+/* ========================= MOVEMENT ========================= */
+
+function refreshMovementActivity(player) {
+    try {
+        var temp = player.getTempdata();
+        putNumber(temp, K_MOVE_X, Number(player.getX()));
+        putNumber(temp, K_MOVE_Y, Number(player.getY()));
+        putNumber(temp, K_MOVE_Z, Number(player.getZ()));
+        putNumber(temp, K_MOVE_VALID_UNTIL, nowMs() + MOVEMENT_ACTIVITY_WINDOW_MS);
+    } catch (e) {}
+}
+
+function readPlayerMotionSpeed(player) {
+    try {
+        var mc = player.getMCEntity();
+        if (mc == null) return 0;
+        var motion = null;
+        try { motion = mc.getDeltaMovement(); } catch (e1) {
+            try { motion = mc.m_20184_(); } catch (e2) {}
+        }
+        if (motion == null) return 0;
+        var x = 0, y = 0, z = 0;
+        try { x = Number(motion.x()); } catch (e3) { try { x = Number(motion.x); } catch (e4) {} }
+        try { y = Number(motion.y()); } catch (e5) { try { y = Number(motion.y); } catch (e6) {} }
+        try { z = Number(motion.z()); } catch (e7) { try { z = Number(motion.z); } catch (e8) {} }
+        if (isNaN(x)) x = 0; if (isNaN(y)) y = 0; if (isNaN(z)) z = 0;
+        return Math.sqrt(x * x + y * y + z * z);
+    } catch (e) { return 0; }
+}
+
+function updateMovement(player) {
+    var temp = player.getTempdata();
+    var now = nowMs();
+    var x = Number(player.getX());
+    var y = Number(player.getY());
+    var z = Number(player.getZ());
+    var lx = readNumber(temp, K_MOVE_X, x);
+    var ly = readNumber(temp, K_MOVE_Y, y);
+    var lz = readNumber(temp, K_MOVE_Z, z);
+    var dist = Math.sqrt((x - lx) * (x - lx) + (y - ly) * (y - ly) + (z - lz) * (z - lz));
+    var speed = readPlayerMotionSpeed(player);
+    putNumber(temp, K_MOVE_X, x);
+    putNumber(temp, K_MOVE_Y, y);
+    putNumber(temp, K_MOVE_Z, z);
+    if (dist >= MIN_MOVEMENT_DISTANCE || speed >= MIN_MOTION_SPEED) {
+        putNumber(temp, K_MOVE_VALID_UNTIL, now + MOVEMENT_ACTIVITY_WINDOW_MS);
+        putNumber(temp, K_STYLE_MOVE, readNumber(temp, K_STYLE_MOVE, 0) + 1);
+    }
+    if (speed >= HEAVY_MOTION_SPEED) {
+        putNumber(temp, K_HEAVY_MOTION_UNTIL, now + 2500);
+    }
+}
+
+function hasRecentMovement(player) {
+    return nowMs() <= readNumber(player.getTempdata(), K_MOVE_VALID_UNTIL, 0);
+}
+
+/* ========================= COMBAT CLASSIFY ========================= */
+
+function getImmediateMC(event) {
+    try {
+        var source = event.damageSource;
+        if (source == null) return null;
+        var immediate = source.getImmediateSource();
+        if (immediate == null) return null;
+        try { return immediate.getMCEntity(); } catch (e) { return immediate; }
+    } catch (e2) { return null; }
+}
+
+function isKiAttack(event) {
+    try {
+        var mc = getImmediateMC(event);
+        if (mc != null && AbstractKiProjectile.class.isInstance(mc)) return true;
+        var type = "";
+        try { type = String(event.damageSource.getType()).toLowerCase(); } catch (e) {}
+        if (type.indexOf("ki") >= 0 || type.indexOf("energy") >= 0 || type.indexOf("kiblast") >= 0) return true;
+    } catch (e2) {}
+    return false;
+}
+
+function classifyKiType(event) {
+    try {
+        var mc = getImmediateMC(event);
+        if (mc != null && KiLaserEntity != null && KiLaserEntity.class.isInstance(mc)) return "beam";
+        if (mc != null && KiBlastEntity != null && KiBlastEntity.class.isInstance(mc)) return "basic";
+        var type = "";
+        try { type = String(event.damageSource.getType()).toLowerCase(); } catch (e) {}
+        if (type.indexOf("scatter") >= 0) return "scatter";
+        if (type.indexOf("charge") >= 0) return "charge";
+        if (type.indexOf("explosive") >= 0 || type.indexOf("wave") >= 0) return "explosive";
+        if (type.indexOf("barrage") >= 0 || type.indexOf("rapid") >= 0) return "barrage";
+        if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0) return "beam";
+    } catch (e2) {}
+    return "other";
+}
+
+function kiEfficiency(kind) {
+    if (KI_EFF[kind] != null) return KI_EFF[kind];
+    return KI_EFF.other;
+}
+
+/* ========================= SESSION ========================= */
+
+function isSessionActive(player) {
+    return readString(player.getTempdata(), K_SESSION_ACTIVE, "") == "1";
+}
+
+function getPartnerName(player) {
+    return readString(player.getTempdata(), K_PARTNER, "");
+}
+
+function clearSessionData(player) {
+    if (player == null) return;
+    var temp = player.getTempdata();
+    var keys = [
+        K_PARTNER, K_SESSION_ACTIVE, K_SESSION_START, K_GRACE_UNTIL, K_GRACE_REASON, K_GRACE_WARNED,
+        K_COMBO, K_COMBO_UNTIL, K_MOMENTUM, K_MOMENTUM_UNTIL,
+        K_SESSION_TP, K_SESSION_MELEE, K_SESSION_KI, K_SESSION_DMG, K_SESSION_TAKEN,
+        K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
+        K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT,
+        K_TP_PENDING, K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
+    ];
+    for (var i = 0; i < keys.length; i++) {
+        try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
+            try { temp.put(keys[i], ""); } catch (e2) {}
+        }
+    }
+}
+
+function clearSelfHitTracking(player) {
+    if (player == null) return;
+    var temp = player.getTempdata();
+    try { temp.put(K_LAST_OUT_PARTNER, ""); } catch (e) {}
+    try { temp.put(K_LAST_IN_PARTNER, ""); } catch (e) {}
+    putNumber(temp, K_LAST_OUT_TIME, 0);
+    putNumber(temp, K_LAST_IN_TIME, 0);
+}
+
+function startSession(a, b) {
+    if (a == null || b == null || isSamePlayer(a, b)) {
+        clearSelfHitTracking(a);
+        clearSelfHitTracking(b);
+        return false;
+    }
+    var now = nowMs();
+    var aTemp = a.getTempdata();
+    var bTemp = b.getTempdata();
+    if (now < readNumber(aTemp, K_COOLDOWN, 0) || now < readNumber(bTemp, K_COOLDOWN, 0)) return false;
+
+    var aName = getPlayerName(a);
+    var bName = getPlayerName(b);
+    if (aName == "" || bName == "" || aName.toLowerCase() == bName.toLowerCase()) return false;
+
+    putString(aTemp, K_PARTNER, bName);
+    putString(bTemp, K_PARTNER, aName);
+    putString(aTemp, K_SESSION_ACTIVE, "1");
+    putString(bTemp, K_SESSION_ACTIVE, "1");
+    putNumber(aTemp, K_SESSION_START, now);
+    putNumber(bTemp, K_SESSION_START, now);
+
+    var zeroKeys = [
+        K_SESSION_TP, K_SESSION_MELEE, K_SESSION_KI, K_SESSION_DMG, K_SESSION_TAKEN,
+        K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
+        K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_COMBO, K_MOMENTUM,
+        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE, K_TP_PENDING
+    ];
+    for (var i = 0; i < zeroKeys.length; i++) {
+        putNumber(aTemp, zeroKeys[i], 0);
+        putNumber(bTemp, zeroKeys[i], 0);
+    }
+
+    refreshMovementActivity(a);
+    refreshMovementActivity(b);
+    recordSparringSessionStarted(a);
+    recordSparringSessionStarted(b);
+
+    if (SHOW_SESSION_MESSAGES) {
+        sendMessage(a, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), bName, sparColor("e"), "."));
+        sendMessage(b, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), aName, sparColor("e"), "."));
+        sendMessage(a, sparText(sparColor("8"), "TP is earned from real combat actions."));
+        sendMessage(b, sparText(sparColor("8"), "TP is earned from real combat actions."));
+    }
+    return true;
+}
+
+function showEndReport(player, reason) {
+    if (!SHOW_END_REPORT || player == null) return;
+    var temp = player.getTempdata();
+    var duration = Math.max(0, nowMs() - readNumber(temp, K_SESSION_START, nowMs()));
+    var partner = readString(temp, K_PARTNER, "Unknown");
+    sendMessage(player, sparColor("8") + "--------------------------------");
+    sendMessage(player, sparColor("6") + sparColor("l") + " Training Complete " + sparColor("r"));
+    sendMessage(player, sparColor("8") + "--------------------------------");
+    sendMessage(player, sparColor("8") + "Partner  " + sparColor("f") + partner);
+    sendMessage(player, sparColor("8") + "Duration  " + sparColor("f") + formatDuration(duration));
+    sendMessage(player, sparColor("8") + "via  " + sparColor("7") + String(reason || "ended"));
+    sendMessage(player, " ");
+    sendMessage(player, sparColor("8") + "Damage Dealt  " + sparColor("f") + formatWholeNumber(readNumber(temp, K_SESSION_DMG, 0)));
+    sendMessage(player, sparColor("8") + "Damage Taken  " + sparColor("f") + formatWholeNumber(readNumber(temp, K_SESSION_TAKEN, 0)));
+    sendMessage(player, sparColor("8") + "Melee  " + sparColor("f") + formatWholeNumber(readNumber(temp, K_SESSION_MELEE, 0)) +
+        sparColor("8") + "   Ki  " + sparColor("f") + formatWholeNumber(readNumber(temp, K_SESSION_KI, 0)));
+    sendMessage(player, sparColor("8") + "Highest Combo  " + sparColor("f") + Math.floor(readNumber(temp, K_SESSION_MAX_COMBO, 0)) +
+        sparColor("8") + "   Momentum  " + sparColor("f") + Math.floor(readNumber(temp, K_SESSION_MAX_MOM, 0)));
+    sendMessage(player, sparColor("8") + "Blocks  " + sparColor("f") + Math.floor(readNumber(temp, K_SESSION_BLOCKS, 0)) +
+        sparColor("8") + "   Clash  " + sparColor("f") + formatDuration(readNumber(temp, K_SESSION_CLASH_MS, 0)));
+    var perfect = readNumber(temp, K_SESSION_PERFECT, 0) > 0;
+    sendMessage(player, sparColor("8") + "Perfect Training  " + (perfect ? sparColor("a") + "Yes" : sparColor("7") + "No"));
+    sendMessage(player, sparColor("8") + "Total TP Earned  " + sparColor("a") + formatWholeNumber(readNumber(temp, K_SESSION_TP, 0)));
+    sendMessage(player, sparColor("8") + "--------------------------------");
+}
+
+function endSession(player, partner, reason) {
+    var wasActive = false;
+    try {
+        wasActive = isSessionActive(player) || (partner != null && isSessionActive(partner));
+    } catch (e) {}
+    if (!wasActive) {
+        clearSessionData(player);
+        if (partner != null) clearSessionData(partner);
         return;
     }
 
-    var stored = getStreakStoreddata(player);
-    if (stored == null) return;
+    /* Only one side should announce / report / streak-qualify */
+    var announce = false;
+    try {
+        if (isSessionActive(player)) announce = true;
+    } catch (e2) {}
 
-    var today = getTodayEpochDay();
-    var lastDay = Math.floor(
-        readNumber(stored, S_STREAK_LAST_DAY, -999999)
-    );
+    var duration = 0;
+    try { duration = Math.max(0, nowMs() - readNumber(player.getTempdata(), K_SESSION_START, nowMs())); } catch (e3) {}
 
-    /*
-     * Already secured for this calendar day.
-     */
-    if (lastDay == today) return;
-
-    var previous = Math.floor(
-        readNumber(stored, S_STREAK_CURRENT, 0)
-    );
-    var nextStreak;
-    var reset = false;
-
-    if (lastDay == today - 1) {
-        nextStreak = previous + 1;
-    } else {
-        nextStreak = 1;
-        reset = previous > 0;
+    if (announce) {
+        flushPendingTpMessage(player);
+        if (partner != null) flushPendingTpMessage(partner);
+        showEndReport(player, reason);
+        if (partner != null) showEndReport(partner, reason);
+        if (duration >= STREAK_MIN_SESSION_MS) {
+            qualifyDailyTrainingStreak(player);
+            if (partner != null) qualifyDailyTrainingStreak(partner);
+        }
+        updateSparringLeaderboard(player);
+        if (partner != null) updateSparringLeaderboard(partner);
+        if (SHOW_SESSION_MESSAGES) {
+            sendMessage(player, sparText(sparColor("6"), "[Sparring] ", sparColor("c"), "Session ended", sparColor("8"), " - ", reason));
+            if (partner != null) {
+                sendMessage(partner, sparText(sparColor("6"), "[Sparring] ", sparColor("c"), "Session ended", sparColor("8"), " - ", reason));
+            }
+        }
     }
 
-    var best = Math.floor(
-        readNumber(stored, S_STREAK_BEST, 0)
-    );
+    var now = nowMs();
+    putNumber(player.getTempdata(), K_COOLDOWN, now + PAIR_RESTART_COOLDOWN_MS);
+    if (partner != null) putNumber(partner.getTempdata(), K_COOLDOWN, now + PAIR_RESTART_COOLDOWN_MS);
 
-    putNumber(stored, S_STREAK_CURRENT, nextStreak);
-    putNumber(stored, S_STREAK_LAST_DAY, today);
-
-    if (nextStreak > best) {
-        best = nextStreak;
-        putNumber(stored, S_STREAK_BEST, nextStreak);
-    }
-
-    mirrorTrainingStreakStats(player, nextStreak, best);
-
-    if (!SHOW_STREAK_MESSAGES) return;
-
-    if (reset) {
-        sendMessage(
-            player,
-            COLOR_CODE + "6[Sparring] " +
-            COLOR_CODE + "eYour previous training streak ended. " +
-            COLOR_CODE + "fA new streak has begun!"
-        );
-    }
-
-    sendMessage(
-        player,
-        COLOR_CODE + "6[Sparring] " +
-        COLOR_CODE + "aDaily training completed! " +
-        COLOR_CODE + "eStreak: " +
-        nextStreak +
-        " day" +
-        (nextStreak == 1 ? "" : "s") +
-        COLOR_CODE + "7 (" +
-        formatMultiplier(getTrainingStreakMultiplier(player)) +
-        ")"
-    );
+    clearSessionData(player);
+    if (partner != null) clearSessionData(partner);
+    clearSelfHitTracking(player);
+    if (partner != null) clearSelfHitTracking(partner);
 }
 
-function calculateReward(player, partner) {
-    /*
-     * A player can never calculate a sparring reward against themselves.
-     */
-    if (
-        player == null ||
-        partner == null ||
-        isSamePlayer(player, partner)
-    ) {
-        return null;
-    }
+/* ========================= COMBO / MOMENTUM ========================= */
 
+function getMomentumMultiplier(player) {
+    var temp = player.getTempdata();
+    var now = nowMs();
+    if (now > readNumber(temp, K_MOMENTUM_UNTIL, 0)) {
+        putNumber(temp, K_MOMENTUM, 0);
+        return 1.0;
+    }
+    var tier = Math.floor(readNumber(temp, K_MOMENTUM, 0));
+    if (tier <= 0) return 1.0;
+    if (tier > MOMENTUM_MULTIPLIERS.length) tier = MOMENTUM_MULTIPLIERS.length;
+    return MOMENTUM_MULTIPLIERS[tier - 1];
+}
+
+function registerCombatHit(player) {
+    var temp = player.getTempdata();
+    var now = nowMs();
+    var combo = Math.floor(readNumber(temp, K_COMBO, 0));
+    if (now > readNumber(temp, K_COMBO_UNTIL, 0)) combo = 0;
+    combo += 1;
+    putNumber(temp, K_COMBO, combo);
+    putNumber(temp, K_COMBO_UNTIL, now + COMBO_TIMEOUT_MS);
+    putNumber(temp, K_MOMENTUM_UNTIL, now + MOMENTUM_DURATION_MS);
+
+    var maxCombo = Math.floor(readNumber(temp, K_SESSION_MAX_COMBO, 0));
+    if (combo > maxCombo) putNumber(temp, K_SESSION_MAX_COMBO, combo);
+
+    var oldTier = Math.floor(readNumber(temp, K_MOMENTUM, 0));
+    var newTier = 0;
+    for (var i = 0; i < MOMENTUM_THRESHOLDS.length; i++) {
+        if (combo >= MOMENTUM_THRESHOLDS[i]) newTier = i + 1;
+    }
+    putNumber(temp, K_MOMENTUM, newTier);
+    var maxMom = Math.floor(readNumber(temp, K_SESSION_MAX_MOM, 0));
+    if (newTier > maxMom) putNumber(temp, K_SESSION_MAX_MOM, newTier);
+
+    if (SHOW_MOMENTUM_MESSAGES && newTier > oldTier && newTier > 0) {
+        sendMessage(player, sparText(
+            sparColor("6"), "[Sparring] ",
+            sparColor("e"), "Momentum ", roman(newTier),
+            sparColor("7"), "  (", formatMult(MOMENTUM_MULTIPLIERS[newTier - 1]), " TP)"
+        ));
+    }
+}
+
+function roman(n) {
+    var r = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"];
+    if (n >= 1 && n <= r.length) return r[n - 1];
+    return String(n);
+}
+
+function formatMult(v) {
+    return (Math.round(Number(v) * 100) / 100).toFixed(2) + "x";
+}
+
+/* ========================= STYLE ========================= */
+
+function getStyleMultiplier(player) {
+    var temp = player.getTempdata();
+    var melee = readNumber(temp, K_STYLE_MELEE, 0);
+    var ki = readNumber(temp, K_STYLE_KI, 0);
+    var beam = readNumber(temp, K_STYLE_BEAM, 0);
+    var blocks = readNumber(temp, K_STYLE_BLOCK, 0);
+    var move = readNumber(temp, K_STYLE_MOVE, 0);
+    var total = melee + ki;
+    if (total < STYLE_SAMPLE_HITS) return STYLE_BONUS.none;
+
+    var meleeRatio = melee / Math.max(1, total);
+    var kiRatio = ki / Math.max(1, total);
+    var beamRatio = beam / Math.max(1, total);
+    var blockRatio = blocks / Math.max(1, total + blocks);
+
+    if (beamRatio >= 0.35) return STYLE_BONUS.beam;
+    if (blockRatio >= 0.35) return STYLE_BONUS.guardian;
+    if (meleeRatio >= 0.80) return STYLE_BONUS.melee;
+    if (kiRatio >= 0.80) return STYLE_BONUS.ki;
+    if (meleeRatio >= 0.35 && kiRatio >= 0.35) return STYLE_BONUS.balanced;
+    if (move > total) return STYLE_BONUS.speed;
+    return STYLE_BONUS.none;
+}
+
+function styleName(player) {
+    var mult = getStyleMultiplier(player);
+    if (mult == STYLE_BONUS.beam) return "Beam Specialist";
+    if (mult == STYLE_BONUS.guardian) return "Guardian";
+    if (mult == STYLE_BONUS.melee) return "Melee Specialist";
+    if (mult == STYLE_BONUS.ki) return "Ki Specialist";
+    if (mult == STYLE_BONUS.balanced) return "Balanced Fighter";
+    if (mult == STYLE_BONUS.speed) return "Speed Fighter";
+    return "Developing";
+}
+
+/* ========================= TP AWARD FROM COMBAT ========================= */
+
+function flushPendingTpMessage(player) {
+    if (!SHOW_TP_MESSAGES || player == null) return;
+    var temp = player.getTempdata();
+    var pending = Math.floor(readNumber(temp, K_TP_PENDING, 0));
+    if (pending <= 0) return;
+    putNumber(temp, K_TP_PENDING, 0);
+    sendMessage(player, sparText(
+        sparColor("6"), "[Sparring] ",
+        sparColor("a"), "+", formatWholeNumber(pending), " TP",
+        sparColor("8"), "  (", styleName(player), ")"
+    ));
+}
+
+function queueTpMessage(player, amount) {
+    if (!SHOW_TP_MESSAGES) return;
+    var temp = player.getTempdata();
+    putNumber(temp, K_TP_PENDING, readNumber(temp, K_TP_PENDING, 0) + amount);
+    var now = nowMs();
+    if (now >= readNumber(temp, K_TP_MSG_NEXT, 0)) {
+        putNumber(temp, K_TP_MSG_NEXT, now + TP_MESSAGE_COOLDOWN_MS);
+        flushPendingTpMessage(player);
+    }
+}
+
+function buildCombatMultiplier(player, partner) {
     var valuesA = getLiveTrainingValues(player);
     var valuesB = getLiveTrainingValues(partner);
-
     if (valuesA == null || valuesB == null) return null;
 
-    /*
-     * Use the weaker fighter's BP for the shared training reward.
-     *
-     * Android upgraded players no longer report DMZ's fake max BP here;
-     * getCurrentBattlePower() computes real stat-based BP for them.
-     * Using the lower BP still prevents one fighter from inflating both
-     * payouts while high-BP vs high-BP sessions keep end-game scaling.
-     */
     var trainingBP = Math.min(valuesA.bp, valuesB.bp);
     var averageRelease = (valuesA.release + valuesB.release) / 2.0;
     var averageGravity = (valuesA.gravity + valuesB.gravity) / 2.0;
     var averageWeight = (valuesA.weight + valuesB.weight) / 2.0;
-
-    var bpMult = getBattlePowerMultiplier(trainingBP);
-    var rivalMult = getRivalMultiplier(valuesA.bp, valuesB.bp);
-    var releaseMult = getReleaseMultiplier(averageRelease);
-    var gravityMult = getGravityMultiplier(averageGravity);
-    var weightMult = getWeightMultiplier(averageWeight);
-    var prestigeMult = getPrestigeMultiplier(valuesA.prestige);
-    var durationMult = getDurationMultiplier(player);
-    var comboMult = getComboMultiplier(player);
-    var streakMult = getTrainingStreakMultiplier(player);
-
     var perfect = isPerfectTraining(valuesA, valuesB);
-    var perfectMult = perfect ? PERFECT_TRAINING_MULTIPLIER : 1.0;
-
-    var reward =
-        BASE_TP_PER_INTERVAL *
-        bpMult *
-        rivalMult *
-        releaseMult *
-        gravityMult *
-        weightMult *
-        prestigeMult *
-        durationMult *
-        comboMult *
-        streakMult *
-        perfectMult;
 
     return {
-        amount: Math.floor(reward),
-        bp: bpMult,
-        rival: rivalMult,
-        release: releaseMult,
-        gravity: gravityMult,
-        weight: weightMult,
-        prestige: prestigeMult,
-        duration: durationMult,
-        combo: comboMult,
-        comboTier: getComboTier(player),
-        streak: streakMult,
-        streakDays: getCurrentTrainingStreak(player),
-        sessionDurationMs: getSessionDurationMs(player),
+        valuesA: valuesA,
+        valuesB: valuesB,
         perfect: perfect,
-        perfectMultiplier: perfectMult
+        total:
+            getBattlePowerMultiplier(trainingBP) *
+            getRivalMultiplier(valuesA.bp, valuesB.bp) *
+            getReleaseMultiplier(averageRelease) *
+            getGravityMultiplier(averageGravity) *
+            getWeightMultiplier(averageWeight) *
+            getPrestigeMultiplier(valuesA.prestige) *
+            getMomentumMultiplier(player) *
+            getSessionBonusMultiplier(player) *
+            getTrainingStreakMultiplier(player) *
+            getStyleMultiplier(player) *
+            (perfect ? PERFECT_TRAINING_MULTIPLIER : 1.0)
     };
 }
 
+function awardCombatTp(player, partner, baseAmount, reason) {
+    if (player == null || partner == null || !isSessionActive(player)) return 0;
+    baseAmount = Number(baseAmount);
+    if (isNaN(baseAmount) || baseAmount <= 0) return 0;
+    baseAmount = Math.min(MAX_BASE_TP_PER_HIT, baseAmount);
+
+    var built = buildCombatMultiplier(player, partner);
+    if (built == null) return 0;
+
+    var amount = Math.floor(baseAmount * built.total);
+    if (amount <= 0) return 0;
+    if (amount > MAX_TP_PER_ACTION) amount = MAX_TP_PER_ACTION;
+
+    if (!awardTrainingPoints(player, built.valuesA.data, amount)) return 0;
+
+    var temp = player.getTempdata();
+    putNumber(temp, K_SESSION_TP, readNumber(temp, K_SESSION_TP, 0) + amount);
+    if (built.perfect) putNumber(temp, K_SESSION_PERFECT, 1);
+
+    queueTpMessage(player, amount);
+    debug(player, reason + " +" + amount + " (base " + Math.floor(baseAmount) + ")");
+    return amount;
+}
+
+function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
+    if (!isSessionActive(attacker) || !isSessionActive(victim)) return;
+    if (getPartnerName(attacker).toLowerCase() != getPlayerName(victim).toLowerCase()) return;
+
+    damage = Math.max(0, Number(damage));
+    if (damage <= 0) return;
+
+    var temp = attacker.getTempdata();
+    putNumber(temp, K_SESSION_DMG, readNumber(temp, K_SESSION_DMG, 0) + damage);
+    if (isKi) {
+        putNumber(temp, K_SESSION_KI, readNumber(temp, K_SESSION_KI, 0) + damage);
+        putNumber(temp, K_STYLE_KI, readNumber(temp, K_STYLE_KI, 0) + 1);
+        if (kiKind == "beam") putNumber(temp, K_STYLE_BEAM, readNumber(temp, K_STYLE_BEAM, 0) + 1);
+    } else {
+        putNumber(temp, K_SESSION_MELEE, readNumber(temp, K_SESSION_MELEE, 0) + damage);
+        putNumber(temp, K_STYLE_MELEE, readNumber(temp, K_STYLE_MELEE, 0) + 1);
+    }
+
+    registerCombatHit(attacker);
+    refreshMovementActivity(attacker);
+
+    /* Knockback recovery proxy: hit shortly after heavy motion */
+    var now = nowMs();
+    if (now <= readNumber(temp, K_HEAVY_MOTION_UNTIL, 0)) {
+        putNumber(temp, K_SESSION_KB, readNumber(temp, K_SESSION_KB, 0) + 1);
+        awardCombatTp(attacker, victim, KNOCKBACK_RECOVERY_TP, "kb-recovery");
+        putNumber(temp, K_HEAVY_MOTION_UNTIL, 0);
+    }
+
+    var eff = isKi ? kiEfficiency(kiKind) : MELEE_EFF;
+    var base = damage * TP_PER_DAMAGE * eff;
+    awardCombatTp(attacker, victim, base, isKi ? ("ki:" + kiKind) : "melee");
+}
+
+/* ========================= HIT TRACKING / START ========================= */
+
+function recordCombatExchange(attacker, target, isKi, kiKind) {
+    if (attacker == null || target == null || isSamePlayer(attacker, target)) return;
+
+    var now = nowMs();
+    var aTemp = attacker.getTempdata();
+    var tTemp = target.getTempdata();
+    var aName = getPlayerName(attacker);
+    var tName = getPlayerName(target);
+
+    putString(aTemp, K_LAST_OUT_PARTNER, tName);
+    putNumber(aTemp, K_LAST_OUT_TIME, now);
+    putString(tTemp, K_LAST_IN_PARTNER, aName);
+    putNumber(tTemp, K_LAST_IN_TIME, now);
+
+    if (isKi) {
+        putNumber(aTemp, K_LAST_KI_OUT, now);
+        if (kiKind == "beam") putNumber(aTemp, K_LAST_LASER_OUT, now);
+    }
+
+    if (isSessionActive(attacker) && isSessionActive(target)) return;
+    if (isSessionActive(attacker) || isSessionActive(target)) return;
+
+    /* Need reciprocal damage within start window */
+    var outPartner = readString(tTemp, K_LAST_OUT_PARTNER, "");
+    var outTime = readNumber(tTemp, K_LAST_OUT_TIME, 0);
+    if (outPartner.toLowerCase() != aName.toLowerCase()) return;
+    if (now - outTime > SESSION_START_WINDOW_MS) return;
+    if (distanceBetween(attacker, target) > MAX_SPAR_DISTANCE) return;
+
+    startSession(attacker, target);
+}
+
+function hasRecentOutgoingHit(player, partnerName) {
+    var temp = player.getTempdata();
+    if (readString(temp, K_LAST_OUT_PARTNER, "").toLowerCase() != String(partnerName).toLowerCase()) return false;
+    return (nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0)) <= HIT_ACTIVITY_WINDOW_MS;
+}
+
+/* ========================= LEADERBOARD / PROFILE ========================= */
+
 function getLeaderboardStore(player) {
-    try {
-        return player.world.getStoreddata();
-    } catch (e) {
-        try {
-            return player.getWorld().getStoreddata();
-        } catch (e2) {
-            return null;
-        }
+    try { return player.world.getStoreddata(); } catch (e) {
+        try { return player.getWorld().getStoreddata(); } catch (e2) { return null; }
     }
 }
 
 function leaderboardSafeName(name) {
-    return String(name)
-        .replace(/[^A-Za-z0-9_\-]/g, "_")
-        .toLowerCase();
+    return String(name).replace(/[^A-Za-z0-9_\-]/g, "_").toLowerCase();
 }
 
 function readLeaderboardNames(store) {
     if (store == null) return [];
-
     var raw = readString(store, LB_NAMES_KEY, "");
     if (raw == "") return [];
-
     var split = raw.split(",");
-    var result = [];
-
+    var names = [];
     for (var i = 0; i < split.length; i++) {
-        var name = String(split[i]).trim();
-        if (name != "") result.push(name);
+        var n = String(split[i]).replace(/^\s+|\s+$/g, "");
+        if (n != "") names.push(n);
     }
-
-    return result;
+    return names;
 }
 
 function writeLeaderboardNames(store, names) {
-    if (store == null) return;
-    putString(store, LB_NAMES_KEY, names.join(","));
+    try { store.put(LB_NAMES_KEY, names.join(",")); } catch (e) {}
 }
 
 function ensureLeaderboardName(store, playerName) {
     var names = readLeaderboardNames(store);
-    var lower = String(playerName).toLowerCase();
-
+    var lower = playerName.toLowerCase();
     for (var i = 0; i < names.length; i++) {
-        if (String(names[i]).toLowerCase() == lower) {
-            return;
-        }
+        if (String(names[i]).toLowerCase() == lower) return;
     }
-
     names.push(playerName);
     writeLeaderboardNames(store, names);
 }
 
-function ensureSparringProfile(player) {
-    if (!ENABLE_SPARRING_LEADERBOARD || player == null) return null;
-
+function recordSparringSessionStarted(player) {
     var store = getLeaderboardStore(player);
-    if (store == null) return null;
-
+    if (store == null) return;
     var name = getPlayerName(player);
     ensureLeaderboardName(store, name);
-
-    return {
-        store: store,
-        name: name,
-        safe: leaderboardSafeName(name)
-    };
+    var safe = leaderboardSafeName(name);
+    putNumber(store, LB_SESSIONS_PREFIX + safe, readNumber(store, LB_SESSIONS_PREFIX + safe, 0) + 1);
 }
 
-function recordSparringSessionStarted(player) {
-    var profile = ensureSparringProfile(player);
-    if (profile == null) return;
-
-    var key = LB_SESSIONS_PREFIX + profile.safe;
-    putNumber(
-        profile.store,
-        key,
-        readNumber(profile.store, key, 0) + 1
-    );
-}
-
-function mirrorTrainingStreakStats(player, current, best) {
-    var profile = ensureSparringProfile(player);
-    if (profile == null) return;
-
-    putNumber(
-        profile.store,
-        LB_STREAK_PREFIX + profile.safe,
-        Math.max(0, Number(current))
-    );
-    putNumber(
-        profile.store,
-        LB_BEST_STREAK_PREFIX + profile.safe,
-        Math.max(0, Number(best))
-    );
-}
-
-function updateSparringLeaderboard(
-    player,
-    tpAmount,
-    sessionDurationMs,
-    perfect,
-    comboTier
-) {
-    if (!ENABLE_SPARRING_LEADERBOARD) return;
-
-    var profile = ensureSparringProfile(player);
-    if (profile == null) return;
-
-    var store = profile.store;
-    var safe = profile.safe;
-
-    var tpKey = LB_TP_PREFIX + safe;
-    var longestKey = LB_LONGEST_PREFIX + safe;
-    var payoutKey = LB_BEST_PAYOUT_PREFIX + safe;
-    var timeKey = LB_TOTAL_TIME_PREFIX + safe;
-    var perfectKey = LB_PERFECT_PREFIX + safe;
-    var comboKey = LB_HIGHEST_COMBO_PREFIX + safe;
-
-    putNumber(
-        store,
-        tpKey,
-        readNumber(store, tpKey, 0) + Number(tpAmount)
-    );
-
-    if (Number(sessionDurationMs) > readNumber(store, longestKey, 0)) {
-        putNumber(store, longestKey, Number(sessionDurationMs));
-    }
-
-    if (Number(tpAmount) > readNumber(store, payoutKey, 0)) {
-        putNumber(store, payoutKey, Number(tpAmount));
-    }
-
-    /*
-     * Count only successfully rewarded active time.
-     */
-    putNumber(
-        store,
-        timeKey,
-        readNumber(store, timeKey, 0) + AWARD_INTERVAL_MS
-    );
-
-    if (perfect) {
-        putNumber(
-            store,
-            perfectKey,
-            readNumber(store, perfectKey, 0) + 1
-        );
-    }
-
-    if (Number(comboTier) > readNumber(store, comboKey, 0)) {
-        putNumber(store, comboKey, Number(comboTier));
-    }
-}
-
-function formatWholeNumber(value) {
-    var number = Math.floor(Number(value));
-    var textValue = String(number);
-    var output = "";
-
-    while (textValue.length > 3) {
-        output = "," +
-            textValue.substring(textValue.length - 3) +
-            output;
-        textValue = textValue.substring(
-            0,
-            textValue.length - 3
-        );
-    }
-
-    return textValue + output;
-}
-
-function formatDuration(durationMs) {
-    var totalSeconds = Math.floor(
-        Number(durationMs) / 1000
-    );
-    var minutes = Math.floor(totalSeconds / 60);
-    var seconds = totalSeconds % 60;
-
-    return minutes + "m " + seconds + "s";
-}
-
-function getLeaderboardEntries(player) {
+function updateSparringLeaderboard(player) {
+    if (!ENABLE_SPARRING_LEADERBOARD || player == null) return;
     var store = getLeaderboardStore(player);
-    if (store == null) return [];
+    if (store == null) return;
+    var temp = player.getTempdata();
+    var name = getPlayerName(player);
+    var safe = leaderboardSafeName(name);
+    ensureLeaderboardName(store, name);
 
-    var names = readLeaderboardNames(store);
-    var entries = [];
+    var sessionTp = readNumber(temp, K_SESSION_TP, 0);
+    var duration = Math.max(0, nowMs() - readNumber(temp, K_SESSION_START, nowMs()));
 
-    for (var i = 0; i < names.length; i++) {
-        var name = names[i];
-        var safe = leaderboardSafeName(name);
+    putNumber(store, LB_TP_PREFIX + safe, readNumber(store, LB_TP_PREFIX + safe, 0) + sessionTp);
+    putNumber(store, LB_TOTAL_TIME_PREFIX + safe, readNumber(store, LB_TOTAL_TIME_PREFIX + safe, 0) + duration);
+    putNumber(store, LB_MELEE_PREFIX + safe, readNumber(store, LB_MELEE_PREFIX + safe, 0) + readNumber(temp, K_SESSION_MELEE, 0));
+    putNumber(store, LB_KI_PREFIX + safe, readNumber(store, LB_KI_PREFIX + safe, 0) + readNumber(temp, K_SESSION_KI, 0));
+    putNumber(store, LB_CLASH_PREFIX + safe, readNumber(store, LB_CLASH_PREFIX + safe, 0) + readNumber(temp, K_SESSION_CLASH_MS, 0));
+    putNumber(store, LB_BLOCKS_PREFIX + safe, readNumber(store, LB_BLOCKS_PREFIX + safe, 0) + readNumber(temp, K_SESSION_BLOCKS, 0));
 
-        entries.push({
-            name: name,
-            tp: readNumber(
-                store,
-                LB_TP_PREFIX + safe,
-                0
-            ),
-            longest: readNumber(
-                store,
-                LB_LONGEST_PREFIX + safe,
-                0
-            )
-        });
+    var longest = readNumber(store, LB_LONGEST_PREFIX + safe, 0);
+    if (duration > longest) putNumber(store, LB_LONGEST_PREFIX + safe, duration);
+
+    var best = readNumber(store, LB_BEST_PAYOUT_PREFIX + safe, 0);
+    if (sessionTp > best) putNumber(store, LB_BEST_PAYOUT_PREFIX + safe, sessionTp);
+
+    var combo = readNumber(temp, K_SESSION_MAX_COMBO, 0);
+    if (combo > readNumber(store, LB_HIGHEST_COMBO_PREFIX + safe, 0)) {
+        putNumber(store, LB_HIGHEST_COMBO_PREFIX + safe, combo);
+    }
+    var mom = readNumber(temp, K_SESSION_MAX_MOM, 0);
+    if (mom > readNumber(store, LB_MOMENTUM_PREFIX + safe, 0)) {
+        putNumber(store, LB_MOMENTUM_PREFIX + safe, mom);
+    }
+    if (readNumber(temp, K_SESSION_PERFECT, 0) > 0) {
+        putNumber(store, LB_PERFECT_PREFIX + safe, readNumber(store, LB_PERFECT_PREFIX + safe, 0) + 1);
     }
 
-    entries.sort(function(a, b) {
-        if (b.tp != a.tp) return b.tp - a.tp;
-        return b.longest - a.longest;
-    });
-
-    return entries;
+    var streak = getCurrentTrainingStreak(player);
+    putNumber(store, LB_STREAK_PREFIX + safe, streak);
+    var bestStreak = Math.max(streak, readNumber(store, LB_BEST_STREAK_PREFIX + safe, 0));
+    putNumber(store, LB_BEST_STREAK_PREFIX + safe, bestStreak);
 }
 
 function showSparringLeaderboard(player) {
-    var entries = getLeaderboardEntries(player);
-
-    sendMessage(
-        player,
-        COLOR_CODE + "6" +
-        "===== Sparring TP Leaderboard ====="
-    );
-
-    if (entries.length == 0) {
-        sendMessage(
-            player,
-            COLOR_CODE + "7No sparring TP has been recorded yet."
-        );
+    var store = getLeaderboardStore(player);
+    if (store == null) {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] No leaderboard data."));
         return;
     }
-
-    var limit = Math.min(
-        LEADERBOARD_SIZE,
-        entries.length
-    );
-
-    for (var i = 0; i < limit; i++) {
-        var entry = entries[i];
-
-        sendMessage(
-            player,
-            COLOR_CODE + "e#" + (i + 1) +
-            COLOR_CODE + "f " + entry.name +
-            COLOR_CODE + "7 - " +
-            COLOR_CODE + "a" +
-            formatWholeNumber(entry.tp) + " TP" +
-            COLOR_CODE + "8 | Longest: " +
-            COLOR_CODE + "b" +
-            formatDuration(entry.longest)
-        );
+    var names = readLeaderboardNames(store);
+    var rows = [];
+    for (var i = 0; i < names.length; i++) {
+        var safe = leaderboardSafeName(names[i]);
+        rows.push({ name: names[i], tp: readNumber(store, LB_TP_PREFIX + safe, 0) });
     }
-}
-
-function formatMultiplier(value) {
-    return Number(value).toFixed(2) + "x";
-}
-
-function awardSparTP(player, partner) {
-    /*
-     * Final payout safeguard. Even if malformed session data somehow
-     * reaches this point, a player cannot receive TP with themselves as
-     * the partner.
-     */
-    if (
-        player == null ||
-        partner == null ||
-        isSamePlayer(player, partner)
-    ) {
-        if (player != null) {
-            clearSelfHitTracking(player);
-            clearSessionData(player);
+    rows.sort(function (a, b) { return b.tp - a.tp; });
+    sendMessage(player, sparColor("8") + "--------------------------------");
+    sendMessage(player, sparColor("6") + sparColor("l") + " TOP SPARRING TP " + sparColor("r"));
+    sendMessage(player, sparColor("8") + "--------------------------------");
+    var limit = Math.min(LEADERBOARD_SIZE, rows.length);
+    if (limit <= 0) {
+        sendMessage(player, sparColor("7") + "No sparring records yet.");
+    } else {
+        for (var r = 0; r < limit; r++) {
+            sendMessage(player, sparColor("e") + (r + 1) + ". " + sparColor("f") + rows[r].name +
+                sparColor("8") + "  " + sparColor("a") + formatWholeNumber(rows[r].tp) + " TP");
         }
-        return;
     }
-
-    qualifyDailyTrainingStreak(player);
-    announceComboTier(player);
-
-    var data = getDMZData(player);
-
-    if (data == null) {
-        sendMessage(
-            player,
-            COLOR_CODE + "c[Sparring] DMZ data could not be read."
-        );
-        return;
-    }
-
-    var reward = calculateReward(player, partner);
-
-    if (reward == null) {
-        sendMessage(
-            player,
-            COLOR_CODE + "c[Sparring] TP calculation failed."
-        );
-        return;
-    }
-
-    var tpToAward = Math.floor(reward.amount);
-
-    if (!awardTrainingPoints(player, data, tpToAward)) {
-        sendMessage(
-            player,
-            COLOR_CODE + "c[Sparring] TP award failed."
-        );
-        return;
-    }
-
-    updateSparringLeaderboard(
-        player,
-        tpToAward,
-        reward.sessionDurationMs,
-        reward.perfect,
-        reward.comboTier
-    );
-
-    if (!SHOW_TP_MESSAGES) return;
-
-    if (reward.perfect) {
-        sendMessage(
-            player,
-            COLOR_CODE + "6" +
-            String.fromCharCode(9733) +
-            " PERFECT TRAINING " +
-            String.fromCharCode(9733)
-        );
-    }
-
-    sendMessage(
-        player,
-        COLOR_CODE + "6[Sparring] " +
-        COLOR_CODE + "a+" +
-        tpToAward +
-        " TP " +
-        COLOR_CODE + "7(Duration " +
-        formatMultiplier(reward.duration) +
-        ", Combo " + formatMultiplier(reward.combo) +
-        ", Streak " + formatMultiplier(reward.streak) + ")"
-    );
-
-    if (SHOW_MULTIPLIER_BREAKDOWN) {
-        sendMessage(
-            player,
-            COLOR_CODE + "7BP " +
-            formatMultiplier(reward.bp) +
-            COLOR_CODE + "7 | Rival " +
-            formatMultiplier(reward.rival) +
-            COLOR_CODE + "7 | Release " +
-            formatMultiplier(reward.release) +
-            COLOR_CODE + "7 | Gravity " +
-            formatMultiplier(reward.gravity) +
-            COLOR_CODE + "7 | Weight " +
-            formatMultiplier(reward.weight) +
-            COLOR_CODE + "7 | Prestige " +
-            formatMultiplier(reward.prestige) +
-            COLOR_CODE + "7 | Duration " +
-            formatMultiplier(reward.duration) +
-            COLOR_CODE + "7 | Combo " +
-            formatMultiplier(reward.combo) +
-            COLOR_CODE + "7 | Streak " +
-            formatMultiplier(reward.streak) +
-            COLOR_CODE + "7 | Perfect " +
-            formatMultiplier(reward.perfectMultiplier)
-        );
-    }
+    sendMessage(player, sparColor("8") + "--------------------------------");
 }
+
+/* ========================= SESSION TICK ========================= */
 
 function clearGraceState(player, partner) {
     try {
-        var temp = player.getTempdata();
-        temp.remove(K_GRACE_UNTIL);
-        temp.remove(K_GRACE_REASON);
-        temp.remove(K_GRACE_WARNED);
+        var t = player.getTempdata();
+        putNumber(t, K_GRACE_UNTIL, 0);
+        putString(t, K_GRACE_REASON, "");
+        putNumber(t, K_GRACE_WARNED, 0);
     } catch (e) {}
-
     if (partner != null) {
         try {
-            var partnerTemp = partner.getTempdata();
-            partnerTemp.remove(K_GRACE_UNTIL);
-            partnerTemp.remove(K_GRACE_REASON);
-            partnerTemp.remove(K_GRACE_WARNED);
+            var t2 = partner.getTempdata();
+            putNumber(t2, K_GRACE_UNTIL, 0);
+            putString(t2, K_GRACE_REASON, "");
+            putNumber(t2, K_GRACE_WARNED, 0);
         } catch (e2) {}
     }
 }
 
 function gracePeriodMsForReason(reason) {
-    if (String(reason) == "fighters moved too far apart") {
-        return DISTANCE_GRACE_PERIOD_MS;
-    }
+    if (String(reason).indexOf("far") >= 0) return DISTANCE_GRACE_PERIOD_MS;
     return SESSION_GRACE_PERIOD_MS;
 }
 
-/*
- * Returns true while the session is inside its recovery grace period.
- * Returns false after the grace period expires and ends the session.
- *
- * Only one partner announces the recover warning (K_GRACE_WARNED),
- * so both fighters do not spam duplicate "Recover within X seconds".
- */
 function handleRecoverableFailure(player, partner, reason) {
-    var now = nowMs();
     var temp = player.getTempdata();
-    var partnerTemp = partner.getTempdata();
-    var graceMs = gracePeriodMsForReason(reason);
-    var graceSeconds = Math.max(1, Math.floor(graceMs / 1000));
-
-    var graceUntil = Math.max(
-        readNumber(temp, K_GRACE_UNTIL, 0),
-        readNumber(partnerTemp, K_GRACE_UNTIL, 0)
-    );
-
-    if (graceUntil <= 0) {
-        graceUntil = now + graceMs;
-
-        putNumber(temp, K_GRACE_UNTIL, graceUntil);
-        putNumber(partnerTemp, K_GRACE_UNTIL, graceUntil);
+    var now = nowMs();
+    var until = readNumber(temp, K_GRACE_UNTIL, 0);
+    if (until <= 0) {
+        until = now + gracePeriodMsForReason(reason);
+        putNumber(temp, K_GRACE_UNTIL, until);
         putString(temp, K_GRACE_REASON, reason);
-        putString(partnerTemp, K_GRACE_REASON, reason);
-
-        var alreadyWarned =
-            readString(temp, K_GRACE_WARNED, "0") == "1" ||
-            readString(partnerTemp, K_GRACE_WARNED, "0") == "1";
-
-        if (SHOW_GRACE_WARNING && !alreadyWarned) {
-            putString(temp, K_GRACE_WARNED, "1");
-            putString(partnerTemp, K_GRACE_WARNED, "1");
-
-            var warnText = sparText(
-                sparColor("6"), "[Sparring] ",
-                sparColor("e"), "Recover within ",
-                sparColor("f"), graceSeconds,
-                sparColor("e"), " second",
-                (graceSeconds == 1 ? "" : "s"),
-                ": ",
-                sparColor("f"), reason,
-                sparColor("e"), "."
-            );
-
-            sendMessage(player, warnText);
-            if (partner != null) {
-                sendMessage(partner, warnText);
-            }
+        putNumber(temp, K_GRACE_WARNED, 0);
+        if (partner != null) {
+            putNumber(partner.getTempdata(), K_GRACE_UNTIL, until);
+            putString(partner.getTempdata(), K_GRACE_REASON, reason);
         }
-
-        return true;
     }
-
-    if (now < graceUntil) {
-        return true;
+    if (SHOW_GRACE_WARNING && readNumber(temp, K_GRACE_WARNED, 0) <= 0) {
+        putNumber(temp, K_GRACE_WARNED, 1);
+        var left = Math.max(1, Math.ceil((until - now) / 1000));
+        var msg = sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Recover within ", left, "s", sparColor("8"), " - ", reason);
+        throttleMessage(player, K_MSG_NEXT, MESSAGE_COOLDOWN_MS, msg);
+        if (partner != null) throttleMessage(partner, K_MSG_NEXT, MESSAGE_COOLDOWN_MS, msg);
     }
-
-    var endReason = readString(temp, K_GRACE_REASON, reason);
-    if (endReason == "") {
-        endReason = reason;
-    }
-
-    endSession(player, partner, endReason);
-    return false;
+    if (now >= until) endSession(player, partner, reason);
 }
 
-/* ========================= SESSION PROCESSING ========================= */
+function processBeamClash(player, partner) {
+    var now = nowMs();
+    var aLaser = readNumber(player.getTempdata(), K_LAST_LASER_OUT, 0);
+    var bLaser = readNumber(partner.getTempdata(), K_LAST_LASER_OUT, 0);
+    if (now - aLaser > 1200 || now - bLaser > 1200) return;
+
+    var next = readNumber(player.getTempdata(), K_CLASH_NEXT, 0);
+    if (now < next) return;
+    putNumber(player.getTempdata(), K_CLASH_NEXT, now + 500);
+
+    putNumber(player.getTempdata(), K_SESSION_CLASH_MS,
+        readNumber(player.getTempdata(), K_SESSION_CLASH_MS, 0) + 500);
+    putNumber(player.getTempdata(), K_STYLE_BEAM,
+        readNumber(player.getTempdata(), K_STYLE_BEAM, 0) + 1);
+
+    awardCombatTp(player, partner, BEAM_CLASH_TP_PER_TICK, "beam-clash");
+}
+
+function processReleaseControl(player, partner) {
+    var values = getLiveTrainingValues(player);
+    if (values == null || values.release < HIGH_RELEASE_THRESHOLD) return;
+    if (!hasRecentOutgoingHit(player, getPartnerName(player))) return;
+
+    var now = nowMs();
+    var next = readNumber(player.getTempdata(), K_RELEASE_CTRL_NEXT, 0);
+    if (now < next) return;
+    putNumber(player.getTempdata(), K_RELEASE_CTRL_NEXT, now + 1000);
+    awardCombatTp(player, partner, RELEASE_CONTROL_TP_PER_SEC, "release-control");
+}
+
+function processPerfectBanner(player, partner) {
+    var valuesA = getLiveTrainingValues(player);
+    var valuesB = getLiveTrainingValues(partner);
+    if (!isPerfectTraining(valuesA, valuesB)) return;
+    putNumber(player.getTempdata(), K_SESSION_PERFECT, 1);
+    var now = nowMs();
+    if (now < readNumber(player.getTempdata(), K_PERFECT_NEXT, 0)) return;
+    putNumber(player.getTempdata(), K_PERFECT_NEXT, now + PERFECT_ACTIONBAR_MS);
+    /* CNPC has no reliable action bar API; use a compact chat pulse. */
+    sendMessage(player, sparText(sparColor("6"), sparColor("l"), "PERFECT TRAINING ACTIVE", sparColor("r")));
+}
 
 function processSession(player) {
     if (!isSessionActive(player)) return;
 
     var partnerName = getPartnerName(player);
-    if (partnerName == "") {
-        clearSessionData(player);
-        return;
-    }
-
-    /*
-     * Purge any self-pair session left by an older version.
-     */
-    if (
-        partnerName.toLowerCase() ==
-        getPlayerName(player).toLowerCase()
-    ) {
+    if (partnerName == "" || partnerName.toLowerCase() == getPlayerName(player).toLowerCase()) {
         clearSelfHitTracking(player);
         clearSessionData(player);
-        debug(player, "cleared invalid self-pair session");
         return;
     }
 
@@ -2427,192 +1484,158 @@ function processSession(player) {
         endSession(player, null, "partner left or changed worlds");
         return;
     }
-
     if (isSamePlayer(player, partner)) {
-        clearSelfHitTracking(player);
         clearSessionData(player);
-        debug(player, "cleared invalid self-pair session");
         return;
     }
-
-    /*
-     * Death, corrupt pairing and major BP/Prestige changes remain
-     * immediate failures. Normal combat interruptions use grace.
-     */
     if (!isAlive(player) || !isAlive(partner)) {
         endSession(player, partner, "a fighter was defeated");
         return;
     }
-
-    if (
-        getPartnerName(partner) != getPlayerName(player) ||
-        !isSessionActive(partner)
-    ) {
+    if (getPartnerName(partner) != getPlayerName(player) || !isSessionActive(partner)) {
         endSession(player, partner, "session data no longer matched");
         return;
     }
 
-    var ownSnapshotError = validateSnapshot(player);
-    if (ownSnapshotError != "") {
-        endSession(player, partner, ownSnapshotError);
-        return;
-    }
-
-    var partnerSnapshotError = validateSnapshot(partner);
-    if (partnerSnapshotError != "") {
-        endSession(player, partner, partnerSnapshotError);
-        return;
-    }
+    updateMovement(player);
 
     var failureReason = "";
-
     if (distanceBetween(player, partner) > MAX_SPAR_DISTANCE) {
         failureReason = "fighters moved too far apart";
     } else if (
         !hasRecentOutgoingHit(player, partnerName) ||
         !hasRecentOutgoingHit(partner, getPlayerName(player))
     ) {
-        failureReason = "both fighters must resume exchanging melee hits";
-    } else if (
-        !hasRecentMovement(player) ||
-        !hasRecentMovement(partner)
-    ) {
+        failureReason = "both fighters must resume exchanging damage";
+    } else if (!hasRecentMovement(player) || !hasRecentMovement(partner)) {
         failureReason = "both fighters must resume moving";
     }
 
     if (failureReason != "") {
-        handleRecoverableFailure(
-            player,
-            partner,
-            failureReason
-        );
+        handleRecoverableFailure(player, partner, failureReason);
         return;
     }
 
-    /*
-     * Conditions recovered before the timer expired.
-     */
     clearGraceState(player, partner);
 
-    var temp = player.getTempdata();
+    /* Expire momentum visually */
+    getMomentumMultiplier(player);
+
+    processBeamClash(player, partner);
+    processReleaseControl(player, partner);
+    processPerfectBanner(player, partner);
+
+    /* Flush batched TP chat if due */
     var now = nowMs();
-    var nextAward = readNumber(temp, K_NEXT_AWARD, 0);
-
-    if (now < nextAward) return;
-
-    /*
-     * Each player's tick awards only that player's TP.
-     * This prevents double-awarding either fighter.
-     */
-    putNumber(temp, K_NEXT_AWARD, now + AWARD_INTERVAL_MS);
-    awardSparTP(player, partner);
+    if (now >= readNumber(player.getTempdata(), K_TP_MSG_NEXT, 0)) {
+        if (readNumber(player.getTempdata(), K_TP_PENDING, 0) > 0) {
+            putNumber(player.getTempdata(), K_TP_MSG_NEXT, now + TP_MESSAGE_COOLDOWN_MS);
+            flushPendingTpMessage(player);
+        }
+    }
 }
 
-/* ========================= CUSTOMNPCS EVENTS ========================= */
+/* ========================= EVENTS ========================= */
 
 function tick(event) {
     var player = event.player;
     if (player == null) return;
-
     try {
         var temp = player.getTempdata();
         var now = nowMs();
-
-        /*
-         * Run movement/session work 5 times per second rather than
-         * every game tick.
-         */
-        var nextTick = readNumber(temp, K_TICK_NEXT, 0);
-        if (now < nextTick) return;
-
-        putNumber(temp, K_TICK_NEXT, now + 200);
-
-        /*
-         * Remove stale self-hit records without touching valid activity
-         * against another player.
-         */
-        clearSelfHitTracking(player);
-
-        updateMovement(player);
+        if (now < readNumber(temp, K_TICK_NEXT, 0)) return;
+        putNumber(temp, K_TICK_NEXT, now + 250);
         processSession(player);
     } catch (e) {
-        debug(player, "tick error: " + e);
+        try { print("[Sparring v3] tick " + e); } catch (x) {}
     }
 }
 
 function damagedEntity(event) {
-    var attacker = event.player;
-    if (attacker == null) return;
-
     try {
+        var attacker = event.player;
         var target = event.target;
-        if (target == null) return;
+        if (attacker == null || target == null) return;
+        try { if (Number(target.getType()) !== 1) return; } catch (eType) { return; }
+        if (isSamePlayer(attacker, target)) return;
 
-        var targetMC = target.getMCEntity();
-        if (
-            targetMC == null ||
-            !MCPlayerClass.class.isInstance(targetMC)
-        ) {
-            return;
+        var damage = 0;
+        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
+        if (!(damage > 0)) return;
+
+        var ki = isKiAttack(event);
+        var kiKind = ki ? classifyKiType(event) : "melee";
+
+        recordCombatExchange(attacker, target, ki, kiKind);
+
+        if (isSessionActive(attacker) && isSessionActive(target)) {
+            awardDamageTp(attacker, target, damage, ki, kiKind);
+        }
+    } catch (error) {
+        try { print("[Sparring v3] damagedEntity " + error); } catch (x) {}
+    }
+}
+
+function damaged(event) {
+    try {
+        var victim = event.player;
+        if (victim == null || !isSessionActive(victim)) return;
+
+        var partnerName = getPartnerName(victim);
+        if (partnerName == "") return;
+        var partner = getPlayerByName(victim, partnerName);
+        if (partner == null) return;
+
+        var damage = 0;
+        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
+        if (damage > 0) {
+            putNumber(victim.getTempdata(), K_SESSION_TAKEN,
+                readNumber(victim.getTempdata(), K_SESSION_TAKEN, 0) + damage);
         }
 
-        /*
-         * This check is performed before projectile classification.
-         *
-         * Some projectile damage sources may not expose themselves as
-         * AbstractKiProjectile through the CustomNPCs event, but attacker
-         * and target still resolve to the same player UUID.
-         */
-        if (isSamePlayer(attacker, target)) {
-            clearSelfHitTracking(attacker);
-            debug(
-                attacker,
-                "ignored self-inflicted hit while detecting sparring"
-            );
-            return;
-        }
+        if (!isPlayerBlocking(victim)) return;
+
+        var temp = victim.getTempdata();
+        putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
+        putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
+        refreshMovementActivity(victim);
+        awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
 
         /*
-         * Ki projectiles never count as sparring activity.
+         * Perfect block: no DMZ API available yet.
+         * Reserved hook — enable when status exposes a perfect-block flag.
          */
-        if (isKiAttack(event)) return;
-
-        recordMeleeHit(attacker, target);
-    } catch (e) {
-        debug(attacker, "damagedEntity error: " + e);
+    } catch (error) {
+        try { print("[Sparring v3] damaged " + error); } catch (x) {}
     }
 }
 
 function logout(event) {
-    var player = event.player;
-    if (player == null) return;
-
     try {
-        if (isSessionActive(player)) {
-            var partner = getPlayerByName(
-                player,
-                getPartnerName(player)
-            );
-            endSession(player, partner, "a fighter logged out");
-        } else {
-            clearSessionData(player);
-        }
+        var player = event.player;
+        if (player == null || !isSessionActive(player)) return;
+        var partner = getPlayerByName(player, getPartnerName(player));
+        endSession(player, partner, "a fighter logged out");
     } catch (e) {}
 }
 
 function died(event) {
-    var player = event.player;
-    if (player == null) return;
-
     try {
-        if (isSessionActive(player)) {
-            var partner = getPlayerByName(
-                player,
-                getPartnerName(player)
-            );
-            endSession(player, partner, "a fighter was defeated");
-        } else {
-            clearSessionData(player);
-        }
+        var player = event.player;
+        if (player == null || !isSessionActive(player)) return;
+        var partner = getPlayerByName(player, getPartnerName(player));
+        endSession(player, partner, "a fighter was defeated");
     } catch (e) {}
+}
+
+function trigger(event) {
+    try {
+        var id = 0;
+        try { id = Number(event.id); } catch (e) {
+            try { id = Number(event.getId()); } catch (e2) {}
+        }
+        if (id == LEADERBOARD_TRIGGER_ID) {
+            showSparringLeaderboard(event.player);
+        }
+    } catch (e3) {}
 }

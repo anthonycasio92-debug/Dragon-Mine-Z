@@ -1,36 +1,36 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 2.1.1
+ Version: 3.0.0
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- Gameplay stays in Sparring Tp System.js (Global Player).
+ Gameplay stays in Sparring Tp System.js v3 (Global Player).
  This file is the command display handler only - same split
  as Rival System.js + Rival Command Handler.js.
 
- Color codes use unicode section escapes only (no literal
- section-sign characters) so Minecraft chat colors stay reliable.
+ Sparring v3: combat-based TP (melee/ki/blocks/momentum).
+ No standing timer payouts.
 
- PRIMARY SYNTAX (matches in-game /spar help):
+ PRIMARY SYNTAX:
    /spar
    /spar help
    /spar stats [player]
-   /spar top [tp|streak|session|payout|perfect|time]
+   /spar top [tp|streak|session|payout|perfect|time|combo|clash]
 
  TRIGGERS:
  70 = /spar router (help + subcommands via $1-)
- 72 = Top total TP (legacy / also used by sparring system note)
+ 72 = Top total TP (legacy)
  73 = Personal sparring statistics
  74 = Top total TP
  75 = Top current streak
  76 = Top longest session
  77 = Top highest payout
- 78 = Top perfect-training payouts
- 79 = Top total rewarded sparring time
+ 78 = Top perfect-training sessions
+ 79 = Top total sparring time
 
  COMMAND FORMAT:
  noppes script trigger <id> <playerName>
@@ -63,6 +63,11 @@ var LB_PERFECT_PREFIX = "spar.leaderboard.perfectPayouts.";
 var LB_HIGHEST_COMBO_PREFIX = "spar.leaderboard.highestCombo.";
 var LB_STREAK_PREFIX = "spar.leaderboard.currentStreak.";
 var LB_BEST_STREAK_PREFIX = "spar.leaderboard.bestStreak.";
+var LB_CLASH_PREFIX = "spar.leaderboard.clash.";
+var LB_MOMENTUM_PREFIX = "spar.leaderboard.momentum.";
+var LB_MELEE_PREFIX = "spar.leaderboard.melee.";
+var LB_KI_PREFIX = "spar.leaderboard.ki.";
+var LB_BLOCKS_PREFIX = "spar.leaderboard.blocks.";
 
 var S_STREAK_CURRENT = "spar.streak.current";
 var S_STREAK_BEST = "spar.streak.best";
@@ -313,6 +318,11 @@ function loadProfile(store, playerName) {
         bestPayout: readNumber(store, LB_BEST_PAYOUT_PREFIX + safe, 0),
         perfect: readNumber(store, LB_PERFECT_PREFIX + safe, 0),
         combo: readNumber(store, LB_HIGHEST_COMBO_PREFIX + safe, 0),
+        momentum: readNumber(store, LB_MOMENTUM_PREFIX + safe, 0),
+        clash: readNumber(store, LB_CLASH_PREFIX + safe, 0),
+        melee: readNumber(store, LB_MELEE_PREFIX + safe, 0),
+        ki: readNumber(store, LB_KI_PREFIX + safe, 0),
+        blocks: readNumber(store, LB_BLOCKS_PREFIX + safe, 0),
         currentStreak: readNumber(store, LB_STREAK_PREFIX + safe, 0),
         bestStreak: readNumber(store, LB_BEST_STREAK_PREFIX + safe, 0)
     };
@@ -406,9 +416,9 @@ function topCategory(category) {
     if (cat == "perfect" || cat == "perfects") {
         return {
             key: LB_PERFECT_PREFIX,
-            title: "PERFECT TRAINING PAYOUTS",
+            title: "PERFECT TRAINING SESSIONS",
             formatter: commas,
-            suffix: "payouts"
+            suffix: "sessions"
         };
     }
 
@@ -426,6 +436,33 @@ function topCategory(category) {
         };
     }
 
+    if (cat == "combo" || cat == "combos" || cat == "hits") {
+        return {
+            key: LB_HIGHEST_COMBO_PREFIX,
+            title: "HIGHEST COMBOS",
+            formatter: commas,
+            suffix: "hits"
+        };
+    }
+
+    if (cat == "clash" || cat == "beam" || cat == "beams") {
+        return {
+            key: LB_CLASH_PREFIX,
+            title: "MOST BEAM CLASH TIME",
+            formatter: duration,
+            suffix: ""
+        };
+    }
+
+    if (cat == "momentum" || cat == "mom") {
+        return {
+            key: LB_MOMENTUM_PREFIX,
+            title: "HIGHEST MOMENTUM",
+            formatter: commas,
+            suffix: "tier"
+        };
+    }
+
     return {
         key: LB_TP_PREFIX,
         title: "TOP SPARRING TP",
@@ -437,22 +474,23 @@ function topCategory(category) {
 /* ========================= COMMANDS ========================= */
 
 function cmdHelp(player) {
-    uiHead(player, "SPARRING SYSTEM");
-    uiProp(player, "Train", C + "7Exchange melee hits to start a session");
-    uiProp(player, "Pay", C + "7TP every 5s while both stay active");
+    uiHead(player, "SPARRING SYSTEM v3");
+    uiProp(player, "Train", C + "7Fight each other (melee or ki) to start");
+    uiProp(player, "Pay", C + "7TP from combat actions, not standing still");
     uiProp(
         player,
         "Bonus",
-        C + "7Duration" + C + "8  |  " +
-        C + "7Combo" + C + "8  |  " +
+        C + "7Momentum" + C + "8  |  " +
+        C + "7Session" + C + "8  |  " +
         C + "7Streak" + C + "8  |  " +
-        C + "7Perfect"
+        C + "7Perfect" + C + "8  |  " +
+        C + "7Style"
     );
     uiBlank(player);
     uiSection(player, "Commands");
     uiCmd(player, "/spar", "this help menu");
     uiCmd(player, "/spar stats [player]", "personal record");
-    uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time]", "");
+    uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
@@ -460,7 +498,7 @@ function cmdHelp(player) {
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
     uiCmd(player, "/sparperfect | /spartime", "");
     uiBlank(player);
-    msg(player, C + "8Keep moving and trading melee hits to stay in session.");
+    msg(player, C + "8Stay active: trade damage, move, and keep the fight going.");
     uiFoot(player);
 }
 
@@ -489,7 +527,7 @@ function showPersonal(player, targetName) {
 
     if (!hasAny) {
         uiBanner(player, "Sparring", C + "cNo sparring record for " + displayName);
-        msg(player, C + "8Start a session by exchanging melee hits with another player.");
+        msg(player, C + "8Start a session by fighting another player (melee or ki).");
         return;
     }
 
@@ -497,13 +535,19 @@ function showPersonal(player, targetName) {
     uiProp(player, "Player", C + "f" + displayName);
     uiBlank(player);
     uiProp(player, "Total TP", C + "a" + commas(profile.totalTP));
-    uiProp(player, "Best Payout", C + "a" + commas(profile.bestPayout));
+    uiProp(player, "Best Session", C + "a" + commas(profile.bestPayout) + " TP");
     uiProp(player, "Sessions", C + "f" + commas(profile.sessions));
-    uiProp(player, "Rewarded", C + "b" + duration(profile.totalTime));
+    uiProp(player, "Time", C + "b" + duration(profile.totalTime));
     uiProp(player, "Longest", C + "b" + duration(profile.longest));
     uiBlank(player);
-    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) + C + "7 payouts");
-    uiProp(player, "Combo", C + "e" + "Tier " + commas(profile.combo));
+    uiProp(player, "Melee Dmg", C + "f" + commas(profile.melee));
+    uiProp(player, "Ki Dmg", C + "b" + commas(profile.ki));
+    uiProp(player, "Blocks", C + "7" + commas(profile.blocks));
+    uiProp(player, "Clash Time", C + "d" + duration(profile.clash));
+    uiBlank(player);
+    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) + C + "7 sessions");
+    uiProp(player, "Best Combo", C + "e" + commas(profile.combo) + " hits");
+    uiProp(player, "Best Momentum", C + "e" + "Tier " + commas(profile.momentum));
     uiProp(
         player,
         "Streak",
@@ -621,6 +665,11 @@ function routeSparSub(player, event) {
         sub == "perfect" ||
         sub == "perfects" ||
         sub == "time" ||
+        sub == "combo" ||
+        sub == "combos" ||
+        sub == "clash" ||
+        sub == "beam" ||
+        sub == "momentum" ||
         sub == "tp"
     ) {
         /*
