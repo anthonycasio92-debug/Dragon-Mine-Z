@@ -1,16 +1,17 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.0.0
+ Version: 3.0.4
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- Gameplay stays in Sparring Tp System.js v3 (Global Player).
- This file is the command display handler only - same split
- as Rival System.js + Rival Command Handler.js.
+ NOTE (v3.0.4+):
+  Sparring Tp System.js (Global Player) now also handles /spar
+  triggers 70 / 72-79. This script-slot handler is OPTIONAL.
+  If both are installed, responses are deduped.
 
  Sparring v3: combat-based TP (melee/ki/blocks/momentum).
  No standing timer payouts.
@@ -682,14 +683,50 @@ function routeSparSub(player, event) {
     }
 }
 
-function trigger(event) {
-    var player = null;
+function resolveCommandPlayer(event) {
     var arg0 = argAt(event, 0);
+    if (arg0 != "") {
+        var byName = getOnlinePlayerByName(arg0);
+        if (byName != null) return byName;
+        try {
+            var Bukkit = Java.type("org.bukkit.Bukkit");
+            var bp = Bukkit.getPlayerExact(arg0);
+            if (bp == null) bp = Bukkit.getPlayer(arg0);
+            if (bp != null) {
+                var found = getOnlinePlayerByName(String(bp.getName()));
+                if (found != null) return found;
+            }
+        } catch (eBukkit) {}
+    }
+    try { if (event.player != null) return event.player; } catch (e1) {}
+    try { if (event.entity != null) return event.entity; } catch (e2) {}
+    return null;
+}
+
+function claimSparCommand(player) {
+    if (player == null) return false;
+    try {
+        var temp = player.getTempdata();
+        var now = Number(new Date().getTime());
+        var last = 0;
+        try {
+            if (temp.has("spar.cmd.handledAt")) last = Number(temp.get("spar.cmd.handledAt"));
+        } catch (e) {}
+        if (isNaN(last)) last = 0;
+        if (now - last < 750) return false;
+        temp.put("spar.cmd.handledAt", String(now));
+        return true;
+    } catch (e2) {
+        return true;
+    }
+}
+
+function trigger(event) {
+    var arg0 = argAt(event, 0);
+    var player = null;
 
     try {
-        if (arg0 != "") {
-            player = getOnlinePlayerByName(arg0);
-        }
+        player = resolveCommandPlayer(event);
     } catch (e) {}
 
     if (player == null) {
@@ -704,6 +741,9 @@ function trigger(event) {
         return;
     }
 
+    /* Dedupe with Global Player Sparring Tp System v3.0.4+ */
+    if (!claimSparCommand(player)) return;
+
     try {
         var id = Number(event.id);
         var arg1 = argAt(event, 1);
@@ -713,10 +753,6 @@ function trigger(event) {
         } else if (id == 72 || id == 74) {
             showTop(player, arg1 == "" ? "tp" : arg1);
         } else if (id == 73) {
-            /*
-             Legacy /sparstats and old /spar both used 73 for personal stats.
-             If extra args are present, treat 73 like the router for convenience.
-             */
             if (arg1 != "") {
                 routeSparSub(player, event);
             } else {
@@ -732,6 +768,8 @@ function trigger(event) {
             showTop(player, "perfect");
         } else if (id == 79) {
             showTop(player, "time");
+        } else {
+            msg(player, C + "c[Sparring] Unhandled trigger id " + id);
         }
     } catch (err) {
         msg(player, C + "c[Sparring Command Error] " + err);

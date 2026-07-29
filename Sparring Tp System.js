@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.3
+ Version: 3.0.4
 
  Combat-Based Training (Sparring v3)
 
@@ -11,19 +11,21 @@
   drive progression. Fair rivals and skilled combos pay more.
 
  Changelog:
+  - /spar commands now work from this Global Player script alone
+    (trigger 70 / 72-79) with robust player resolution for CMI.
   - Beam/ki clashes no longer die to the hit-activity timer mid-clash.
-    Active clashes refresh combat activity and keep awarding drip TP
-    while both fighters keep the beam struggle going.
-  - Fixed ki hits being classified as melee for TP/style/stats
-    (broader damage-source + projectile detection).
-  - Successfully blocking an attack breaks the attacker's combo
-    and Momentum.
+  - Fixed ki hits being classified as melee for TP/style/stats.
+  - Successfully blocking an attack breaks the attacker's combo.
 
  PLACE AS:
   CustomNPCs Global Player Script
 
- COMMAND DISPLAY:
-  Sparring Command Handler.js (script-slot / triggers)
+ COMMANDS:
+  Handled here via trigger ids (CMI aliases in Aliases-Sparring.yml):
+    70  = /spar router
+    72-79 = tops / stats shortcuts
+  Optional: Sparring Command Handler.js in a player script-slot
+  (same triggers; either/both can be installed).
 
  REQUIRED EVENTS:
   - tick
@@ -31,7 +33,7 @@
   - damaged
   - logout
   - died
-  - trigger   (legacy leaderboard id 72)
+  - trigger   (70, 72-79)
 
  Detection notes:
   FULL: melee, ki (binary), blocking, release/gravity/weight/BP
@@ -1909,6 +1911,10 @@ function damagedEntity(event) {
 
         if (isSessionActive(attacker) && isSessionActive(target)) {
             awardDamageTp(attacker, target, damage, ki, kiKind);
+            /* Mutual ki/beam should open/refresh clash hold immediately. */
+            if (ki) {
+                try { updateBeamClashState(attacker, target); } catch (eClash) {}
+            }
         }
     } catch (error) {
         try { print("[Sparring v3] damagedEntity " + error); } catch (x) {}
@@ -1983,14 +1989,306 @@ function died(event) {
     } catch (e) {}
 }
 
+/* ========================= /spar COMMANDS (trigger) ========================= */
+
+function sparCmdArgAt(event, index) {
+    try {
+        if (event != null && event.arguments != null && event.arguments.length > index) {
+            var value = String(event.arguments[index]).replace(/^\s+|\s+$/g, "");
+            if (value == "" || value.toLowerCase() == "null") return "";
+            return value;
+        }
+    } catch (e) {}
+    return "";
+}
+
+function sparCmdArgsFrom(event, start) {
+    var out = [];
+    try {
+        if (event.arguments != null) {
+            for (var i = start; i < event.arguments.length; i++) {
+                var piece = String(event.arguments[i]).replace(/^\s+|\s+$/g, "");
+                if (piece == "" || piece.toLowerCase() == "null") continue;
+                out.push(piece);
+            }
+        }
+    } catch (e) {}
+    return out;
+}
+
+/*
+ * ScriptTriggerEvent often has event.entity / arguments[0], not event.player.
+ * CMI asFakeOp can also make event.player a fake player — prefer name lookup.
+ */
+function resolveSparCommandPlayer(event) {
+    var arg0 = sparCmdArgAt(event, 0);
+    if (arg0 != "") {
+        var byName = getPlayerByName(null, arg0);
+        if (byName != null) return byName;
+        try {
+            var bp = Bukkit.getPlayerExact(arg0);
+            if (bp == null) bp = Bukkit.getPlayer(arg0);
+            if (bp != null) {
+                var found = getPlayerByName(null, String(bp.getName()));
+                if (found != null) return found;
+            }
+        } catch (eBukkit) {}
+    }
+
+    try { if (event.player != null) return event.player; } catch (e1) {}
+    try { if (event.entity != null) return event.entity; } catch (e2) {}
+    return null;
+}
+
+function sparCmdLine(player) {
+    sendMessage(player, sparColor("8") + "--------------------------------");
+}
+
+function sparCmdHelp(player) {
+    sparCmdLine(player);
+    sendMessage(player, sparColor("6") + sparColor("l") + " SPARRING SYSTEM v3 " + sparColor("r"));
+    sparCmdLine(player);
+    sendMessage(player, sparColor("8") + "Train  " + sparColor("7") + "Fight each other (melee or ki) to start");
+    sendMessage(player, sparColor("8") + "Pay  " + sparColor("7") + "TP from combat actions, not standing still");
+    sendMessage(player, " ");
+    sendMessage(player, sparColor("6") + "Commands");
+    sendMessage(player, sparColor("e") + "  /spar" + sparColor("8") + "  this help menu");
+    sendMessage(player, sparColor("e") + "  /spar stats [player]" + sparColor("8") + "  personal record");
+    sendMessage(player, sparColor("e") + "  /spar top [tp|streak|session|payout|perfect|time|combo|clash]");
+    sendMessage(player, " ");
+    sendMessage(player, sparColor("8") + "Shortcuts  " + sparColor("7") + "/sparstats /spartop /sparstreak ...");
+    sparCmdLine(player);
+}
+
+function sparCmdLoadProfile(store, playerName) {
+    var safe = leaderboardSafeName(playerName);
+    return {
+        name: playerName,
+        totalTP: readNumber(store, LB_TP_PREFIX + safe, 0),
+        sessions: readNumber(store, LB_SESSIONS_PREFIX + safe, 0),
+        totalTime: readNumber(store, LB_TOTAL_TIME_PREFIX + safe, 0),
+        longest: readNumber(store, LB_LONGEST_PREFIX + safe, 0),
+        bestPayout: readNumber(store, LB_BEST_PAYOUT_PREFIX + safe, 0),
+        perfect: readNumber(store, LB_PERFECT_PREFIX + safe, 0),
+        combo: readNumber(store, LB_HIGHEST_COMBO_PREFIX + safe, 0),
+        momentum: readNumber(store, LB_MOMENTUM_PREFIX + safe, 0),
+        clash: readNumber(store, LB_CLASH_PREFIX + safe, 0),
+        melee: readNumber(store, LB_MELEE_PREFIX + safe, 0),
+        ki: readNumber(store, LB_KI_PREFIX + safe, 0),
+        blocks: readNumber(store, LB_BLOCKS_PREFIX + safe, 0),
+        currentStreak: readNumber(store, LB_STREAK_PREFIX + safe, 0),
+        bestStreak: readNumber(store, LB_BEST_STREAK_PREFIX + safe, 0)
+    };
+}
+
+function sparCmdShowPersonal(player, targetName) {
+    var store = getLeaderboardStore(player);
+    if (store == null) {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] Could not access stored data."));
+        return;
+    }
+    var wanted = String(targetName || "").replace(/^\s+|\s+$/g, "");
+    if (wanted == "") wanted = getPlayerName(player);
+    var online = getPlayerByName(player, wanted);
+    var displayName = online != null ? getPlayerName(online) : wanted;
+    var profile = sparCmdLoadProfile(store, displayName);
+    var streakCurrent = online != null ? getCurrentTrainingStreak(online) : Math.max(0, profile.currentStreak);
+    var streakBest = Math.max(profile.bestStreak, streakCurrent);
+
+    if (
+        profile.totalTP <= 0 && profile.sessions <= 0 && profile.totalTime <= 0 &&
+        streakCurrent <= 0 && streakBest <= 0
+    ) {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] No sparring record for ", displayName));
+        sendMessage(player, sparColor("8") + "Start by fighting another player (melee or ki).");
+        return;
+    }
+
+    sparCmdLine(player);
+    sendMessage(player, sparColor("6") + sparColor("l") + " SPARRING STATS " + sparColor("r"));
+    sparCmdLine(player);
+    sendMessage(player, sparColor("8") + "Player  " + sparColor("f") + displayName);
+    sendMessage(player, sparColor("8") + "Total TP  " + sparColor("a") + formatWholeNumber(profile.totalTP));
+    sendMessage(player, sparColor("8") + "Best Session  " + sparColor("a") + formatWholeNumber(profile.bestPayout) + " TP");
+    sendMessage(player, sparColor("8") + "Sessions  " + sparColor("f") + formatWholeNumber(profile.sessions));
+    sendMessage(player, sparColor("8") + "Time  " + sparColor("b") + formatDuration(profile.totalTime));
+    sendMessage(player, sparColor("8") + "Longest  " + sparColor("b") + formatDuration(profile.longest));
+    sendMessage(player, " ");
+    sendMessage(player, sparColor("8") + "Melee  " + sparColor("f") + formatWholeNumber(profile.melee) +
+        sparColor("8") + "   Ki  " + sparColor("b") + formatWholeNumber(profile.ki));
+    sendMessage(player, sparColor("8") + "Blocks  " + sparColor("7") + formatWholeNumber(profile.blocks) +
+        sparColor("8") + "   Clash  " + sparColor("d") + formatDuration(profile.clash));
+    sendMessage(player, sparColor("8") + "Perfect  " + sparColor("d") + formatWholeNumber(profile.perfect) + " sessions");
+    sendMessage(player, sparColor("8") + "Best Combo  " + sparColor("e") + formatWholeNumber(profile.combo) +
+        sparColor("8") + "   Momentum  " + sparColor("e") + "Tier " + formatWholeNumber(profile.momentum));
+    sendMessage(player, sparColor("8") + "Streak  " + sparColor("6") + formatWholeNumber(streakCurrent) +
+        " days" + sparColor("8") + "   Best  " + sparColor("6") + formatWholeNumber(streakBest) + " days");
+    sparCmdLine(player);
+}
+
+function sparCmdTopInfo(category) {
+    var cat = String(category || "tp").toLowerCase();
+    if (cat == "streak" || cat == "streaks" || cat == "days") {
+        return { key: LB_STREAK_PREFIX, title: "TOP TRAINING STREAKS", kind: "days" };
+    }
+    if (cat == "session" || cat == "sessions" || cat == "longest" || cat == "long") {
+        return { key: LB_LONGEST_PREFIX, title: "LONGEST SPARRING SESSIONS", kind: "time" };
+    }
+    if (cat == "payout" || cat == "payouts" || cat == "best" || cat == "hit") {
+        return { key: LB_BEST_PAYOUT_PREFIX, title: "HIGHEST SPARRING PAYOUTS", kind: "tp" };
+    }
+    if (cat == "perfect" || cat == "perfects") {
+        return { key: LB_PERFECT_PREFIX, title: "PERFECT TRAINING SESSIONS", kind: "count" };
+    }
+    if (cat == "time" || cat == "total" || cat == "duration" || cat == "hours") {
+        return { key: LB_TOTAL_TIME_PREFIX, title: "TOTAL SPARRING TIME", kind: "time" };
+    }
+    if (cat == "combo" || cat == "combos" || cat == "hits") {
+        return { key: LB_HIGHEST_COMBO_PREFIX, title: "HIGHEST COMBOS", kind: "count" };
+    }
+    if (cat == "clash" || cat == "beam" || cat == "beams") {
+        return { key: LB_CLASH_PREFIX, title: "MOST BEAM CLASH TIME", kind: "time" };
+    }
+    if (cat == "momentum" || cat == "mom") {
+        return { key: LB_MOMENTUM_PREFIX, title: "HIGHEST MOMENTUM", kind: "count" };
+    }
+    return { key: LB_TP_PREFIX, title: "TOP SPARRING TP", kind: "tp" };
+}
+
+function sparCmdShowTop(player, category) {
+    var store = getLeaderboardStore(player);
+    if (store == null) {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] Could not access stored data."));
+        return;
+    }
+    var info = sparCmdTopInfo(category);
+    var names = readLeaderboardNames(store);
+    var rows = [];
+    for (var i = 0; i < names.length; i++) {
+        var safe = leaderboardSafeName(names[i]);
+        rows.push({
+            name: names[i],
+            value: readNumber(store, info.key + safe, 0)
+        });
+    }
+    rows.sort(function (a, b) { return b.value - a.value; });
+
+    sparCmdLine(player);
+    sendMessage(player, sparColor("6") + sparColor("l") + " " + info.title + " " + sparColor("r"));
+    sparCmdLine(player);
+
+    var shown = 0;
+    for (var r = 0; r < rows.length && shown < LEADERBOARD_SIZE; r++) {
+        if (rows[r].value <= 0) continue;
+        shown++;
+        var valueText = "";
+        if (info.kind == "time") valueText = formatDuration(rows[r].value);
+        else if (info.kind == "days") valueText = formatWholeNumber(rows[r].value) + " days";
+        else if (info.kind == "tp") valueText = formatWholeNumber(rows[r].value) + " TP";
+        else valueText = formatWholeNumber(rows[r].value);
+
+        sendMessage(player, sparColor("e") + "#" + shown + sparColor("f") + "  " + rows[r].name +
+            sparColor("8") + "  ........  " + sparColor("a") + valueText);
+    }
+    if (shown <= 0) {
+        sendMessage(player, sparColor("8") + "No records have been saved yet.");
+    }
+    sparCmdLine(player);
+}
+
+function claimSparCommand(player) {
+    if (player == null) return false;
+    try {
+        var temp = player.getTempdata();
+        var now = nowMs();
+        if (now - readNumber(temp, "spar.cmd.handledAt", 0) < 750) return false;
+        putNumber(temp, "spar.cmd.handledAt", now);
+        return true;
+    } catch (e) {
+        return true;
+    }
+}
+
+function sparCmdRoute(player, event) {
+    var parts = sparCmdArgsFrom(event, 1);
+    if (parts.length == 0) {
+        sparCmdHelp(player);
+        return;
+    }
+    var sub = String(parts[0]).toLowerCase();
+    var arg = parts.length > 1 ? parts[1] : "";
+
+    if (sub == "help" || sub == "?" || sub == "commands") {
+        sparCmdHelp(player);
+    } else if (sub == "stats" || sub == "stat" || sub == "me" || sub == "record") {
+        sparCmdShowPersonal(player, arg);
+    } else if (sub == "top" || sub == "leaderboard" || sub == "lb") {
+        sparCmdShowTop(player, arg == "" ? "tp" : arg);
+    } else if (
+        sub == "streak" || sub == "streaks" || sub == "session" || sub == "sessions" ||
+        sub == "longest" || sub == "payout" || sub == "payouts" || sub == "perfect" ||
+        sub == "perfects" || sub == "time" || sub == "combo" || sub == "combos" ||
+        sub == "clash" || sub == "beam" || sub == "momentum" || sub == "tp"
+    ) {
+        sparCmdShowTop(player, sub);
+    } else {
+        sendMessage(player, sparText(sparColor("c"), "[Sparring] Unknown command."));
+        sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar help");
+    }
+}
+
 function trigger(event) {
     try {
         var id = 0;
         try { id = Number(event.id); } catch (e) {
             try { id = Number(event.getId()); } catch (e2) {}
         }
-        if (id == LEADERBOARD_TRIGGER_ID) {
-            showSparringLeaderboard(event.player);
+
+        /* Only claim spar command / leaderboard trigger ids. */
+        if (!(id == 70 || id == 72 || id == 73 || id == 74 || id == 75 ||
+              id == 76 || id == 77 || id == 78 || id == 79)) {
+            return;
         }
-    } catch (e3) {}
+
+        var player = resolveSparCommandPlayer(event);
+        if (player == null) {
+            try {
+                print("[Sparring v3] trigger " + id + " could not resolve player arg0=" + sparCmdArgAt(event, 0));
+            } catch (ePrint) {}
+            return;
+        }
+
+        /* Dedupe if Command Handler script-slot is also installed. */
+        if (!claimSparCommand(player)) return;
+
+        if (id == 70) {
+            sparCmdRoute(player, event);
+        } else if (id == 72 || id == 74) {
+            var topArg = sparCmdArgAt(event, 1);
+            sparCmdShowTop(player, topArg == "" ? "tp" : topArg);
+        } else if (id == 73) {
+            var a1 = sparCmdArgAt(event, 1);
+            if (a1 != "") sparCmdRoute(player, event);
+            else sparCmdShowPersonal(player, "");
+        } else if (id == 75) {
+            sparCmdShowTop(player, "streak");
+        } else if (id == 76) {
+            sparCmdShowTop(player, "session");
+        } else if (id == 77) {
+            sparCmdShowTop(player, "payout");
+        } else if (id == 78) {
+            sparCmdShowTop(player, "perfect");
+        } else if (id == 79) {
+            sparCmdShowTop(player, "time");
+        }
+    } catch (err) {
+        try {
+            var p = resolveSparCommandPlayer(event);
+            if (p != null) {
+                sendMessage(p, sparText(sparColor("c"), "[Sparring Command Error] ", err));
+            }
+        } catch (e2) {
+            try { print("[Sparring v3] trigger error " + err); } catch (e3) {}
+        }
+    }
 }
