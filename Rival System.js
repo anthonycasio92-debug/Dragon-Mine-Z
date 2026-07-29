@@ -1,11 +1,14 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.9
+ Version: 4.7.0
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Nearby rivals that boost / grant TP are capped at 2 (strongest
+   links win: Nemesis > Mutual > Declared, then RP points).
+ - All Rival System TP awards are scaled to 60% of previous values.
  - Challenge report Time uses the chosen fight length (not always 60s).
  - Challenges longer than 2 minutes broadcast live score every 1 minute
    (short fights keep the faster cadence).
@@ -1640,6 +1643,17 @@ var RP_KILL_TP_BASE = 400;
 var RP_KILL_TP_PER_TIER = 120;
 var RP_KILL_TP_MUTUAL_MULT = 1.45;
 var RP_SHOW_KILL_TP = true;
+/*
+ * Max nearby rivals that can grant presence/kill TP or feed the
+ * proximity offense pick. Extra rivals in range are ignored for rewards.
+ */
+var RP_NEAR_RIVAL_TP_CAP = 2;
+
+/*
+ * Global Rival System TP scale (presence, kill, challenge, surpass, etc.)
+ * Applied inside rivalScaleTpByLevel before DMZ STORY multipliers.
+ */
+var RIVAL_TP_GAIN_SCALE = 0.60;
 
 /*
  * Per-player kill TP chat preference (storeddata).
@@ -2100,6 +2114,12 @@ function rivalSetKillTpChatEnabled(player, enabled) {
 function rivalScaleTpByLevel(data, amount, kind) {
     var base = Math.floor(Number(amount));
     if (isNaN(base) || base <= 0) return 0;
+    var scale = Number(RIVAL_TP_GAIN_SCALE);
+    if (isNaN(scale) || !isFinite(scale) || scale < 0) scale = 1.0;
+    if (scale !== 1.0) {
+        base = Math.floor(base * scale);
+        if (base <= 0) return 0;
+    }
     if (data === null || data === undefined) return base;
     var mult = rivalEffectiveTpMultiplier(data, kind);
     if (!(mult > 0) || isNaN(mult) || !isFinite(mult)) mult = 1.0;
@@ -2294,6 +2314,34 @@ function rpOffenseMultiplier(points, presenceMs, catchupExtra) {
     return 1.0 + total;
 }
 
+/*
+ * Higher = more important for the nearby-rival reward cap.
+ * Nemesis > Mutual > Declared > Unknown, then rivalry points.
+ */
+function rpNearRivalPriority(link) {
+    var status = rcLinkStatus(link);
+    var rank = 0;
+    if (status === "nemesis") rank = 4;
+    else if (status === "mutual") rank = 3;
+    else if (status === "declared") rank = 2;
+    else if (status === "unknown") rank = 1;
+    return rank * 1000000 + rpNumber(link.points, 0);
+}
+
+function rpSortNearRivalsByPriority(list) {
+    if (list == null || list.length <= 1) return list;
+    list.sort(function (a, b) {
+        return rpNumber(b.priority, 0) - rpNumber(a.priority, 0);
+    });
+    return list;
+}
+
+function rpNearRivalTpCap() {
+    var cap = Math.floor(Number(RP_NEAR_RIVAL_TP_CAP));
+    if (isNaN(cap) || !isFinite(cap) || cap < 1) return 2;
+    return cap;
+}
+
 function rpTemp(player) {
     return player.getTempdata();
 }
@@ -2335,6 +2383,7 @@ function rpProcessPlayer(player) {
     var nearCount = 0;
     var dirty = false;
     var wantsPgUnderdog = false;
+    var nearForRewards = [];
 
     for (var rivalUuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(rivalUuid)) continue;
@@ -2405,59 +2454,14 @@ function rpProcessPlayer(player) {
             }
         }
 
-        if (mult > bestMultiplier) bestMultiplier = mult;
-
-        /*
-         Presence RP ticks - both sides of an active rivalry gain rank while near.
-         Mutual gains a bit more than one-sided links.
-        */
-        var presenceKey = "rival.v4.presenceRp." + rivalUuid;
-        var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
-        /* Presence tracks time near rivals; awards TP. RP stays official-battle-only. */
-        if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
-            link.presenceMs = rpNumber(link.presenceMs, 0) + RP_PRESENCE_RP_INTERVAL_MS;
-            link.lastSeenTogetherAt = now;
-            dirty = true;
-            rpTempPut(temp, presenceKey, now);
-
-            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
-                var pStatus = rcLinkStatus(link);
-                var presenceTp = 0;
-
-                /*
-                 * You declared them  -> "declared" -> get TP near them.
-                 * They declared you  -> "unknown"  -> no TP (unless enabled).
-                 */
-                if (pStatus === "declared") {
-                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
-                } else if (pStatus === "mutual") {
-                    presenceTp = RP_PRESENCE_TP_MUTUAL;
-                } else if (pStatus === "nemesis") {
-                    presenceTp = RP_PRESENCE_TP_NEMESIS;
-                } else if (pStatus === "unknown" && RP_PRESENCE_TP_UNKNOWN === true) {
-                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
-                }
-
-                if (presenceTp > 0) {
-                    rpAwardTP(
-                        player,
-                        data,
-                        presenceTp,
-                        "Near " + pStatus + " " + link.name,
-                        "drip"
-                    );
-                }
-            }
-            if (RP_PRESENCE_RP_ENABLED === true) {
-                var presenceStatus = rcLinkStatus(link);
-                if (presenceStatus !== "unknown") {
-                    var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
-                    if (presenceStatus === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
-                    if (presenceStatus === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
-                    rpAwardPoints(record, rivalUuid, presenceRp, "presence");
-                }
-            }
-        }
+        nearForRewards.push({
+            rivalUuid: rivalUuid,
+            link: link,
+            rivalPlayer: rivalPlayer,
+            rivalReleased: rivalReleased,
+            mult: mult,
+            priority: rpNearRivalPriority(link)
+        });
 
         /* Surpass award: cross from weaker -> stronger only, persisted cooldowns */
         if (RP_SURPASS_ENABLED && rivalReleased > 0) {
@@ -2495,6 +2499,63 @@ function rpProcessPlayer(player) {
         }
     }
 
+    /* Only the top N nearby rivals feed offense pick + presence TP. */
+    rpSortNearRivalsByPriority(nearForRewards);
+    var rewardCap = rpNearRivalTpCap();
+    var rewardedNear = 0;
+    for (var ni = 0; ni < nearForRewards.length; ni++) {
+        var nearEntry = nearForRewards[ni];
+        if (ni >= rewardCap) break;
+        rewardedNear++;
+
+        if (nearEntry.mult > bestMultiplier) bestMultiplier = nearEntry.mult;
+
+        var cappedLink = nearEntry.link;
+        var cappedRivalUuid = nearEntry.rivalUuid;
+        var presenceKey = "rival.v4.presenceRp." + cappedRivalUuid;
+        var lastPresenceRp = rpTempNumber(temp, presenceKey, 0);
+        if (now - lastPresenceRp >= RP_PRESENCE_RP_INTERVAL_MS) {
+            cappedLink.presenceMs = rpNumber(cappedLink.presenceMs, 0) + RP_PRESENCE_RP_INTERVAL_MS;
+            cappedLink.lastSeenTogetherAt = now;
+            dirty = true;
+            rpTempPut(temp, presenceKey, now);
+
+            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
+                var pStatus = rcLinkStatus(cappedLink);
+                var presenceTp = 0;
+
+                if (pStatus === "declared") {
+                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
+                } else if (pStatus === "mutual") {
+                    presenceTp = RP_PRESENCE_TP_MUTUAL;
+                } else if (pStatus === "nemesis") {
+                    presenceTp = RP_PRESENCE_TP_NEMESIS;
+                } else if (pStatus === "unknown" && RP_PRESENCE_TP_UNKNOWN === true) {
+                    presenceTp = RP_PRESENCE_TP_ONE_SIDED;
+                }
+
+                if (presenceTp > 0) {
+                    rpAwardTP(
+                        player,
+                        data,
+                        presenceTp,
+                        "Near " + pStatus + " " + cappedLink.name,
+                        "drip"
+                    );
+                }
+            }
+            if (RP_PRESENCE_RP_ENABLED === true) {
+                var presenceStatus = rcLinkStatus(cappedLink);
+                if (presenceStatus !== "unknown") {
+                    var presenceRp = RP_PRESENCE_RP_ONE_SIDED;
+                    if (presenceStatus === "mutual") presenceRp = RP_PRESENCE_RP_MUTUAL;
+                    if (presenceStatus === "nemesis") presenceRp = RP_PRESENCE_RP_MUTUAL + 2;
+                    rpAwardPoints(record, cappedRivalUuid, presenceRp, "presence");
+                }
+            }
+        }
+    }
+
     rpApplyOffenseBonus(player, data, bestMultiplier);
 
     if (PG_ENABLED === true) {
@@ -2504,9 +2565,11 @@ function rpProcessPlayer(player) {
 
     if (nearCount > 0) {
         rpTempPut(temp, "rival.v4.nearCount", nearCount);
+        rpTempPut(temp, "rival.v4.nearRewardCount", rewardedNear);
         rpTempPut(temp, "rival.v4.offenseMult", bestMultiplier.toFixed(3));
     } else {
         rpTempPut(temp, "rival.v4.nearCount", 0);
+        rpTempPut(temp, "rival.v4.nearRewardCount", 0);
         rpTempPut(temp, "rival.v4.offenseMult", "1.000");
     }
 
@@ -2532,6 +2595,7 @@ function rpHandleKillNearRivals(killer, victim) {
     var dirty = false;
     var victimIsPlayer = rpIsPlayer(victim);
     var victimUuid = victimIsPlayer ? rpUuid(victim) : "";
+    var nearKillList = [];
 
     /* Direct rival kill underdog win */
     if (victimIsPlayer) {
@@ -2555,24 +2619,40 @@ function rpHandleKillNearRivals(killer, victim) {
         if (rivalPlayer === null) continue;
         if (rpDistance(killer, rivalPlayer) > rpRangeForPoints(link.points)) continue;
 
-        var tier = rpTierIndex(link.points);
+        nearKillList.push({
+            rivalUuid: rivalUuid,
+            link: link,
+            rivalPlayer: rivalPlayer,
+            priority: rpNearRivalPriority(link)
+        });
+    }
+
+    rpSortNearRivalsByPriority(nearKillList);
+    var killCap = rpNearRivalTpCap();
+    for (var ki = 0; ki < nearKillList.length && ki < killCap; ki++) {
+        var nearKill = nearKillList[ki];
+        var killLink = nearKill.link;
+        var killRivalUuid = nearKill.rivalUuid;
+        var killRivalPlayer = nearKill.rivalPlayer;
+
+        var tier = rpTierIndex(killLink.points);
         var tp = RP_KILL_TP_BASE + tier * RP_KILL_TP_PER_TIER;
-        var killStatus = rcLinkStatus(link);
+        var killStatus = rcLinkStatus(killLink);
         if (killStatus === "nemesis") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT * 1.25);
         else if (killStatus === "mutual") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT);
 
-        rpAwardTP(killer, killerData, tp, "Near " + killStatus + " " + link.name, "burst", true);
+        rpAwardTP(killer, killerData, tp, "Near " + killStatus + " " + killLink.name, "burst", true);
         if (record.career === null || typeof record.career !== "object") record.career = {};
         record.career.killsNearRival = rpNumber(record.career.killsNearRival, 0) + 1;
         dirty = true;
 
         /* Anti-gank: if this rival is much weaker and has me declared, they gain from witnessing */
-        var rivalRecord = database.players[rivalUuid];
+        var rivalRecord = database.players[killRivalUuid];
         if (rivalRecord === null || rivalRecord === undefined) continue;
         var theirLink = rpGetLink(rivalRecord, killerUuid);
         if (theirLink === null || theirLink.declaredByMe !== true) continue;
 
-        var rivalData = rpGetDMZ(rivalPlayer);
+        var rivalData = rpGetDMZ(killRivalPlayer);
         var rivalReleased = rpGetReleasedBP(rivalData);
         if (killerReleased > 0 && rivalReleased <= killerReleased * RP_ANTIGANK_RATIO) {
             rpAwardTP(killer, killerData, RP_ANTIGANK_WITNESS_KILL_TP, "Rivals watching", "burst", true);
