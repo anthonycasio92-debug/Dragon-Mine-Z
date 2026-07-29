@@ -1,11 +1,15 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.5
+ Version: 4.6.6
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Challenge/Rival TP grants now apply the exact announced amount.
+   DMZ's TPGainEvent was re-applying STORY multipliers (HTC, gravity,
+   global TP potion, class, etc.) on top of rival level scaling, so
+   chat could say +3,000,000 TP while the player received ~3,000,000,000.
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
    announce locks). Root scripts were missing the rival-v4 spam fix.
  - Only the challenger tick starts FIGHT so both fighters do not
@@ -2067,15 +2071,38 @@ function rivalScaleTpByLevel(data, amount, kind) {
     return Math.max(1, Math.floor(base * mult));
 }
 
+/*
+ * Grant an exact TP amount that matches what we announce in chat.
+ *
+ * DMZ Resources.addTrainingPoints() fires TPGainEvent, and
+ * TPGainEvents.onTPGain always runs calculateTPGain(..., STORY),
+ * which multiplies again by class/HTC/gravity/weights/global potion/
+ * mutant/difficulty/progression. Rival rewards are already scaled
+ * by level in-script, so that second pass inflated payouts (e.g.
+ * chat +3M, actual +3B). setTrainingPoints bypasses the event.
+ */
+function rivalGrantExactTrainingPoints(data, amount) {
+    if (data === null || data === undefined) return false;
+    var grant = Math.floor(Number(amount));
+    if (isNaN(grant) || !isFinite(grant) || grant <= 0) return false;
+
+    var resources = data.getResources();
+    if (resources === null || resources === undefined) return false;
+
+    var before = Number(resources.getTrainingPoints());
+    if (isNaN(before) || !isFinite(before) || before < 0) before = 0;
+
+    resources.setTrainingPoints(before + grant);
+    return true;
+}
+
 function rpAwardTP(player, data, amount, reason, kind) {
     try {
         if (data === null || data === undefined) return false;
         var scaleKind = kind === "drip" ? "drip" : "burst";
         amount = rivalScaleTpByLevel(data, amount, scaleKind);
         if (amount <= 0) return false;
-        var resources = data.getResources();
-        if (resources === null) return false;
-        resources.addTrainingPoints(amount);
+        if (!rivalGrantExactTrainingPoints(data, amount)) return false;
         var mcPlayer = player.getMCEntity();
         rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
         if (RP_SHOW_KILL_TP) {
@@ -3139,7 +3166,7 @@ function chAwardTP(player, amount, reason) {
         if (data === null) return false;
         amount = rivalScaleTpByLevel(data, amount, "burst");
         if (amount <= 0) return false;
-        data.getResources().addTrainingPoints(amount);
+        if (!rivalGrantExactTrainingPoints(data, amount)) return false;
         var mcPlayer = player.getMCEntity();
         chNetwork().sendToTrackingEntityAndSelf(new (chSyncPacket())(mcPlayer), mcPlayer);
         var note = reason ? String(reason) : "";
@@ -5339,7 +5366,7 @@ function rivalFusionKill(event) {
         if (data == null) return;
         try {
             var killerTp = rivalScaleTpByLevel(data, RF_KILL_TP, "burst");
-            data.getResources().addTrainingPoints(killerTp);
+            rivalGrantExactTrainingPoints(data, killerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(killer.getMCEntity()), killer.getMCEntity());
             var kNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
@@ -5355,7 +5382,7 @@ function rivalFusionKill(event) {
         if (pdata == null) return;
         try {
             var partnerTp = rivalScaleTpByLevel(pdata, RF_KILL_TP, "burst");
-            pdata.getResources().addTrainingPoints(partnerTp);
+            rivalGrantExactTrainingPoints(pdata, partnerTp);
             rfNetwork().sendToTrackingEntityAndSelf(new (rfSync())(partner.getMCEntity()), partner.getMCEntity());
             var pNote = "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
