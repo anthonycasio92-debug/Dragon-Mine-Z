@@ -28,6 +28,7 @@ Mutual + 3 death/KO → Nemesis. Nearby TP capped at 2 + recent mob kill. TP sca
 - `DMZ RACE LOCK.js`, `Prestige NPC.js`, `DMZ Class Permission.js`
 - `AndrioidConversion.js`, `bioevolution.json`, `character.json`
 - `ShadowDummyLimiter.js`, `ShadowDummyForgeProtect.js`
+- `Fabled Sync.js` (combined Prestige Sync + Faction Sync + Value Cleaner — do **not** also load `Prestige Sync Fabled.js`)
 - Fabled bonus persist fixes, Apotheosis spawner disable, Disable End Portals
 - `Aliases-Kill-TP-Chat.yml` (optional; also covered by Aliases-Rival `tpmsg`)
 
