@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.1.1
+ Version: 3.1.2
 
  Combat-Based Training (Sparring v3)
 
@@ -28,6 +28,8 @@
   - v3.1.1: spar TP / session damage use HP actually lost after DMZ
     defense (same approach as Rival challenges). CNPC event.damage is
     LivingHurt pre-mitigation and is no longer used for payouts.
+  - v3.1.2: fully disable sparring during active Rival challenges
+    (no session start, TP, or chat spam while fighting).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -1291,6 +1293,60 @@ function isSessionActive(player) {
     return readString(player.getTempdata(), K_SESSION_ACTIVE, "") == "1";
 }
 
+/* Rival challenge DB key — keep in sync with Rival System.js */
+var RIVAL_CHALLENGE_DB_KEY = "dlr.rivalry.v4.challenges";
+
+function getOverworldStoreddata() {
+    try {
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            try {
+                var world = NpcAPI.Instance().getIWorld(names[i]);
+                if (world != null) return world.getStoreddata();
+            } catch (e1) {}
+        }
+    } catch (e) {}
+    return null;
+}
+
+function isInRivalChallenge(player) {
+    if (player == null) return false;
+    try {
+        var stored = getOverworldStoreddata();
+        if (stored == null || !stored.has(RIVAL_CHALLENGE_DB_KEY)) return false;
+        var ch = JSON.parse(String(stored.get(RIVAL_CHALLENGE_DB_KEY)));
+        if (ch == null || ch.playerSessions == null || ch.sessions == null) return false;
+        var sid = ch.playerSessions[getPlayerUUID(player)];
+        if (sid == null || sid === undefined) return false;
+        var session = ch.sessions[String(sid)];
+        if (session == null) return false;
+        var st = String(session.state || "");
+        return st == "active" || st == "countdown";
+    } catch (e) {
+        return false;
+    }
+}
+
+/* Soft-stop any open spar when a Rival challenge is running (no chat). */
+function suppressSparringForChallenge(player) {
+    if (player == null || !isInRivalChallenge(player)) return false;
+    if (isSessionActive(player)) {
+        var partner = null;
+        try { partner = getPlayerByName(player, getPartnerName(player)); } catch (e1) {}
+        clearSessionData(player);
+        clearSelfHitTracking(player);
+        if (partner != null && isSessionActive(partner)) {
+            clearSessionData(partner);
+            clearSelfHitTracking(partner);
+        }
+    } else {
+        clearSelfHitTracking(player);
+        clearPendingHpSample(player);
+    }
+    return true;
+}
+
 function getPartnerName(player) {
     return readString(player.getTempdata(), K_PARTNER, "");
 }
@@ -1340,6 +1396,11 @@ function clearSelfHitTracking(player) {
 
 function startSession(a, b) {
     if (a == null || b == null || isSamePlayer(a, b)) {
+        clearSelfHitTracking(a);
+        clearSelfHitTracking(b);
+        return false;
+    }
+    if (isInRivalChallenge(a) || isInRivalChallenge(b)) {
         clearSelfHitTracking(a);
         clearSelfHitTracking(b);
         return false;
@@ -1722,6 +1783,7 @@ function buildCombatMultiplier(player, partner) {
 
 function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
     if (player == null || partner == null || !isSessionActive(player)) return 0;
+    if (isInRivalChallenge(player) || isInRivalChallenge(partner)) return 0;
     baseAmount = Number(baseAmount);
     if (isNaN(baseAmount) || baseAmount <= 0) return 0;
     baseAmount = Math.min(MAX_BASE_TP_PER_HIT, baseAmount);
@@ -1812,6 +1874,7 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
 
 function recordCombatExchange(attacker, target, isKi, kiKind) {
     if (attacker == null || target == null || isSamePlayer(attacker, target)) return;
+    if (isInRivalChallenge(attacker) || isInRivalChallenge(target)) return;
 
     var now = nowMs();
     var aTemp = attacker.getTempdata();
@@ -2217,6 +2280,7 @@ function processPerfectBanner(player, partner) {
 
 function processSession(player) {
     if (!isSessionActive(player)) return;
+    if (suppressSparringForChallenge(player)) return;
 
     var partnerName = getPartnerName(player);
     if (partnerName == "" || partnerName.toLowerCase() == getPlayerName(player).toLowerCase()) {
@@ -2428,6 +2492,8 @@ function tick(event) {
     var player = event.player;
     if (player == null) return;
     try {
+        if (suppressSparringForChallenge(player)) return;
+
         /*
          * Resolve received HP loss before the 250ms session throttle so
          * post-mitigation samples land on the first tick after the hit.
@@ -2458,6 +2524,7 @@ function damagedEntity(event) {
         if (attacker == null || target == null) return;
         try { if (Number(target.getType()) !== 1) return; } catch (eType) { return; }
         if (isSamePlayer(attacker, target)) return;
+        if (suppressSparringForChallenge(attacker) || isInRivalChallenge(target)) return;
 
         /*
          * Do NOT score from event.damage here — that is LivingHurt
@@ -2480,7 +2547,9 @@ function damagedEntity(event) {
 function damaged(event) {
     try {
         var victim = event.player;
-        if (victim == null || !isSessionActive(victim)) return;
+        if (victim == null) return;
+        if (suppressSparringForChallenge(victim)) return;
+        if (!isSessionActive(victim)) return;
 
         var partnerName = getPartnerName(victim);
         if (partnerName == "") return;

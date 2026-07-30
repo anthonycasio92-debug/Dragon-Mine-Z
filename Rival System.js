@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.4
+ Version: 4.7.5
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -3894,6 +3894,7 @@ function chApplyRewards(player, session, result) {
             rcRecomputeNemesis(winnerRecord);
             rcRecomputeNemesis(loserRecord);
         }
+        var winRp = 0;
         var loseRp = 0;
         if (mutual) {
             winRp = CH_WIN_RP;
@@ -3989,35 +3990,42 @@ function chApplyRewards(player, session, result) {
     chSaveCoreDb(player, core);
 }
 
-function chEndSession(player, db, session, result) {
-    if (session.state === "ended") return;
-
-    session.state = "ended";
-    session.endedAt = chNow();
-    session.endReason = result.reason;
-    session.winnerUuid = chString(result.winnerUuid);
-    session.loserUuid = chString(result.loserUuid);
-
-    delete db.playerSessions[session.challengerUuid];
-    delete db.playerSessions[session.opponentUuid];
-    chSaveChallengeDb(player, db);
-
-    chApplyRewards(player, session, result);
-
-    var winnerName = "";
-    var loserName = "";
-    if (result.reason === "draw") {
-        winnerName = "Draw";
-    } else {
-        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
-        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+function chClaimSessionEnd(sessionId) {
+    try {
+        var world = chDataWorld(null);
+        if (world === null) return true;
+        var stored = world.getStoreddata();
+        var key = "dlr.rivalry.v4.challenge.end." + chString(sessionId);
+        var last = 0;
+        try {
+            if (stored.has(key)) last = chNumber(stored.get(key), 0);
+        } catch (e1) {}
+        if (chNow() - last < 15000) return false;
+        stored.put(key, "" + chNow());
+        return true;
+    } catch (e) {
+        return true;
     }
+}
 
-    var report = chBuildReport(session, winnerName, loserName);
+function chDeliverReport(session, result, report) {
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
+    var winnerName = "";
+    if (result.reason === "draw") winnerName = "Draw";
+    else {
+        winnerName = result.winnerUuid === session.challengerUuid
+            ? session.challengerName : session.opponentName;
+    }
 
-    /* Show full report to the whole server */
+    /* Always show the report to both fighters first. */
+    if (report != null) {
+        for (var i = 0; i < report.length; i++) {
+            if (a !== null) chMessage(a, report[i]);
+            if (b !== null) chMessage(b, report[i]);
+        }
+    }
+
     if (CH_BROADCAST_REPORT === true) {
         chBroadcastLines(report);
         if (result.reason === "draw") {
@@ -4025,11 +4033,6 @@ function chEndSession(player, db, session, result) {
         } else {
             chBroadcast(CH_COLOR + "a[Rival Battle] " + CH_COLOR + "f" + winnerName +
                 CH_COLOR + "a takes the win!");
-        }
-    } else {
-        for (var i = 0; i < report.length; i++) {
-            if (a !== null) chMessage(a, report[i]);
-            if (b !== null) chMessage(b, report[i]);
         }
     }
 
@@ -4042,6 +4045,63 @@ function chEndSession(player, db, session, result) {
             if (chUuid(b) === result.winnerUuid) chMessage(b, CH_COLOR + "a[Rival] Victory!");
             else chMessage(b, CH_COLOR + "c[Rival] Defeat!");
         }
+    }
+}
+
+function chEndSession(player, db, session, result) {
+    if (session == null || db == null) return;
+    if (session.state === "ended") return;
+    if (!chClaimSessionEnd(session.id)) {
+        session.state = "ended";
+        return;
+    }
+
+    session.state = "ended";
+    session.endedAt = chNow();
+    session.endReason = result.reason;
+    session.winnerUuid = chString(result.winnerUuid);
+    session.loserUuid = chString(result.loserUuid);
+    try { delete session.pendingEnd; } catch (ePe) {}
+
+    delete db.playerSessions[session.challengerUuid];
+    delete db.playerSessions[session.opponentUuid];
+    chSaveChallengeDb(player, db);
+
+    try {
+        chApplyRewards(player, session, result);
+    } catch (rewardErr) {
+        chLog("applyRewards failed: " + rewardErr);
+    }
+
+    var winnerName = "";
+    var loserName = "";
+    if (result.reason === "draw") {
+        winnerName = "Draw";
+    } else {
+        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+    }
+
+    var report = null;
+    try {
+        report = chBuildReport(session, winnerName, loserName);
+    } catch (reportErr) {
+        chLog("buildReport failed: " + reportErr);
+        report = [
+            CH_COLOR + "8--------------------------------",
+            CH_COLOR + "6" + CH_COLOR + "l RIVAL BATTLE REPORT " + CH_COLOR + "r",
+            CH_COLOR + "8--------------------------------",
+            CH_COLOR + "8Result  " + CH_COLOR + "f" +
+                (result.reason === "draw" ? "Draw" : (winnerName + " wins")),
+            CH_COLOR + "8via  " + CH_COLOR + "7" + chString(result.reason),
+            CH_COLOR + "8--------------------------------"
+        ];
+    }
+
+    try {
+        chDeliverReport(session, result, report);
+    } catch (deliverErr) {
+        chLog("deliverReport failed: " + deliverErr);
     }
 
     delete db.sessions[session.id];
@@ -4290,6 +4350,18 @@ function rivalChTick(event) {
 
         var session = chGetSession(db, chUuid(player));
         if (session === null) return;
+
+        /* Handler forfeit/cancel writes pendingEnd; System owns the report. */
+        if (session.pendingEnd != null && typeof session.pendingEnd === "object") {
+            var pe = session.pendingEnd;
+            chEndSession(player, db, session, {
+                reason: chString(pe.reason || "forfeit"),
+                winnerUuid: chString(pe.winnerUuid),
+                loserUuid: chString(pe.loserUuid),
+                knockout: pe.knockout === true
+            });
+            return;
+        }
 
         if (session.state === "countdown") {
             var remaining = session.countdownEndsAt - now;

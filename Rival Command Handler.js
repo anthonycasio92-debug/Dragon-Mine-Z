@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.7.4
+ Version: 4.7.5
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -1455,18 +1455,25 @@ function cmdChallengeCancel(player) {
         msg(player, C + "cNo active challenge."); return;
     }
     var session = ch.sessions[String(sid)];
-    session.state = "ended";
-    session.endedAt = now();
-    session.endReason = "forfeit";
-    session.winnerUuid = (u == session.challengerUuid) ? session.opponentUuid : session.challengerUuid;
-    session.loserUuid = u;
-    delete ch.playerSessions[session.challengerUuid];
-    delete ch.playerSessions[session.opponentUuid];
-    delete ch.sessions[String(sid)];
+    if (session.state == "ended") {
+        msg(player, C + "cChallenge already ended."); return;
+    }
+    /*
+     * Do not tear the session down here — Rival System owns rewards +
+     * the battle report. Mark a pendingEnd for the next challenge tick.
+     */
+    var winnerUuid = (u == session.challengerUuid) ? session.opponentUuid : session.challengerUuid;
+    session.pendingEnd = {
+        reason: "forfeit",
+        winnerUuid: winnerUuid,
+        loserUuid: u,
+        knockout: false,
+        at: now()
+    };
     saveCh(ch);
-    msg(player, C + "cYou forfeited.");
-    var winner = onlineByName(session.winnerUuid == session.challengerUuid ? session.challengerName : session.opponentName);
-    if (winner != null) msg(winner, C + "aOpponent forfeited. You win.");
+    msg(player, C + "cYou forfeited. Report incoming...");
+    var winner = onlineByName(winnerUuid == session.challengerUuid ? session.challengerName : session.opponentName);
+    if (winner != null) msg(winner, C + "aOpponent forfeited. Settling the battle...");
 }
 
 function showStats(player, targetName) {
