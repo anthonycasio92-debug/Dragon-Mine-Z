@@ -1,20 +1,22 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.1.3
+ Version: 3.1.4
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.1.3+):
+ NOTE (v3.1.4+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
   Help lists /spar only (no .spar / !spar / ./spar).
   Mentor Bond is shown at the top of /spar help.
   CMI empty "$1-" is treated as bare /spar (help).
   reconcileMentorBond repairs one-sided bonds instead of wiping.
+  Admin: /spar mentor resetcd [player] clears bond cooldowns
+  (op / permission level 2 / spar.mentor.admin).
   Mentor Bond commands work here too (same storeddata keys).
   Non-spar trigger ids are ignored (do not claim dedupe lock).
   Sparring Tp System.js (Global Player) also handles /spar
@@ -571,6 +573,36 @@ function setBondCooldown(player, key) {
     putNumber(stored, key, nowMs() + MENTOR_CHANGE_COOLDOWN_MS);
 }
 
+function clearBondCooldowns(player) {
+    var stored = bondStored(player);
+    if (stored == null) return false;
+    putNumber(stored, S_MENTOR_CD_UNTIL, 0);
+    putNumber(stored, S_APPRENTICE_CD_UNTIL, 0);
+    return true;
+}
+
+function isSparMentorAdmin(player) {
+    if (player == null) return false;
+    try {
+        var mc = player.getMCEntity();
+        if (mc != null) {
+            try { if (mc.hasPermissions && mc.hasPermissions(2)) return true; } catch (e0) {}
+            try { if (mc.m_20310_ && mc.m_20310_(2)) return true; } catch (e1) {}
+        }
+    } catch (e2) {}
+    try {
+        var Bukkit = Java.type("org.bukkit.Bukkit");
+        var bp = Bukkit.getPlayerExact(nameOf(player));
+        if (bp == null) bp = Bukkit.getPlayer(nameOf(player));
+        if (bp != null) {
+            try { if (bp.isOp()) return true; } catch (e3) {}
+            try { if (bp.hasPermission("spar.mentor.admin")) return true; } catch (e4) {}
+            try { if (bp.hasPermission("sparring.mentor.admin")) return true; } catch (e5) {}
+        }
+    } catch (e6) {}
+    return false;
+}
+
 function namesMatch(a, b) {
     return lower(a) == lower(b) && str(a) != "";
 }
@@ -676,6 +708,9 @@ function cmdBondStatus(player) {
     uiCmd(player, "/spar mentor accept | deny", "respond to an invite");
     uiCmd(player, "/spar mentor clear", "leave your mentor (7d cooldown)");
     uiCmd(player, "/spar apprentice clear", "release your apprentice (7d cooldown)");
+    if (isSparMentorAdmin(player)) {
+        uiCmd(player, "/spar mentor resetcd [player]", "admin: clear bond cooldowns");
+    }
     uiFoot(player);
 }
 
@@ -849,6 +884,32 @@ function cmdClearApprentice(player) {
     }
 }
 
+function cmdResetMentorCd(admin, targetName) {
+    if (!isSparMentorAdmin(admin)) {
+        uiBanner(admin, "Mentor Bond", C + "cAdmin only.");
+        return;
+    }
+    var wanted = str(targetName).replace(/^\s+|\s+$/g, "");
+    var target = admin;
+    if (wanted != "") {
+        target = getOnlinePlayerByName(wanted);
+        if (target == null) {
+            uiBanner(admin, "Mentor Bond", C + "cPlayer not online: " + wanted);
+            return;
+        }
+    }
+    if (!clearBondCooldowns(target)) {
+        uiBanner(admin, "Mentor Bond", C + "cCould not clear cooldowns.");
+        return;
+    }
+    var tName = nameOf(target);
+    uiBanner(admin, "Mentor Bond", C + "aCleared mentor/apprentice cooldowns for " +
+        C + "f" + tName + C + "a.");
+    if (!namesMatch(tName, nameOf(admin))) {
+        msg(target, C + "6[Mentor Bond] " + C + "aYour mentor/apprentice change cooldowns were reset by staff.");
+    }
+}
+
 function routeBond(player, parts) {
     var sub = parts.length > 0 ? lower(parts[0]) : "";
     var arg = parts.length > 1 ? parts[1] : "";
@@ -860,6 +921,12 @@ function routeBond(player, parts) {
         else if (action == "accept" || action == "yes") cmdBondAccept(player);
         else if (action == "deny" || action == "decline" || action == "no") cmdBondDeny(player);
         else if (action == "clear" || action == "remove" || action == "leave") cmdClearMentor(player);
+        else if (
+            action == "resetcd" || action == "clearcd" || action == "cdreset" ||
+            action == "resetcooldown" || action == "resetcool" || action == "cd"
+        ) {
+            cmdResetMentorCd(player, arg2);
+        }
         else if (action == "ask") cmdAskMentor(player, arg2);
         else cmdAskMentor(player, arg);
         return true;
@@ -868,8 +935,18 @@ function routeBond(player, parts) {
         var aAction = lower(arg);
         if (aAction == "" || aAction == "status" || aAction == "info") cmdBondStatus(player);
         else if (aAction == "clear" || aAction == "remove" || aAction == "release") cmdClearApprentice(player);
+        else if (
+            aAction == "resetcd" || aAction == "clearcd" || aAction == "cdreset" ||
+            aAction == "resetcooldown" || aAction == "resetcool" || aAction == "cd"
+        ) {
+            cmdResetMentorCd(player, arg2);
+        }
         else if (aAction == "ask" || aAction == "take") cmdAskApprentice(player, arg2);
         else cmdAskApprentice(player, arg);
+        return true;
+    }
+    if (sub == "resetcd" || sub == "clearcd" || sub == "mentorcd") {
+        cmdResetMentorCd(player, arg);
         return true;
     }
     return false;
@@ -920,6 +997,9 @@ function cmdHelp(player) {
     uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
     uiCmd(player, "/spar mentor accept | deny | clear", "");
     uiCmd(player, "/spar apprentice clear", "release your apprentice");
+    if (isSparMentorAdmin(player)) {
+        uiCmd(player, "/spar mentor resetcd [player]", "admin: clear bond cooldowns");
+    }
     uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");

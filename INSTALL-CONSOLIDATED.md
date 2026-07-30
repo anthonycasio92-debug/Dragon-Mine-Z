@@ -1,4 +1,4 @@
-# Consolidated Scripts Pack (v4.7.6 / Sparring v3.2.7)
+# Consolidated Scripts Pack (v4.7.6 / Sparring v3.2.8)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.

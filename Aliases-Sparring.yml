@@ -93,3 +93,16 @@ CustomAlias:
     - asFakeOp! noppes script trigger 70 [playerName] mentor $1-
     AddTabs: true
     ExactMatch: false
+
+  # Admin: clear mentor + apprentice change cooldowns (script still checks op)
+  sparmentorcd:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor resetcd $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparbondcd:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor resetcd $1-
+    AddTabs: true
+    ExactMatch: false
