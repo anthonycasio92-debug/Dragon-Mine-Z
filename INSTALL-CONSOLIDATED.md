@@ -1,4 +1,4 @@
-# Consolidated Scripts Pack (v4.7.6 / Sparring v3.1.4)
+# Consolidated Scripts Pack (v4.7.6 / Sparring v3.2.0)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.
@@ -16,9 +16,14 @@ Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.
 Battle report shows once (no DM+broadcast double).
 
 ## Sparring
-- `Sparring Tp System.js` **v3.1.4** → Global Player (ki scores via damagedEntity HP queue again)
-- `Sparring Command Handler.js` **v3.0.7** → script-slot
-- `Aliases-Sparring.yml` → CMI (`/spar` only; help no longer lists `.spar` / `!spar`)
+- `Sparring Tp System.js` **v3.2.0** → Global Player
+  - Global spar TP **+50%**
+  - **Mentor Bond**: one mentor + one apprentice, mutual accept, 7-day change cooldown;
+    mentor gets 15% of apprentice spar TP; apprentice gets +18% while sparring with mentor
+  - **Friendly Fist**: knockdown during a spar fully heals the partner
+  - Ki HP-queue scoring; disabled during Rival challenges
+- `Sparring Command Handler.js` **v3.1.0** → script-slot (optional; skips mentor cmds for Global)
+- `Aliases-Sparring.yml` → CMI (`/spar` only)
 
 ## End
 - `End Dimension Strength.js` **v2.10.3** → Global Player (own tab)

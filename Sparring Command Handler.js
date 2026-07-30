@@ -1,17 +1,19 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.0.7
+ Version: 3.1.0
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.0.7+):
+ NOTE (v3.1.0+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
   Help lists /spar only (no .spar / !spar / ./spar).
+  Mentor Bond commands are owned by Sparring Tp System.js
+  (Global Player) — this handler skips them so TP share works.
   Sparring Tp System.js (Global Player) also handles /spar
   triggers 70 / 72-79. This script-slot handler is OPTIONAL.
   If both are installed, responses are deduped.
@@ -24,6 +26,8 @@
    /spar help
    /spar stats [player]
    /spar top [tp|streak|session|payout|perfect|time|combo|clash]
+   /spar mentor ...
+   /spar apprentice ...
 
  TRIGGERS:
  70 = /spar router (help + subcommands via $1-)
@@ -482,7 +486,7 @@ function cmdHelp(player) {
     uiProp(player, "Train", C + "7Fight each other " + C + "8(" +
         C + "fmelee" + C + "8 or " + C + "fki" + C + "8) to start");
     uiProp(player, "Pay", C + "7TP from combat actions" + C + "8  |  " +
-        C + "7not standing still");
+        C + "a+50%" + C + "7 global");
     uiProp(
         player,
         "Bonus",
@@ -490,13 +494,21 @@ function cmdHelp(player) {
         C + "7Session" + C + "8  |  " +
         C + "7Streak" + C + "8  |  " +
         C + "7Perfect" + C + "8  |  " +
-        C + "7Style"
+        C + "7Style" + C + "8  |  " +
+        C + "7Mentor"
     );
     uiBlank(player);
     uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
+    uiBlank(player);
+    uiSection(player, "Mentor Bond");
+    uiCmd(player, "/spar mentor", "bond status");
+    uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
+    uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
+    uiCmd(player, "/spar mentor accept | deny | clear", "");
+    uiCmd(player, "/spar apprentice clear", "release your apprentice");
     uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
@@ -505,6 +517,7 @@ function cmdHelp(player) {
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
     msg(player, C + "8Stay active: trade damage, move, and keep the fight going.");
+    msg(player, C + "8Friendly Fist knockdowns during a spar heal your partner.");
     uiFoot(player);
 }
 
@@ -745,10 +758,23 @@ function trigger(event) {
     }
 
     /* Dedupe with Global Player Sparring Tp System v3.0.4+ */
+    var id = Number(event.id);
+    var partsPeek = argsFrom(event, 1);
+    var subPeek = partsPeek.length > 0 ? lower(partsPeek[0]) : "";
+    /*
+     * Mentor Bond + TP share live in Sparring Tp System (Global Player).
+     * Skip claiming these so the Global script can handle them.
+     */
+    if (id == 70 && (
+        subPeek == "mentor" || subPeek == "mentors" || subPeek == "bond" ||
+        subPeek == "apprentice" || subPeek == "app" || subPeek == "student"
+    )) {
+        return;
+    }
+
     if (!claimSparCommand(player)) return;
 
     try {
-        var id = Number(event.id);
         var arg1 = argAt(event, 1);
 
         if (id == 70) {
