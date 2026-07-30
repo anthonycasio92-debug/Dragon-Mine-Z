@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.1.0
+ Version: 3.1.1
 
  Combat-Based Training (Sparring v3)
 
@@ -25,6 +25,9 @@
     same-dimension required; Fabled prestige via plugin classloader;
     overworld leaderboard store; sessions counted on end; wave ki
     typed as beam before explosive.
+  - v3.1.1: spar TP / session damage use HP actually lost after DMZ
+    defense (same approach as Rival challenges). CNPC event.damage is
+    LivingHurt pre-mitigation and is no longer used for payouts.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -246,6 +249,17 @@ var K_LAST_IN_TIME = "spar.lastIn.time";
 var K_LAST_KI_OUT = "spar.lastKiOut.time";
 var K_LAST_LASER_OUT = "spar.lastLaserOut.time";
 var K_CLASH_UNTIL = "spar.clash.until";
+/*
+ * CNPC damaged/damagedEntity fire on LivingHurt with pre-mitigation
+ * DMZ attack damage. Score sparring from real HP/absorption lost.
+ */
+var K_HP_SAMPLE = "spar.hp.pool";
+var K_PENDING_SAMPLE = "spar.hp.pendingSample";
+var K_PENDING_ATK = "spar.hp.pendingAtk";
+var K_PENDING_KI = "spar.hp.pendingKi";
+var K_PENDING_KI_KIND = "spar.hp.pendingKiKind";
+var K_PENDING_UNTIL = "spar.hp.pendingUntil";
+var PENDING_HP_RESOLVE_MS = 75;
 var K_MOVE_X = "spar.move.x";
 var K_MOVE_Y = "spar.move.y";
 var K_MOVE_Z = "spar.move.z";
@@ -1281,6 +1295,20 @@ function getPartnerName(player) {
     return readString(player.getTempdata(), K_PARTNER, "");
 }
 
+function clearPendingHpSample(player) {
+    if (player == null) return;
+    var temp = player.getTempdata();
+    var keys = [
+        K_HP_SAMPLE, K_PENDING_SAMPLE, K_PENDING_ATK,
+        K_PENDING_KI, K_PENDING_KI_KIND, K_PENDING_UNTIL
+    ];
+    for (var i = 0; i < keys.length; i++) {
+        try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
+            try { temp.put(keys[i], ""); } catch (e2) {}
+        }
+    }
+}
+
 function clearSessionData(player) {
     if (player == null) return;
     var temp = player.getTempdata();
@@ -1291,7 +1319,8 @@ function clearSessionData(player) {
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
         K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_CLASH_UNTIL,
         K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_TP_PENDING_CLASH, K_LAST_HIT_KIND,
-        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
+        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE,
+        K_HP_SAMPLE, K_PENDING_SAMPLE, K_PENDING_ATK, K_PENDING_KI, K_PENDING_KI_KIND, K_PENDING_UNTIL
     ];
     for (var i = 0; i < keys.length; i++) {
         try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
@@ -2262,12 +2291,154 @@ function processSession(player) {
     }
 }
 
+/* ========================= HP RECEIVED (post-mitigation) ========================= */
+
+function getHealthPool(player) {
+    var health = 0;
+    var absorption = 0;
+    if (player == null) return 0;
+    try { health = Number(player.getHealth()); } catch (e1) { health = 0; }
+    try {
+        if (typeof player.getAbsorptionAmount == "function") {
+            absorption = Number(player.getAbsorptionAmount());
+        } else if (typeof player.getAbsorption == "function") {
+            absorption = Number(player.getAbsorption());
+        }
+    } catch (e2) {}
+    try {
+        var mc = player.getMCEntity();
+        if (mc != null) {
+            if (!(absorption > 0)) {
+                try { absorption = Number(mc.getAbsorptionAmount()); } catch (e3) {}
+            }
+            if (!(health > 0)) {
+                try { health = Number(mc.getHealth()); } catch (e4) {}
+            }
+        }
+    } catch (e5) {}
+    if (isNaN(health) || health < 0) health = 0;
+    if (isNaN(absorption) || absorption < 0) absorption = 0;
+    return health + absorption;
+}
+
+function sampleHealthPool(player) {
+    if (player == null) return;
+    try {
+        putNumber(player.getTempdata(), K_HP_SAMPLE, getHealthPool(player));
+    } catch (e) {}
+}
+
+/*
+ * LivingHurt has not applied mitigation yet. Snapshot the pool and
+ * measure the drop on the next tick (same pattern as Rival challenges).
+ */
+function queueReceivedHit(victim, attacker, isKi, kiKind) {
+    if (victim == null || attacker == null) return;
+    try {
+        var temp = victim.getTempdata();
+        var pool = getHealthPool(victim);
+        if (!temp.has(K_PENDING_SAMPLE) || readNumber(temp, K_PENDING_SAMPLE, -1) < 0) {
+            putNumber(temp, K_PENDING_SAMPLE, pool);
+        }
+        putString(temp, K_PENDING_ATK, getPlayerName(attacker));
+        putString(temp, K_PENDING_KI, isKi === true ? "1" : "0");
+        putString(temp, K_PENDING_KI_KIND, isKi === true ? String(kiKind || "other") : "melee");
+        putNumber(temp, K_PENDING_UNTIL, nowMs() + PENDING_HP_RESOLVE_MS);
+    } catch (e) {}
+}
+
+function resolvePendingReceived(player) {
+    if (player == null || !isSessionActive(player)) return false;
+    var temp = null;
+    try { temp = player.getTempdata(); } catch (e0) { return false; }
+    if (temp == null || !temp.has(K_PENDING_UNTIL)) return false;
+
+    var until = readNumber(temp, K_PENDING_UNTIL, 0);
+    if (nowMs() < until) return false;
+
+    var sample = readNumber(temp, K_PENDING_SAMPLE, -1);
+    var atkName = readString(temp, K_PENDING_ATK, "");
+    var isKi = readString(temp, K_PENDING_KI, "0") == "1";
+    var kiKind = readString(temp, K_PENDING_KI_KIND, isKi ? "other" : "melee");
+
+    clearPendingHpSample(player);
+
+    if (sample < 0 || atkName == "") {
+        sampleHealthPool(player);
+        return false;
+    }
+
+    var nowPool = getHealthPool(player);
+    var received = sample - nowPool;
+    sampleHealthPool(player);
+
+    if (!(received > 0.01)) return false;
+
+    var partnerName = getPartnerName(player);
+    if (partnerName == "" || partnerName.toLowerCase() != atkName.toLowerCase()) return false;
+
+    var attacker = getPlayerByName(player, atkName);
+    if (attacker == null || !isSessionActive(attacker)) return false;
+    if (!sameWorld(player, attacker)) return false;
+
+    putNumber(temp, K_SESSION_TAKEN, readNumber(temp, K_SESSION_TAKEN, 0) + received);
+    awardDamageTp(attacker, player, received, isKi, kiKind);
+    return true;
+}
+
+function resolveAttackerFromDamaged(event, victim) {
+    var source = null;
+    try { source = event.source; } catch (e1) {}
+    if (source != null) {
+        try { if (Number(source.getType()) === 1) return source; } catch (e2) {}
+    }
+    try {
+        var ds = null;
+        try { ds = event.damageSource; } catch (e3) { ds = null; }
+        if (ds == null) {
+            try { ds = event.source; } catch (e4) {}
+        }
+        if (ds != null) {
+            var cand = null;
+            try { if (typeof ds.getTrueSource == "function") cand = ds.getTrueSource(); } catch (e5) {}
+            if (cand == null) {
+                try { if (typeof ds.getSourceEntity == "function") cand = ds.getSourceEntity(); } catch (e6) {}
+            }
+            if (cand == null) {
+                try { if (typeof ds.getImmediateSource == "function") cand = ds.getImmediateSource(); } catch (e7) {}
+            }
+            if (cand != null) {
+                try { if (Number(cand.getType()) === 1) return cand; } catch (e8) {}
+            }
+        }
+    } catch (e9) {}
+    /* Fallback: if only the spar partner could be hitting us, use them. */
+    try {
+        var partnerName = getPartnerName(victim);
+        if (partnerName != "") return getPlayerByName(victim, partnerName);
+    } catch (e10) {}
+    return null;
+}
+
 /* ========================= EVENTS ========================= */
 
 function tick(event) {
     var player = event.player;
     if (player == null) return;
     try {
+        /*
+         * Resolve received HP loss before the 250ms session throttle so
+         * post-mitigation samples land on the first tick after the hit.
+         */
+        try {
+            if (resolvePendingReceived(player)) {
+                /* scored */
+            } else if (isSessionActive(player)) {
+                var t0 = player.getTempdata();
+                if (!t0.has(K_PENDING_UNTIL)) sampleHealthPool(player);
+            }
+        } catch (eHp) {}
+
         var temp = player.getTempdata();
         var now = nowMs();
         if (now < readNumber(temp, K_TICK_NEXT, 0)) return;
@@ -2286,21 +2457,18 @@ function damagedEntity(event) {
         try { if (Number(target.getType()) !== 1) return; } catch (eType) { return; }
         if (isSamePlayer(attacker, target)) return;
 
-        var damage = 0;
-        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
-        if (!(damage > 0)) return;
-
+        /*
+         * Do NOT score from event.damage here — that is LivingHurt
+         * pre-mitigation DMZ damage dealt. TP uses HP actually lost
+         * (queued on victim damaged, resolved next tick).
+         */
         var ki = isKiAttack(event);
         var kiKind = ki ? classifyKiType(event) : "melee";
 
         recordCombatExchange(attacker, target, ki, kiKind);
 
-        if (isSessionActive(attacker) && isSessionActive(target)) {
-            awardDamageTp(attacker, target, damage, ki, kiKind);
-            /* Mutual ki/beam should open/refresh clash hold immediately. */
-            if (ki) {
-                try { updateBeamClashState(attacker, target); } catch (eClash) {}
-            }
+        if (isSessionActive(attacker) && isSessionActive(target) && ki) {
+            try { updateBeamClashState(attacker, target); } catch (eClash) {}
         }
     } catch (error) {
         try { print("[Sparring v3] damagedEntity " + error); } catch (x) {}
@@ -2317,11 +2485,13 @@ function damaged(event) {
         var partner = getPlayerByName(victim, partnerName);
         if (partner == null) return;
 
-        var damage = 0;
-        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
-        if (damage > 0) {
-            putNumber(victim.getTempdata(), K_SESSION_TAKEN,
-                readNumber(victim.getTempdata(), K_SESSION_TAKEN, 0) + damage);
+        var attacker = resolveAttackerFromDamaged(event, victim);
+        if (attacker != null &&
+            getPlayerName(attacker).toLowerCase() == partnerName.toLowerCase()) {
+            var ki = isKiAttack(event);
+            var kiKind = ki ? classifyKiType(event) : "melee";
+            /* Snapshot pool now; tick awards from real HP/absorption lost. */
+            queueReceivedHit(victim, attacker, ki, kiKind);
         }
 
         if (!isPlayerBlocking(victim)) return;
