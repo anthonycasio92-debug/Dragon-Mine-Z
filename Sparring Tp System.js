@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.5
+ Version: 3.2.6
 
  Combat-Based Training (Sparring v3)
 
@@ -52,6 +52,9 @@
   - v3.2.5: /spar always shows Mentor Bond at top of help; CMI empty
     "$1-" no longer becomes "Unknown command"; reconcileMentorBond no
     longer wipes one-sided bonds (repairs them instead).
+  - v3.2.6: Friendly Fist heal chat uses ASCII only (no em-dash "?");
+    melee hit-activity window is shorter than ki so punch spars end
+    sooner when idle, while charged ki still has time to land.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -182,7 +185,10 @@ var MELEE_EFF = 1.00;
 
 /* Session / activity */
 var MAX_SPAR_DISTANCE = 30.0;
-var HIT_ACTIVITY_WINDOW_MS = 10000;    // was 6s — too short for charged ki
+/* Melee needs frequent trades; ki (esp. charged) needs a longer window. */
+var MELEE_HIT_ACTIVITY_WINDOW_MS = 4500;
+var KI_HIT_ACTIVITY_WINDOW_MS = 10000;
+var HIT_ACTIVITY_WINDOW_MS = KI_HIT_ACTIVITY_WINDOW_MS; /* legacy default / fallback */
 var SESSION_START_WINDOW_MS = 15000;
 var PAIR_RESTART_COOLDOWN_MS = 3000;
 var SESSION_GRACE_PERIOD_MS = 4000;
@@ -284,6 +290,7 @@ var K_GRACE_REASON = "spar.grace.reason";
 var K_GRACE_WARNED = "spar.grace.warned";
 var K_LAST_OUT_PARTNER = "spar.lastOut.partner";
 var K_LAST_OUT_TIME = "spar.lastOut.time";
+var K_LAST_OUT_KIND = "spar.lastOut.kind"; /* melee | ki */
 var K_LAST_IN_PARTNER = "spar.lastIn.partner";
 var K_LAST_IN_TIME = "spar.lastIn.time";
 var K_LAST_KI_OUT = "spar.lastKiOut.time";
@@ -1666,15 +1673,17 @@ function finishFriendlyFistHeal(healer, target) {
         var now = nowMs();
         putString(healer.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(target));
         putNumber(healer.getTempdata(), K_LAST_OUT_TIME, now);
+        putString(healer.getTempdata(), K_LAST_OUT_KIND, "ki");
         putString(target.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(healer));
         putNumber(target.getTempdata(), K_LAST_OUT_TIME, now);
+        putString(target.getTempdata(), K_LAST_OUT_KIND, "ki");
         clearGraceState(healer, target);
     } catch (eKeep) {}
 
     sendMessage(healer, sparText(
         sparColor("6"), "[Sparring] ",
         sparColor("a"), "Friendly Fist ",
-        sparColor("7"), "knockdown — healed ",
+        sparColor("7"), "knockdown - healed ",
         sparColor("f"), getPlayerName(target), sparColor("7"), "."
     ));
     sendMessage(target, sparText(
@@ -2128,6 +2137,7 @@ function clearSessionData(player) {
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
         K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_CLASH_UNTIL,
         K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_TP_PENDING_CLASH, K_LAST_HIT_KIND,
+        K_LAST_OUT_KIND,
         K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE,
         K_HP_SAMPLE, K_PENDING_SAMPLE, K_PENDING_ATK, K_PENDING_KI, K_PENDING_KI_KIND, K_PENDING_UNTIL,
         K_FF_KD_HEALED
@@ -2144,6 +2154,7 @@ function clearSelfHitTracking(player) {
     var temp = player.getTempdata();
     try { temp.put(K_LAST_OUT_PARTNER, ""); } catch (e) {}
     try { temp.put(K_LAST_IN_PARTNER, ""); } catch (e) {}
+    try { temp.put(K_LAST_OUT_KIND, ""); } catch (e2) {}
     putNumber(temp, K_LAST_OUT_TIME, 0);
     putNumber(temp, K_LAST_IN_TIME, 0);
 }
@@ -2208,7 +2219,7 @@ function startSession(a, b) {
             ));
             sendMessage(mentor, sparText(
                 sparColor("6"), "[Mentor Bond] ",
-                sparColor("7"), "Training your apprentice — you earn ",
+                sparColor("7"), "Training your apprentice - you earn ",
                 sparColor("a"), Math.floor(MENTOR_SHARE_PCT * 100), "%",
                 sparColor("7"), " of their spar TP."
             ));
@@ -2673,6 +2684,7 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     if (stampOut) {
         putString(aTemp, K_LAST_OUT_PARTNER, tName);
         putNumber(aTemp, K_LAST_OUT_TIME, now);
+        putString(aTemp, K_LAST_OUT_KIND, isKi ? "ki" : "melee");
         putString(tTemp, K_LAST_IN_PARTNER, aName);
         putNumber(tTemp, K_LAST_IN_TIME, now);
 
@@ -2702,10 +2714,19 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     startSession(attacker, target);
 }
 
+function hitActivityWindowMs(kind) {
+    var k = String(kind || "").toLowerCase();
+    if (k == "ki" || k == "beam" || k == "clash" || k == "charge") {
+        return KI_HIT_ACTIVITY_WINDOW_MS;
+    }
+    return MELEE_HIT_ACTIVITY_WINDOW_MS;
+}
+
 function hasRecentOutgoingHit(player, partnerName) {
     var temp = player.getTempdata();
     if (readString(temp, K_LAST_OUT_PARTNER, "").toLowerCase() != String(partnerName).toLowerCase()) return false;
-    return (nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0)) <= HIT_ACTIVITY_WINDOW_MS;
+    var age = nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0);
+    return age <= hitActivityWindowMs(readString(temp, K_LAST_OUT_KIND, "melee"));
 }
 
 /* ========================= LEADERBOARD / PROFILE ========================= */
@@ -2880,11 +2901,13 @@ function refreshClashCombatActivity(player, partner) {
     var bName = getPlayerName(partner);
 
     /* Keep hit-activity alive so the session timer cannot expire mid-clash.
-       Do not refresh movement — clash path already skips the move gate. */
+       Do not refresh movement - clash path already skips the move gate. */
     putString(aTemp, K_LAST_OUT_PARTNER, bName);
     putNumber(aTemp, K_LAST_OUT_TIME, now);
+    putString(aTemp, K_LAST_OUT_KIND, "ki");
     putString(bTemp, K_LAST_OUT_PARTNER, aName);
     putNumber(bTemp, K_LAST_OUT_TIME, now);
+    putString(bTemp, K_LAST_OUT_KIND, "ki");
 }
 
 /* Resolve a CNPC player into a java.util.UUID for DMZ clash APIs. */
@@ -4063,7 +4086,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.5] Mentor Bond on /spar + bond repair | BeamClashManager=" +
+            print("[Sparring v3.2.6] melee/ki activity windows + ASCII FF heal | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
