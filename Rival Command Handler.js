@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.14
+ Version: 4.6.15
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -11,6 +11,11 @@
  Gameplay stays in Rival System.js (Global Player).
  This file is the command display / action handler only -
  same split as Sparring TP System + Sparring Command Handler.
+
+ FIX (4.6.15 / 4.6.14):
+  /rival declare <player> is VISIBLE (notifies them).
+  /rival <player> alone is the silent Unknown path.
+  Older builds wrongly made both commands silent.
 
  TRIGGERS:
  200 = Rival help

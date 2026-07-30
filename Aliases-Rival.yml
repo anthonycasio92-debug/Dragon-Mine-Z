@@ -1,0 +1,69 @@
+# ============================================================
+# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.14+)
+# ============================================================
+# Intended flow:
+#   /rival <player>           -> silent Unknown (they see nothing)
+#   /rival declare <player>   -> VISIBLE declare (they are notified)
+#   /rival accept|decline     -> Mutual path
+#
+# Paste under your existing CustomAlias: section
+# (do NOT paste a second "CustomAlias:" root if one already exists).
+#
+# IMPORTANT: use asFakeOp! (asOp! does not fire triggers on this server)
+# Then: /cmi reload
+# ============================================================
+
+CustomAlias:
+  rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 201 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 202 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivaldecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 203 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalremove:
+    Cmds:
+    - asFakeOp! noppes script trigger 204 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivallist:
+    Cmds:
+    - asFakeOp! noppes script trigger 205 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 206 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivaltop:
+    Cmds:
+    - asFakeOp! noppes script trigger 220 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalhelp:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] help
+    AddTabs: true
+    ExactMatch: true
