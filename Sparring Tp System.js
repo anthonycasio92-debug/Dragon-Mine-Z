@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.4
+ Version: 3.2.5
 
  Combat-Based Training (Sparring v3)
 
@@ -49,6 +49,9 @@
   - v3.2.4: Friendly Fist spar heal rewritten — detect KD or ~1 HP, heal
     from either fighter's tick, mark pending on FF hits, and do not require
     Java boolean === true (Rhino-safe).
+  - v3.2.5: /spar always shows Mentor Bond at top of help; CMI empty
+    "$1-" no longer becomes "Unknown command"; reconcileMentorBond no
+    longer wipes one-sided bonds (repairs them instead).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -1110,19 +1113,37 @@ function reconcileMentorBond(player) {
     if (stored == null) return;
     var self = getPlayerName(player);
 
+    /*
+     * Only clear on a real conflict (other side names a different partner).
+     * If the other side is blank, repair — do NOT wipe. Old reconcile wiped
+     * one-sided bonds whenever the partner was online, so /spar looked like
+     * it "lost" Mentor Bond.
+     */
     var app = getBondApprenticeName(player);
     if (app != "") {
         var ap = getPlayerByName(player, app);
-        if (ap != null && !namesMatch(getBondMentorName(ap), self)) {
-            putString(stored, S_APPRENTICE_NAME, "");
+        if (ap != null) {
+            var theirMentor = getBondMentorName(ap);
+            if (theirMentor != "" && !namesMatch(theirMentor, self)) {
+                putString(stored, S_APPRENTICE_NAME, "");
+            } else if (theirMentor == "") {
+                var apStore = bondStored(ap);
+                if (apStore != null) putString(apStore, S_MENTOR_NAME, self);
+            }
         }
     }
 
     var ment = getBondMentorName(player);
     if (ment != "") {
         var m = getPlayerByName(player, ment);
-        if (m != null && !namesMatch(getBondApprenticeName(m), self)) {
-            putString(stored, S_MENTOR_NAME, "");
+        if (m != null) {
+            var theirApp = getBondApprenticeName(m);
+            if (theirApp != "" && !namesMatch(theirApp, self)) {
+                putString(stored, S_MENTOR_NAME, "");
+            } else if (theirApp == "") {
+                var mStore = bondStored(m);
+                if (mStore != null) putString(mStore, S_APPRENTICE_NAME, self);
+            }
         }
     }
 }
@@ -3461,11 +3482,19 @@ function died(event) {
 
 /* ========================= /spar COMMANDS (trigger) ========================= */
 
+function sparIsEmptyArgToken(s) {
+    if (s == null) return true;
+    s = String(s).replace(/^\s+|\s+$/g, "");
+    if (s == "") return true;
+    var low = s.toLowerCase();
+    return low == "$1-" || low == "$1" || low == "null" || low == "undefined" || low == "none";
+}
+
 function sparCmdArgAt(event, index) {
     try {
         if (event != null && event.arguments != null && event.arguments.length > index) {
             var value = String(event.arguments[index]).replace(/^\s+|\s+$/g, "");
-            if (value == "" || value.toLowerCase() == "null") return "";
+            if (sparIsEmptyArgToken(value)) return "";
             return value;
         }
     } catch (e) {}
@@ -3478,7 +3507,7 @@ function sparCmdArgsFrom(event, start) {
         if (event.arguments != null) {
             for (var i = start; i < event.arguments.length; i++) {
                 var piece = String(event.arguments[i]).replace(/^\s+|\s+$/g, "");
-                if (piece == "" || piece.toLowerCase() == "null") continue;
+                if (sparIsEmptyArgToken(piece)) continue;
                 out.push(piece);
             }
         }
@@ -3555,29 +3584,41 @@ function sparCmdHelp(player) {
         sparColor("7") + "Style" + sparColor("8") + "  |  " +
         sparColor("7") + "Mentor");
     uiBlank(player);
+
+    /* Mentor Bond first so /spar always surfaces it. */
+    uiSection(player, "Your Mentor Bond");
+    try {
+        try { reconcileMentorBond(player); } catch (eR) {}
+        var helpMentor = getBondMentorName(player);
+        var helpApp = getBondApprenticeName(player);
+        uiProp(player, "Mentor", helpMentor != "" ? sparColor("f") + helpMentor : sparColor("8") + "none");
+        uiProp(player, "Apprentice", helpApp != "" ? sparColor("f") + helpApp : sparColor("8") + "none");
+        var helpInvite = readBondInvite(player);
+        if (helpInvite != null) {
+            if (helpInvite.kind == "mentor") {
+                sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                    " wants you as their Mentor.");
+            } else {
+                sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                    " wants you as their Apprentice.");
+            }
+            sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar mentor accept" +
+                sparColor("8") + "  or  " + sparColor("e") + "/spar mentor deny");
+        }
+    } catch (eBond) {
+        uiProp(player, "Mentor", sparColor("8") + "none");
+        uiProp(player, "Apprentice", sparColor("8") + "none");
+    }
+    sendMessage(player, sparColor("8") + "Share  " + sparColor("a") +
+        Math.floor(MENTOR_SHARE_PCT * 100) + "%" + sparColor("8") + " to mentor  |  Bonus  " +
+        sparColor("a") + "+" + Math.floor(MENTOR_SPAR_BONUS_PCT * 100) + "%" +
+        sparColor("8") + " with mentor");
+    uiBlank(player);
+
     uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
-    uiBlank(player);
-    uiSection(player, "Your Mentor Bond");
-    try { reconcileMentorBond(player); } catch (eR) {}
-    var helpMentor = getBondMentorName(player);
-    var helpApp = getBondApprenticeName(player);
-    uiProp(player, "Mentor", helpMentor != "" ? sparColor("f") + helpMentor : sparColor("8") + "none");
-    uiProp(player, "Apprentice", helpApp != "" ? sparColor("f") + helpApp : sparColor("8") + "none");
-    var helpInvite = readBondInvite(player);
-    if (helpInvite != null) {
-        if (helpInvite.kind == "mentor") {
-            sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
-                " wants you as their Mentor.");
-        } else {
-            sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
-                " wants you as their Apprentice.");
-        }
-        sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar mentor accept" +
-            sparColor("8") + "  or  " + sparColor("e") + "/spar mentor deny");
-    }
     uiBlank(player);
     uiSection(player, "Mentor Commands");
     uiCmd(player, "/spar mentor", "bond status");
@@ -3761,7 +3802,14 @@ function claimSparCommand(player) {
 }
 
 function sparCmdRouteParts(player, parts) {
-    if (parts == null || parts.length == 0) {
+    if (parts == null) parts = [];
+
+    /* CMI bare /spar often leaves a literal "$1-" — treat as help. */
+    if (parts.length == 1 && sparIsEmptyArgToken(parts[0])) {
+        parts = [];
+    }
+
+    if (parts.length == 0) {
         sparCmdHelp(player);
         return;
     }
@@ -4015,7 +4063,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.4] FF heal fix + Mentor Bond | BeamClashManager=" +
+            print("[Sparring v3.2.5] Mentor Bond on /spar + bond repair | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));

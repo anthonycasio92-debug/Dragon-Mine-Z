@@ -1,14 +1,15 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases (v3.2.2) — OPTIONAL
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3.2.5) — OPTIONAL
 # ============================================================
-# Sparring Tp System.js v3.2.2+ already handles:
+# Sparring Tp System.js v3.2.5+ already handles:
 #   /spar ...   (Bukkit slash hook, no CMI needed)
 #
 # Paste these ONLY if you still want CMI aliases / tab-complete.
 # Merge the keys under your existing CustomAlias: section
 # (do NOT paste a second "CustomAlias:" root if one already exists).
 #
-# Then: /cmi reload
+# Bare /spar with "$1-" empty is treated as help in scripts
+# (v3.2.5+ / Handler v3.1.3+). Still run /cmi reload after paste.
 # ============================================================
 
 CustomAlias:

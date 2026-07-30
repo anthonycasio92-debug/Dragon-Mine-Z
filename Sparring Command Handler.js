@@ -1,17 +1,20 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.1.2
+ Version: 3.1.3
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.1.2+):
+ NOTE (v3.1.3+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
   Help lists /spar only (no .spar / !spar / ./spar).
+  Mentor Bond is shown at the top of /spar help.
+  CMI empty "$1-" is treated as bare /spar (help).
+  reconcileMentorBond repairs one-sided bonds instead of wiping.
   Mentor Bond commands work here too (same storeddata keys).
   Non-spar trigger ids are ignored (do not claim dedupe lock).
   Sparring Tp System.js (Global Player) also handles /spar
@@ -577,18 +580,34 @@ function reconcileMentorBond(player) {
     var stored = bondStored(player);
     if (stored == null) return;
     var self = nameOf(player);
+    /*
+     * Only clear on conflict (other side names someone else).
+     * Blank other-side = repair, do not wipe (v3.1.3).
+     */
     var app = getBondApprenticeName(player);
     if (app != "") {
         var ap = getOnlinePlayerByName(app);
-        if (ap != null && !namesMatch(getBondMentorName(ap), self)) {
-            putString(stored, S_APPRENTICE_NAME, "");
+        if (ap != null) {
+            var theirMentor = getBondMentorName(ap);
+            if (theirMentor != "" && !namesMatch(theirMentor, self)) {
+                putString(stored, S_APPRENTICE_NAME, "");
+            } else if (theirMentor == "") {
+                var apStore = bondStored(ap);
+                if (apStore != null) putString(apStore, S_MENTOR_NAME, self);
+            }
         }
     }
     var ment = getBondMentorName(player);
     if (ment != "") {
         var m = getOnlinePlayerByName(ment);
-        if (m != null && !namesMatch(getBondApprenticeName(m), self)) {
-            putString(stored, S_MENTOR_NAME, "");
+        if (m != null) {
+            var theirApp = getBondApprenticeName(m);
+            if (theirApp != "" && !namesMatch(theirApp, self)) {
+                putString(stored, S_MENTOR_NAME, "");
+            } else if (theirApp == "") {
+                var mStore = bondStored(m);
+                if (mStore != null) putString(mStore, S_APPRENTICE_NAME, self);
+            }
         }
     }
 }
@@ -876,13 +895,24 @@ function cmdHelp(player) {
         C + "7Mentor"
     );
     uiBlank(player);
+
+    /* Mentor Bond first so /spar always surfaces it. */
+    uiSection(player, "Your Mentor Bond");
+    try {
+        showBondOnCard(player);
+    } catch (eBond) {
+        uiProp(player, "Mentor", C + "8none");
+        uiProp(player, "Apprentice", C + "8none");
+    }
+    msg(player, C + "8Share  " + C + "a" + Math.floor(MENTOR_SHARE_PCT * 100) + "%" +
+        C + "8 to mentor  |  Bonus  " + C + "a+" + Math.floor(MENTOR_SPAR_BONUS_PCT * 100) + "%" +
+        C + "8 with mentor");
+    uiBlank(player);
+
     uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
-    uiBlank(player);
-    uiSection(player, "Your Mentor Bond");
-    showBondOnCard(player);
     uiBlank(player);
     uiSection(player, "Mentor Commands");
     uiCmd(player, "/spar mentor", "bond status");
@@ -1002,6 +1032,14 @@ function showTop(player, category) {
 
 /* ========================= ROUTER ========================= */
 
+function isEmptyArgToken(s) {
+    if (s == null) return true;
+    s = str(s).replace(/^\s+|\s+$/g, "");
+    if (s == "") return true;
+    var low = lower(s);
+    return low == "$1-" || low == "$1" || low == "null" || low == "undefined" || low == "none";
+}
+
 function argAt(event, index) {
     try {
         if (
@@ -1010,7 +1048,7 @@ function argAt(event, index) {
             event.arguments.length > index
         ) {
             var piece = str(event.arguments[index]).replace(/^\s+|\s+$/g, "");
-            if (piece == "" || lower(piece) == "null") return "";
+            if (isEmptyArgToken(piece)) return "";
             return piece;
         }
     } catch (e) {}
@@ -1023,7 +1061,7 @@ function argsFrom(event, start) {
         if (event.arguments != null) {
             for (var i = start; i < event.arguments.length; i++) {
                 var piece = str(event.arguments[i]).replace(/^\s+|\s+$/g, "");
-                if (piece == "" || lower(piece) == "null") continue;
+                if (isEmptyArgToken(piece)) continue;
                 out.push(piece);
             }
         }
@@ -1038,6 +1076,17 @@ function argsFrom(event, start) {
 */
 function routeSparSub(player, event) {
     var parts = argsFrom(event, 1);
+
+    /*
+     * CMI sometimes leaves a literal "$1-" / "null" when /spar has no args.
+     * Treat those as bare /spar (help), not unknown commands.
+     */
+    if (parts.length == 1) {
+        var only = lower(parts[0]);
+        if (only == "" || only == "$1-" || only == "$1" || only == "null" || only == "undefined") {
+            parts = [];
+        }
+    }
 
     if (parts.length == 0) {
         cmdHelp(player);
