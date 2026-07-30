@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.6
+ Version: 3.2.7
 
  Combat-Based Training (Sparring v3)
 
@@ -55,6 +55,8 @@
   - v3.2.6: Friendly Fist heal chat uses ASCII only (no em-dash "?");
     melee hit-activity window is shorter than ki so punch spars end
     sooner when idle, while charged ki still has time to land.
+  - v3.2.7: Friendly Fist spar heal only on knockdown / lethal ~1 HP —
+    no longer full-heals on every FF hit.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -1572,19 +1574,31 @@ function isPlayerKnockedDown(player) {
 }
 
 /*
- * Friendly Fist lethal hits leave the victim at ~1 HP + knocked down.
- * Detect either signal so heal still fires if the KD flag is late/stale.
+ * Friendly Fist lethal hits leave the victim knocked down (often ~1 HP).
+ * Heal ONLY on real knockdown / lethal leave — never on a normal FF hit.
  */
+function getPlayerHealthSafe(player) {
+    if (player == null) return 0;
+    var health = 0;
+    try { health = Number(player.getHealth()); } catch (e0) { health = 0; }
+    if (isNaN(health) || health <= 0) {
+        try { health = Number(player.getMCEntity().getHealth()); } catch (e1) { health = 0; }
+    }
+    if (isNaN(health) || health < 0) health = 0;
+    return health;
+}
+
+function isFriendlyFistLethalHp(player) {
+    var health = getPlayerHealthSafe(player);
+    return health > 0 && health <= 1.5;
+}
+
 function needsFriendlyFistHeal(player) {
     if (player == null) return false;
     if (isPlayerKnockedDown(player)) return true;
-    try {
-        var health = Number(player.getHealth());
-        if (isNaN(health) || health <= 0) {
-            try { health = Number(player.getMCEntity().getHealth()); } catch (e1) { health = 0; }
-        }
-        if (health > 0 && health <= 1.5) return true;
-    } catch (e) {}
+    /* ~1 HP alone is not enough — DMZ fighters can sit low without a KD.
+     * Only treat it as FF-lethal when a knockdown/death path armed pending. */
+    if (hasFriendlyFistHealPending(player) && isFriendlyFistLethalHp(player)) return true;
     return false;
 }
 
@@ -1599,6 +1613,9 @@ function healSparPlayerFull(player) {
             try { maxH = Number(mc.getMaxHealth()); } catch (e2) {}
         }
         if (!(maxH > 0)) maxH = 20;
+
+        var beforeKd = isPlayerKnockedDown(player);
+        var beforeHp = getPlayerHealthSafe(player);
 
         /* Restore vanilla health first. */
         try { player.setHealth(maxH); } catch (e3) {}
@@ -1622,16 +1639,12 @@ function healSparPlayerFull(player) {
         }
         sampleHealthPool(player);
 
-        var nowH = 0;
-        try { nowH = Number(player.getHealth()); } catch (e11) {}
-        if (!(nowH > 0) && mc != null) {
-            try { nowH = Number(mc.getHealth()); } catch (e12) {}
-        }
-        /*
-         * Success if HP is restored OR knockdown cleared.
-         * Do not require both — DMZ KD clear can lag a tick behind.
-         */
-        return nowH >= Math.max(2, maxH * 0.5) || !isPlayerKnockedDown(player);
+        var nowH = getPlayerHealthSafe(player);
+        var healthy = nowH >= Math.max(2, maxH * 0.5);
+        var clearedKd = beforeKd && !isPlayerKnockedDown(player);
+        var raisedFromLethal = beforeHp > 0 && beforeHp <= 1.5 && healthy;
+        /* Must have actually recovered from KD / lethal HP — never "succeed" on a full-HP fighter. */
+        return healthy && (clearedKd || raisedFromLethal || beforeKd);
     } catch (e) {
         return false;
     }
@@ -1640,7 +1653,8 @@ function healSparPlayerFull(player) {
 function markFriendlyFistHealPending(victim) {
     if (victim == null) return;
     try {
-        putNumber(victim.getTempdata(), "spar.ff.healPendingUntil", nowMs() + 500);
+        /* Short retry window after a real KD/lethal — not a per-hit arm. */
+        putNumber(victim.getTempdata(), "spar.ff.healPendingUntil", nowMs() + 1500);
     } catch (e) {}
 }
 
@@ -1655,11 +1669,12 @@ function hasFriendlyFistHealPending(victim) {
 
 function finishFriendlyFistHeal(healer, target) {
     if (healer == null || target == null) return false;
+    if (!needsFriendlyFistHeal(target)) return false;
     var tTemp = target.getTempdata();
     if (readString(tTemp, K_FF_KD_HEALED, "0") == "1") return false;
 
     if (!healSparPlayerFull(target)) {
-        /* Still mark pending so we retry next ticks while KD/low HP lasts. */
+        /* Retry while they remain knocked down / lethal. */
         markFriendlyFistHealPending(target);
         return false;
     }
@@ -1702,25 +1717,24 @@ function processFriendlyFistKnockdownHeal(player, partner) {
     var pTemp = partner.getTempdata();
     var aTemp = player.getTempdata();
 
-    /* Reset heal latch once they are back on their feet / healthy. */
-    if (!needsFriendlyFistHeal(partner) && !hasFriendlyFistHealPending(partner)) {
+    /* Reset heal latch once they are clearly recovered. */
+    if (!needsFriendlyFistHeal(partner) && !isPlayerKnockedDown(partner) &&
+        !isFriendlyFistLethalHp(partner)) {
         putString(pTemp, K_FF_KD_HEALED, "0");
     }
-    if (!needsFriendlyFistHeal(player) && !hasFriendlyFistHealPending(player)) {
+    if (!needsFriendlyFistHeal(player) && !isPlayerKnockedDown(player) &&
+        !isFriendlyFistLethalHp(player)) {
         putString(aTemp, K_FF_KD_HEALED, "0");
     }
 
     /*
-     * Either fighter can drive the heal:
-     *  - I have Friendly Fist and partner is KD / ~1 HP
-     *  - Partner has Friendly Fist and I am KD / ~1 HP
+     * Knockdown-only: healer must have Friendly Fist ON, and the partner
+     * must actually be knocked down / FF-lethal. Pending alone never heals.
      */
-    if ((needsFriendlyFistHeal(partner) || hasFriendlyFistHealPending(partner)) &&
-        isFriendlyFistOn(player)) {
+    if (needsFriendlyFistHeal(partner) && isFriendlyFistOn(player)) {
         finishFriendlyFistHeal(player, partner);
     }
-    if ((needsFriendlyFistHeal(player) || hasFriendlyFistHealPending(player)) &&
-        isFriendlyFistOn(partner)) {
+    if (needsFriendlyFistHeal(player) && isFriendlyFistOn(partner)) {
         finishFriendlyFistHeal(partner, player);
     }
 }
@@ -3125,10 +3139,14 @@ function processSession(player) {
 
     if (!isAlive(player) || !isAlive(partner)) {
         /*
-         * If Friendly Fist should have saved them, retry once more before
-         * treating this as a real defeat.
+         * If Friendly Fist should have saved them, arm lethal pending and
+         * retry once more before treating this as a real defeat.
          */
-        try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf2) {}
+        if (isFriendlyFistOn(player) || isFriendlyFistOn(partner)) {
+            if (isAlive(player) && !isAlive(partner)) markFriendlyFistHealPending(partner);
+            if (isAlive(partner) && !isAlive(player)) markFriendlyFistHealPending(player);
+            try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf2) {}
+        }
         if (!isAlive(player) || !isAlive(partner)) {
             if (!(isFriendlyFistOn(player) || isFriendlyFistOn(partner))) {
                 endSession(player, partner, "a fighter was defeated");
@@ -3405,9 +3423,7 @@ function damagedEntity(event) {
         if (isSessionActive(attacker) && isSessionActive(target)) {
             if (getPartnerName(attacker).toLowerCase() == getPlayerName(target).toLowerCase()) {
                 queueReceivedHit(target, attacker, ki, kiKind);
-                if (isFriendlyFistOn(attacker)) {
-                    markFriendlyFistHealPending(target);
-                }
+                /* Do NOT arm FF heal on every hit — only on real knockdown (tick/died). */
             }
             if (ki) {
                 try { updateBeamClashState(attacker, target); } catch (eClash) {}
@@ -3437,9 +3453,7 @@ function damaged(event) {
             var kiKind = ki ? classifyKiType(event) : "melee";
             /* Snapshot pool now; tick awards from real HP/absorption lost. */
             queueReceivedHit(victim, attacker, ki, kiKind);
-            if (isFriendlyFistOn(attacker)) {
-                markFriendlyFistHealPending(victim);
-            }
+            /* FF heal is knockdown-only (tick / died), not per-hit. */
 
             if (isPlayerBlocking(victim)) {
                 var temp = victim.getTempdata();
@@ -4086,7 +4100,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.6] melee/ki activity windows + ASCII FF heal | BeamClashManager=" +
+            print("[Sparring v3.2.7] FF heal knockdown-only | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
