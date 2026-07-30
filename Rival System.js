@@ -1,11 +1,14 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.6
+ Version: 4.6.7
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Challenge damage uses HP/absorption actually lost (damage received),
+   not CNPC LivingHurtEvent amount (pre-mitigation DMZ damage).
+   Scores only from the victim damaged event (no attacker double-count).
  - Rival path synced with Command Handler: silent /rival = Unknown;
    both silent = Declared; /rival declare = Mutual path;
    Nemesis after 3+ death losses (not damage/timer losses).
@@ -2774,6 +2777,18 @@ var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
+/*
+ * CNPC damaged / damagedEntity fire on LivingHurtEvent with the
+ * pre-mitigation amount (DMZ attack damage). Challenge scoring must
+ * use health actually lost after armor / DMZ defense instead.
+ */
+var CH_HP_SAMPLE_KEY = "rival.v4.challenge.hpPool";
+var CH_PENDING_SAMPLE_KEY = "rival.v4.challenge.pendingSample";
+var CH_PENDING_ATK_KEY = "rival.v4.challenge.pendingAtk";
+var CH_PENDING_KI_KEY = "rival.v4.challenge.pendingKi";
+var CH_PENDING_UNTIL_KEY = "rival.v4.challenge.pendingUntil";
+var CH_PENDING_RESOLVE_MS = 75;
+
 /* Server-wide rival battle display */
 var CH_BROADCAST_ENABLED = true;
 var CH_BROADCAST_SCORE_MS = 15 * 1000;
@@ -4087,6 +4102,133 @@ function chRecordHit(session, attackerUuid, victimUuid, damage, isKi) {
     session.combat[victimUuid].combo = 0;
 }
 
+/* Health + absorption = real damage-received pool. */
+function chGetHealthPool(player) {
+    var health = 0;
+    var absorption = 0;
+    try { health = Number(player.getHealth()); } catch (e1) { health = 0; }
+    try {
+        if (typeof player.getAbsorptionAmount == "function") {
+            absorption = Number(player.getAbsorptionAmount());
+        } else if (typeof player.getAbsorption == "function") {
+            absorption = Number(player.getAbsorption());
+        }
+    } catch (e2) {}
+    try {
+        var mc = player.getMCEntity();
+        if (mc != null) {
+            if (!(absorption > 0)) {
+                try { absorption = Number(mc.getAbsorptionAmount()); } catch (e3) {}
+            }
+            if (!(health > 0)) {
+                try { health = Number(mc.getHealth()); } catch (e4) {}
+            }
+        }
+    } catch (e5) {}
+    if (isNaN(health) || health < 0) health = 0;
+    if (isNaN(absorption) || absorption < 0) absorption = 0;
+    return health + absorption;
+}
+
+function chTempHas(temp, key) {
+    try { return temp != null && temp.has(key); } catch (e) { return false; }
+}
+
+function chTempGetNumber(temp, key, fallback) {
+    try {
+        if (temp != null && temp.has(key)) return chNumber(temp.get(key), fallback);
+    } catch (e) {}
+    return fallback;
+}
+
+function chTempPut(temp, key, value) {
+    try { temp.put(key, chString(value)); } catch (e) {}
+}
+
+function chTempClear(temp, key) {
+    try {
+        if (temp != null && temp.has(key)) temp.remove(key);
+    } catch (e) {
+        try { temp.put(key, ""); } catch (e2) {}
+    }
+}
+
+function chSampleHealthPool(player) {
+    if (player == null) return;
+    try {
+        chTempPut(player.getTempdata(), CH_HP_SAMPLE_KEY, chGetHealthPool(player));
+    } catch (e) {}
+}
+
+function chClearPendingReceived(player) {
+    if (player == null) return;
+    try {
+        var temp = player.getTempdata();
+        chTempClear(temp, CH_PENDING_SAMPLE_KEY);
+        chTempClear(temp, CH_PENDING_ATK_KEY);
+        chTempClear(temp, CH_PENDING_KI_KEY);
+        chTempClear(temp, CH_PENDING_UNTIL_KEY);
+    } catch (e) {}
+}
+
+/*
+ * Queue a received-damage resolve. LivingHurtEvent has not applied
+ * mitigation yet, so we snapshot the pool and measure the drop next tick.
+ */
+function chQueueReceivedHit(victim, attackerUuid, isKi) {
+    if (victim == null || attackerUuid == null || attackerUuid == "") return;
+    try {
+        var temp = victim.getTempdata();
+        var pool = chGetHealthPool(victim);
+        if (!chTempHas(temp, CH_PENDING_SAMPLE_KEY) ||
+            chTempGetNumber(temp, CH_PENDING_SAMPLE_KEY, -1) < 0) {
+            chTempPut(temp, CH_PENDING_SAMPLE_KEY, pool);
+        }
+        chTempPut(temp, CH_PENDING_ATK_KEY, attackerUuid);
+        chTempPut(temp, CH_PENDING_KI_KEY, isKi === true ? "1" : "0");
+        chTempPut(temp, CH_PENDING_UNTIL_KEY, chNow() + CH_PENDING_RESOLVE_MS);
+    } catch (e) {}
+}
+
+/* Apply pending HP-loss as challenge damage dealt by the attacker. */
+function chResolvePendingReceived(player, db) {
+    if (player == null || db == null) return false;
+    var temp = null;
+    try { temp = player.getTempdata(); } catch (e0) { return false; }
+    if (!chTempHas(temp, CH_PENDING_UNTIL_KEY)) return false;
+
+    var until = chTempGetNumber(temp, CH_PENDING_UNTIL_KEY, 0);
+    if (chNow() < until) return false;
+
+    var sample = chTempGetNumber(temp, CH_PENDING_SAMPLE_KEY, -1);
+    var atkUuid = "";
+    try { atkUuid = chString(temp.get(CH_PENDING_ATK_KEY)); } catch (e1) { atkUuid = ""; }
+    var isKi = false;
+    try { isKi = chString(temp.get(CH_PENDING_KI_KEY)) == "1"; } catch (e2) {}
+
+    chClearPendingReceived(player);
+
+    if (sample < 0 || atkUuid == "") {
+        chSampleHealthPool(player);
+        return false;
+    }
+
+    var nowPool = chGetHealthPool(player);
+    var received = sample - nowPool;
+    chSampleHealthPool(player);
+
+    if (!(received > 0.01)) return false;
+
+    var vicUuid = chUuid(player);
+    var session = chGetSession(db, vicUuid);
+    if (session == null || session.state !== "active") return false;
+    if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return false;
+    if (vicUuid !== session.challengerUuid && vicUuid !== session.opponentUuid) return false;
+
+    chRecordHit(session, atkUuid, vicUuid, received, isKi);
+    return true;
+}
+
 /* ========================= EVENTS ========================= */
 
 function rivalChInit(event) {
@@ -4105,6 +4247,25 @@ function rivalChTick(event) {
 
         var temp = player.getTempdata();
         var now = chNow();
+
+        /*
+         * Resolve received-damage before the challenge tick throttle so
+         * HP-loss samples are applied on the first tick after the hit.
+         */
+        try {
+            var earlyDb = chLoadChallengeDb(player);
+            if (chResolvePendingReceived(player, earlyDb)) {
+                chSaveChallengeDb(player, earlyDb);
+            } else {
+                var earlySession = chGetSession(earlyDb, chUuid(player));
+                if (earlySession != null && earlySession.state === "active") {
+                    if (!chTempHas(temp, CH_PENDING_UNTIL_KEY)) {
+                        chSampleHealthPool(player);
+                    }
+                }
+            }
+        } catch (eHp) {}
+
         var last = 0;
         try {
             if (temp.has("rival.v4.challenge.tick")) last = chNumber(temp.get("rival.v4.challenge.tick"), 0);
@@ -4200,25 +4361,12 @@ function rivalChTick(event) {
 }
 
 function rivalChDamagedEntity(event) {
-    try {
-        var attacker = event.player;
-        var target = event.target;
-        if (!chIsPlayer(attacker) || !chIsPlayer(target)) return;
-
-        var db = chLoadChallengeDb(attacker);
-        var session = chGetSession(db, chUuid(attacker));
-        if (session === null || session.state !== "active") return;
-
-        var atkUuid = chUuid(attacker);
-        var tgtUuid = chUuid(target);
-        if (tgtUuid !== session.challengerUuid && tgtUuid !== session.opponentUuid) return;
-        if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
-
-        chRecordHit(session, atkUuid, tgtUuid, Number(event.damage), chIsKiDamage(event));
-        chSaveChallengeDb(attacker, db);
-    } catch (error) {
-        chLog("damagedEntity failed: " + error);
-    }
+    /*
+     * Intentionally no scoring here.
+     * DamagedEntityEvent uses LivingHurtEvent pre-mitigation DMZ damage and
+     * previously double-counted with the victim damaged event.
+     * Challenge damage is measured as HP/absorption actually lost on the victim.
+     */
 }
 
 function rivalChDamaged(event) {
@@ -4239,8 +4387,8 @@ function rivalChDamaged(event) {
         if (atkUuid !== session.challengerUuid && atkUuid !== session.opponentUuid) return;
         if (vicUuid !== session.challengerUuid && vicUuid !== session.opponentUuid) return;
 
-        chRecordHit(session, atkUuid, vicUuid, Number(event.damage), chIsKiDamage(event));
-        chSaveChallengeDb(victim, db);
+        /* Snapshot pool now (pre-mitigation); tick resolves real HP lost. */
+        chQueueReceivedHit(victim, atkUuid, chIsKiDamage(event));
     } catch (error) {
         chLog("damaged failed: " + error);
     }
