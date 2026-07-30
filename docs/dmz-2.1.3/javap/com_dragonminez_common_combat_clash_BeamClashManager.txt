@@ -1,0 +1,8 @@
+Compiled from "BeamClashManager.java"
+public class com.dragonminez.common.combat.clash.BeamClashManager {
+  public com.dragonminez.common.combat.clash.BeamClashManager();
+  public static void onLevelTick(net.minecraftforge.event.TickEvent$LevelTickEvent);
+  public static boolean isClashing(java.util.UUID);
+  public static void handlePlayerPress(net.minecraft.server.level.ServerPlayer);
+  public static void onClashingHurt(net.minecraftforge.event.entity.living.LivingAttackEvent);
+}

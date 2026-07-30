@@ -1,0 +1,33 @@
+Compiled from "KiLaserEntity.java"
+public class com.dragonminez.common.init.entities.ki.KiLaserEntity extends com.dragonminez.common.init.entities.ki.AbstractKiProjectile {
+  public com.dragonminez.common.init.entities.ki.KiLaserEntity(net.minecraft.world.entity.EntityType<? extends net.minecraft.world.entity.projectile.Projectile>, net.minecraft.world.level.Level);
+  public com.dragonminez.common.init.entities.ki.KiLaserEntity(net.minecraft.world.level.Level, net.minecraft.world.entity.LivingEntity);
+  public void setupKiLaser(net.minecraft.world.entity.LivingEntity, float, float, int, int, int, int);
+  public void setupKiLaser(net.minecraft.world.entity.LivingEntity, float, float, int, int, int);
+  public void setupKiLaser(net.minecraft.world.entity.LivingEntity, float, float, int, int);
+  public void setupKiDodonpa(net.minecraft.world.entity.LivingEntity, float, float, int, int);
+  public void setupKiDodonpa(net.minecraft.world.entity.LivingEntity, float, float, int);
+  public void setupKiMakkankosanpo(net.minecraft.world.entity.LivingEntity, float, float, int, int);
+  public void setupKiMakkankosanpo(net.minecraft.world.entity.LivingEntity, float, float, int);
+  public void setupKiLaserPlayer(net.minecraft.world.entity.LivingEntity, float, float, int, int, int);
+  public void setupKiLaserPlayer(net.minecraft.world.entity.LivingEntity, float, float, int, int);
+  public void setupKiMakkankosanpoPlayer(net.minecraft.world.entity.LivingEntity, float, float, int);
+  public void setupKiMakkankosanpoPlayer(net.minecraft.world.entity.LivingEntity, float, float);
+  public void setupKiDodonpaPlayer(net.minecraft.world.entity.LivingEntity, float, float, int);
+  public void setupKiBeamPlayer(net.minecraft.world.entity.LivingEntity, float, float, int, int, int);
+  public void setupKiBeamPlayer(net.minecraft.world.entity.LivingEntity, float, float, int, int);
+  public void setupKiDodonpaPlayer(net.minecraft.world.entity.LivingEntity, float, float);
+  public void fireHability(int);
+  public int getMaxHits();
+  public com.dragonminez.common.init.entities.ki.AbstractKiProjectile$ClashRole getClashRole();
+  public float getClashYaw();
+  public float getClashPitch();
+  public float getClashBeamLength();
+  public float getBeamLength();
+  public float getFixedYaw();
+  public float getFixedPitch();
+  public void setCastTime(int);
+  public int getCastTime();
+  public void setCastOffsets(float, float, float);
+  public void m_8119_();
+}

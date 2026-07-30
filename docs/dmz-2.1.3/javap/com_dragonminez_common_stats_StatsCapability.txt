@@ -1,0 +1,13 @@
+Compiled from "StatsCapability.java"
+public class com.dragonminez.common.stats.StatsCapability {
+  public static final net.minecraftforge.common.capabilities.Capability<com.dragonminez.common.stats.StatsData> INSTANCE;
+  public com.dragonminez.common.stats.StatsCapability();
+  public static void clearClientCache();
+  public static void onRegisterCapabilities(net.minecraftforge.common.capabilities.RegisterCapabilitiesEvent);
+  public static void onAttachCapabilities(net.minecraftforge.event.AttachCapabilitiesEvent<net.minecraft.world.entity.Entity>);
+  public static void onPlayerClone(net.minecraftforge.event.entity.player.PlayerEvent$Clone);
+  public static void onPlayerLogin(net.minecraftforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent);
+  public static void onPlayerTick(net.minecraftforge.event.TickEvent$PlayerTickEvent);
+  public static void onPlayerRespawn(net.minecraftforge.event.entity.player.PlayerEvent$PlayerRespawnEvent);
+  public static void onPlayerChangedDimension(net.minecraftforge.event.entity.player.PlayerEvent$PlayerChangedDimensionEvent);
+}

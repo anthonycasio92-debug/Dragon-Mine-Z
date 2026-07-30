@@ -1,0 +1,8 @@
+Compiled from "FlightModeC2S.java"
+public class com.dragonminez.common.network.C2S.FlightModeC2S {
+  public com.dragonminez.common.network.C2S.FlightModeC2S();
+  public com.dragonminez.common.network.C2S.FlightModeC2S(net.minecraft.network.FriendlyByteBuf);
+  public static void encode(com.dragonminez.common.network.C2S.FlightModeC2S, net.minecraft.network.FriendlyByteBuf);
+  public static com.dragonminez.common.network.C2S.FlightModeC2S decode(net.minecraft.network.FriendlyByteBuf);
+  public static void handle(com.dragonminez.common.network.C2S.FlightModeC2S, java.util.function.Supplier<net.minecraftforge.network.NetworkEvent$Context>);
+}

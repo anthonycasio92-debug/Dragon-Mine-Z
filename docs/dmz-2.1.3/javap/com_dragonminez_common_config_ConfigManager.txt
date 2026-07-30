@@ -1,0 +1,45 @@
+Compiled from "ConfigManager.java"
+public class com.dragonminez.common.config.ConfigManager {
+  public static final java.lang.String CONFIG_VERSION;
+  public static final java.lang.String CLIENT_ONLY_CONFIG;
+  public com.dragonminez.common.config.ConfigManager();
+  public static void initialize();
+  public static void reload();
+  public static boolean isDefaultRace(java.lang.String);
+  public static com.dragonminez.common.config.RaceStatsConfig getRaceStats(java.lang.String);
+  public static com.dragonminez.common.config.RaceCharacterConfig getRaceCharacter(java.lang.String);
+  public static java.util.List<java.lang.String> getLoadedRaces();
+  public static java.util.List<java.lang.String> getDefaultRaces();
+  public static boolean isRaceLoaded(java.lang.String);
+  public static com.dragonminez.common.config.GeneralUserConfig getUserConfig();
+  public static com.dragonminez.common.config.GeneralServerConfig getServerConfig();
+  public static com.dragonminez.common.config.CombatConfig getCombatConfig();
+  public static com.dragonminez.common.config.TrainingConfig getTrainingConfig();
+  public static void saveGeneralUserConfig();
+  public static boolean updateConfigValue(java.lang.String, java.lang.String, java.lang.String, java.lang.String);
+  public static java.util.List<java.lang.String> getAvailableConfigFiles();
+  public static boolean isSubtype(java.lang.String, java.lang.String);
+  public static java.util.List<java.lang.String> getKeysOrSubtypes(java.lang.String, java.lang.String);
+  public static java.util.List<java.lang.String> getValueSuggestions(java.lang.String, java.lang.String, java.lang.String);
+  public static void reloadSpecificConfig(java.lang.String) throws java.io.IOException;
+  public static boolean saveRawConfig(java.lang.String, java.lang.String);
+  public static java.lang.String getSpecificConfigJson(java.lang.String);
+  public static void applySpecificSyncedConfig(java.lang.String, java.lang.String);
+  public static void applySyncedServerConfig(com.dragonminez.common.config.GeneralServerConfig, com.dragonminez.common.config.CombatConfig, com.dragonminez.common.config.SkillsConfig, java.util.Map<java.lang.String, java.util.Map<java.lang.String, com.dragonminez.common.config.FormConfig>>, java.util.Map<java.lang.String, com.dragonminez.common.config.RaceStatsConfig>, java.util.Map<java.lang.String, com.dragonminez.common.config.RaceCharacterConfig>, java.util.Map<java.lang.String, com.dragonminez.common.config.FormConfig>);
+  public static void beginServerSyncBatch();
+  public static void clearServerSync();
+  public static java.util.Map<java.lang.String, com.dragonminez.common.config.RaceStatsConfig> getAllRaceStats();
+  public static java.util.Map<java.lang.String, com.dragonminez.common.config.RaceCharacterConfig> getAllRaceCharacters();
+  public static java.util.Map<java.lang.String, java.util.Map<java.lang.String, com.dragonminez.common.config.FormConfig>> getAllForms();
+  public static java.util.Map<java.lang.String, com.dragonminez.common.config.FormConfig> getAllFormsForRace(java.lang.String);
+  public static com.dragonminez.common.config.FormConfig getFormGroup(java.lang.String, java.lang.String);
+  public static com.dragonminez.common.config.FormConfig$FormData getForm(java.lang.String, java.lang.String, java.lang.String);
+  public static java.util.Map<java.lang.String, com.dragonminez.common.config.FormConfig> getAllStackForms();
+  public static com.dragonminez.common.config.FormConfig getStackFormGroup(java.lang.String);
+  public static com.dragonminez.common.config.FormConfig$FormData getStackForm(java.lang.String, java.lang.String);
+  public static com.dragonminez.common.config.SkillsConfig getSkillsConfig();
+  public static com.dragonminez.common.config.TechniqueConfig getTechniqueConfig();
+  public static com.dragonminez.common.config.EntitiesConfig getEntitiesConfig();
+  public static com.dragonminez.common.config.EntitiesConfig$EntityStats getEntityStats(java.lang.String);
+  public static com.dragonminez.common.config.EntitiesConfig$TransformSettings getEntityTransformDefaults();
+}

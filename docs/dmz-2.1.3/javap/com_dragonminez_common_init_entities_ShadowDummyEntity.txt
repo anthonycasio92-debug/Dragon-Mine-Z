@@ -1,0 +1,12 @@
+Compiled from "ShadowDummyEntity.java"
+public class com.dragonminez.common.init.entities.ShadowDummyEntity extends com.dragonminez.common.init.entities.sagas.DBSagasEntity {
+  public com.dragonminez.common.init.entities.ShadowDummyEntity(net.minecraft.world.entity.EntityType<? extends net.minecraft.world.entity.monster.Monster>, net.minecraft.world.level.Level);
+  public static net.minecraft.world.entity.ai.attributes.AttributeSupplier$Builder createAttributes();
+  public void setOwner(net.minecraft.world.entity.LivingEntity);
+  public void copyStatsFromPlayerWithPercent(net.minecraft.server.level.ServerPlayer, int);
+  public void copyStatsFromPlayer(net.minecraft.server.level.ServerPlayer);
+  public boolean m_21532_();
+  public void m_6043_();
+  public void stopCasting();
+  public void registerControllers(software.bernie.geckolib.core.animation.AnimatableManager$ControllerRegistrar);
+}

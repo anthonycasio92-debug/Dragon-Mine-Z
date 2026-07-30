@@ -1,0 +1,11 @@
+Compiled from "MainDamageTypes.java"
+public class com.dragonminez.common.init.MainDamageTypes {
+  public static final net.minecraft.resources.ResourceKey<net.minecraft.world.damagesource.DamageType> KIBLAST;
+  public static final net.minecraft.resources.ResourceKey<net.minecraft.world.damagesource.DamageType> STRIKE_ATTACK;
+  public com.dragonminez.common.init.MainDamageTypes();
+  public static net.minecraft.world.damagesource.DamageSource kiblast(net.minecraft.world.level.Level, net.minecraft.world.entity.Entity, net.minecraft.world.entity.Entity);
+  public static net.minecraft.world.damagesource.DamageSource strikeAttack(net.minecraft.world.level.Level, net.minecraft.world.entity.Entity, java.lang.String);
+  public static boolean isKiblastDamage(net.minecraft.world.damagesource.DamageSource);
+  public static boolean isStrikeAttackDamage(net.minecraft.world.damagesource.DamageSource);
+  public static void register();
+}

@@ -1,0 +1,8 @@
+Compiled from "StatsSyncS2C.java"
+public class com.dragonminez.common.network.S2C.StatsSyncS2C {
+  public com.dragonminez.common.network.S2C.StatsSyncS2C(net.minecraft.server.level.ServerPlayer);
+  public com.dragonminez.common.network.S2C.StatsSyncS2C(int, net.minecraft.nbt.CompoundTag);
+  public static void encode(com.dragonminez.common.network.S2C.StatsSyncS2C, net.minecraft.network.FriendlyByteBuf);
+  public static com.dragonminez.common.network.S2C.StatsSyncS2C decode(net.minecraft.network.FriendlyByteBuf);
+  public static void handle(com.dragonminez.common.network.S2C.StatsSyncS2C, java.util.function.Supplier<net.minecraftforge.network.NetworkEvent$Context>);
+}

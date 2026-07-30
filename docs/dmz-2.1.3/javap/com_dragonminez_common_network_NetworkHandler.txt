@@ -1,0 +1,11 @@
+Compiled from "NetworkHandler.java"
+public class com.dragonminez.common.network.NetworkHandler {
+  public static net.minecraftforge.network.simple.SimpleChannel INSTANCE;
+  public com.dragonminez.common.network.NetworkHandler();
+  public static void register();
+  public static <MSG> void sendToServer(MSG);
+  public static <MSG> void sendToPlayer(MSG, net.minecraft.server.level.ServerPlayer);
+  public static <MSG> void sendToAllPlayers(MSG);
+  public static <MSG> void sendToTrackingEntityAndSelf(MSG, net.minecraft.world.entity.Entity);
+  public static <MSG> void sendToTrackingEntity(MSG, net.minecraft.world.entity.Entity);
+}

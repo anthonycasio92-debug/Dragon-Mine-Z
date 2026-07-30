@@ -1,0 +1,12 @@
+Compiled from "TpSource.java"
+public final class com.dragonminez.common.config.TpSource extends java.lang.Enum<com.dragonminez.common.config.TpSource> {
+  public static final com.dragonminez.common.config.TpSource STORY;
+  public static final com.dragonminez.common.config.TpSource PASSIVE;
+  public static final com.dragonminez.common.config.TpSource TRAVEL;
+  public static final com.dragonminez.common.config.TpSource MINED;
+  public static final com.dragonminez.common.config.TpSource CRAFTED;
+  public static final com.dragonminez.common.config.TpSource KILL;
+  public static final com.dragonminez.common.config.TpSource HIT;
+  public static com.dragonminez.common.config.TpSource[] values();
+  public static com.dragonminez.common.config.TpSource valueOf(java.lang.String);
+}

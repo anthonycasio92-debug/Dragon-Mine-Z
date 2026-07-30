@@ -1,0 +1,21 @@
+Compiled from "BonusStats.java"
+public class com.dragonminez.common.stats.character.BonusStats {
+  public com.dragonminez.common.stats.character.BonusStats();
+  public void addBonusSplit(java.lang.String, java.lang.String, java.lang.String, double, boolean);
+  public void removeBonusSplit(java.lang.String, java.lang.String);
+  public void clearBonusSplit(java.lang.String, java.lang.String);
+  public void clearAllSplit(java.lang.String);
+  public void addBonus(java.lang.String, java.lang.String, java.lang.String, double);
+  public void addBonus(java.lang.String, java.lang.String, java.lang.String, double, boolean);
+  public void removeBonus(java.lang.String, java.lang.String);
+  public void removeAllBonuses(java.lang.String);
+  public void clearBonus(java.lang.String, java.lang.String);
+  public void clearAll(java.lang.String);
+  public void clearAllStats();
+  public double calculateBonus(java.lang.String, int, boolean);
+  public java.util.List<com.dragonminez.common.stats.character.BonusStats$StatBonus> getBonuses(java.lang.String);
+  public boolean hasBonus(java.lang.String, java.lang.String);
+  public net.minecraft.nbt.CompoundTag save();
+  public void load(net.minecraft.nbt.CompoundTag);
+  public void copyFrom(com.dragonminez.common.stats.character.BonusStats);
+}

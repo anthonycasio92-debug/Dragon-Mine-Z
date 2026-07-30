@@ -1,0 +1,8 @@
+Compiled from "ComboManager.java"
+public class com.dragonminez.common.util.ComboManager {
+  public com.dragonminez.common.util.ComboManager();
+  public static void enableTeleportWindow(java.util.UUID, int);
+  public static boolean canTeleport(java.util.UUID);
+  public static int getTeleportTarget(java.util.UUID);
+  public static void consumeTeleport(java.util.UUID);
+}

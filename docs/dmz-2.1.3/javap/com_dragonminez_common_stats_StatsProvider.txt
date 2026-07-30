@@ -1,0 +1,11 @@
+Compiled from "StatsProvider.java"
+public class com.dragonminez.common.stats.StatsProvider implements net.minecraftforge.common.capabilities.ICapabilityProvider, net.minecraftforge.common.util.INBTSerializable<net.minecraft.nbt.CompoundTag> {
+  public static final net.minecraft.resources.ResourceLocation ID;
+  public com.dragonminez.common.stats.StatsProvider(net.minecraft.world.entity.player.Player);
+  public <T> net.minecraftforge.common.util.LazyOptional<T> getCapability(net.minecraftforge.common.capabilities.Capability<T>, net.minecraft.core.Direction);
+  public static <T> net.minecraftforge.common.util.LazyOptional<T> get(net.minecraftforge.common.capabilities.Capability<T>, net.minecraft.world.entity.Entity);
+  public net.minecraft.nbt.CompoundTag serializeNBT();
+  public void deserializeNBT(net.minecraft.nbt.CompoundTag);
+  public void deserializeNBT(net.minecraft.nbt.Tag);
+  public net.minecraft.nbt.Tag serializeNBT();
+}

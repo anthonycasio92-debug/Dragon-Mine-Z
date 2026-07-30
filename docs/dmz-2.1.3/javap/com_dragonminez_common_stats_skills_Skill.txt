@@ -1,0 +1,20 @@
+Compiled from "Skill.java"
+public class com.dragonminez.common.stats.skills.Skill {
+  public com.dragonminez.common.stats.skills.Skill(java.lang.String, int);
+  public com.dragonminez.common.stats.skills.Skill(java.lang.String, int, boolean, int);
+  public java.lang.String getName();
+  public int getLevel();
+  public void setLevel(int);
+  public void addLevel(int);
+  public boolean isActive();
+  public void setActive(boolean);
+  public int getMaxLevel();
+  public void setMaxLevel(int);
+  public boolean isMaxLevel();
+  public boolean isUnlockedAt(int);
+  public net.minecraft.nbt.CompoundTag save();
+  public static com.dragonminez.common.stats.skills.Skill load(net.minecraft.nbt.CompoundTag);
+  public void toBytes(net.minecraft.network.FriendlyByteBuf);
+  public static com.dragonminez.common.stats.skills.Skill fromBytes(net.minecraft.network.FriendlyByteBuf);
+  public void copyFrom(com.dragonminez.common.stats.skills.Skill);
+}

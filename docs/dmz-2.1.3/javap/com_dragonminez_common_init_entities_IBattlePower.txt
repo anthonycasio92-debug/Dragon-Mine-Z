@@ -1,0 +1,5 @@
+Compiled from "IBattlePower.java"
+public interface com.dragonminez.common.init.entities.IBattlePower {
+  public abstract int getBattlePower();
+  public abstract void setBattlePower(int);
+}

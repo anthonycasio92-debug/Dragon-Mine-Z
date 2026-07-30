@@ -1,0 +1,28 @@
+Compiled from "PartyManager.java"
+public final class com.dragonminez.common.quest.PartyManager {
+  public static java.util.UUID getOrCreateParty(net.minecraft.server.level.ServerPlayer);
+  public static java.util.UUID getPartyId(net.minecraft.server.level.ServerPlayer);
+  public static boolean isInParty(net.minecraft.server.level.ServerPlayer);
+  public static boolean isPartyLeader(net.minecraft.server.level.ServerPlayer);
+  public static boolean canInvitePlayers(net.minecraft.server.level.ServerPlayer);
+  public static boolean canClaimSharedRewards(net.minecraft.server.level.ServerPlayer);
+  public static boolean areInSameParty(net.minecraft.world.entity.player.Player, net.minecraft.world.entity.player.Player);
+  public static boolean isPartyPvpEnabled(net.minecraft.world.entity.player.Player);
+  public static void togglePartyPvp(net.minecraft.server.level.ServerPlayer);
+  public static net.minecraft.server.level.ServerPlayer getPartyLeader(net.minecraft.server.level.ServerPlayer);
+  public static java.util.List<net.minecraft.server.level.ServerPlayer> getAllPartyMembers(net.minecraft.server.level.ServerPlayer);
+  public static com.dragonminez.common.quest.PartyManager$InviteRequestResult requestInvite(net.minecraft.server.level.ServerPlayer, net.minecraft.server.level.ServerPlayer);
+  public static void sendInvite(net.minecraft.server.level.ServerPlayer, net.minecraft.server.level.ServerPlayer);
+  public static com.dragonminez.common.quest.PartyManager$InviteAcceptResult acceptInvite(net.minecraft.server.level.ServerPlayer);
+  public static com.dragonminez.common.quest.PartyManager$InviteAcceptResult acceptInvite(net.minecraft.server.level.ServerPlayer, boolean);
+  public static void rejectInvite(net.minecraft.server.level.ServerPlayer);
+  public static com.dragonminez.common.quest.PartyManager$PendingInvite getPendingInvite(net.minecraft.server.level.ServerPlayer);
+  public static void leaveParty(net.minecraft.server.level.ServerPlayer);
+  public static void disbandParty(net.minecraft.server.level.ServerPlayer);
+  public static void syncPartyQuestState(net.minecraft.server.level.ServerPlayer);
+  public static net.minecraft.server.level.ServerPlayer resolveQuestController(net.minecraft.server.level.ServerPlayer);
+  public static void beginFusionParty(net.minecraft.server.level.ServerPlayer, net.minecraft.server.level.ServerPlayer);
+  public static void endFusionParty(net.minecraft.server.level.ServerPlayer);
+  public static void onPlayerLogin(net.minecraftforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent);
+  public static void onPlayerLogout(net.minecraftforge.event.entity.player.PlayerEvent$PlayerLoggedOutEvent);
+}

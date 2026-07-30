@@ -1,0 +1,29 @@
+Compiled from "GravityLogic.java"
+public class com.dragonminez.server.util.GravityLogic {
+  public static final java.util.UUID GRAVITY_SPEED_UUID;
+  public com.dragonminez.server.util.GravityLogic();
+  public static double getGravityMultiplier(net.minecraft.world.entity.player.Player);
+  public static double getTrainingGravityMultiplier(net.minecraft.world.entity.player.Player);
+  public static double getGravityRoomReliefFraction(net.minecraft.world.entity.player.Player);
+  public static double getNetGravity(net.minecraft.world.entity.player.Player);
+  public static double getBonusGravity(net.minecraft.world.entity.player.Player);
+  public static double getPenalizationGravity(net.minecraft.world.entity.player.Player);
+  public static double getTrainingBonusGravity(net.minecraft.world.entity.player.Player);
+  public static double getMachineGravity(net.minecraft.world.entity.player.Player);
+  public static int getTotalWeight(net.minecraft.world.entity.player.Player);
+  public static int getEffectiveWeight(net.minecraft.world.entity.player.Player);
+  public static int getIdealWeight(net.minecraft.world.entity.player.Player);
+  public static double getLoadRatio(net.minecraft.world.entity.player.Player);
+  public static int getTrainingZone(net.minecraft.world.entity.player.Player);
+  public static double getWeightTpMultiplier(net.minecraft.world.entity.player.Player);
+  public static double getWeightPenaltyFactor(net.minecraft.world.entity.player.Player);
+  public static double getStatReduction(net.minecraft.world.entity.player.Player);
+  public static double getGeneralPenaltyFactor(double);
+  public static double getJumpFactor(net.minecraft.world.entity.player.Player);
+  public static double getFlyFactor(net.minecraft.world.entity.player.Player);
+  public static boolean isFlightHardStopped(net.minecraft.world.entity.player.Player);
+  public static double getFallExtra(net.minecraft.world.entity.player.Player);
+  public static void tick(net.minecraft.server.level.ServerPlayer);
+  public static void clearNpcGravityCache(java.util.UUID);
+  public static double getConsumptionMultiplier(net.minecraft.world.entity.player.Player);
+}

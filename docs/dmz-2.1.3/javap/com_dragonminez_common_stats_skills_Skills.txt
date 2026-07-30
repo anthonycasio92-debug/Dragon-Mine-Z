@@ -1,0 +1,25 @@
+Compiled from "Skills.java"
+public class com.dragonminez.common.stats.skills.Skills {
+  public com.dragonminez.common.stats.skills.Skills();
+  public void registerDefaultSkill(java.lang.String, int);
+  public com.dragonminez.common.stats.skills.Skill getSkill(java.lang.String);
+  public boolean hasSkill(java.lang.String);
+  public boolean isUnlockedAtLevel(java.lang.String, int);
+  public int getSkillLevel(java.lang.String);
+  public int getMaxSkillLevel(java.lang.String);
+  public void refreshNonFormSkillMaxLevels();
+  public void setSkillLevel(java.lang.String, int);
+  public void removeSkill(java.lang.String);
+  public void removeAllSkills();
+  public java.util.Map<java.lang.String, java.lang.String> repairSkillNames();
+  public void addSkillLevel(java.lang.String, int);
+  public boolean isSkillActive(java.lang.String);
+  public void setSkillActive(java.lang.String, boolean);
+  public void toggleSkillActive(java.lang.String);
+  public java.util.Map<java.lang.String, com.dragonminez.common.stats.skills.Skill> getAllSkills();
+  public net.minecraft.nbt.CompoundTag save();
+  public void load(net.minecraft.nbt.CompoundTag);
+  public void toBytes(net.minecraft.network.FriendlyByteBuf);
+  public void fromBytes(net.minecraft.network.FriendlyByteBuf);
+  public void copyFrom(com.dragonminez.common.stats.skills.Skills);
+}
