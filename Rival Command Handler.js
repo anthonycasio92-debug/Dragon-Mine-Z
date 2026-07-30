@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.18
+ Version: 4.6.19
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -18,6 +18,10 @@
    /rival declare <player>   visible notify; accept/decline/ignore
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ FIX (4.6.19):
+  Restore /rival tpmsg [on|off] (also /tpmsg, /tpmessages).
+  Hides kill TP chat spam; TP still awarded.
 
  FIX (4.6.18):
   Align silent/declare heal so pending visible declares are not
@@ -834,6 +838,7 @@ function cmdHelp(player) {
     uiCmd(player, "/rival top [rp|wins|streak|damage]", "");
     uiCmd(player, "/rival title | journal | season", "");
     uiCmd(player, "/rival quests | achievements | hof", "");
+    uiCmd(player, "/rival tpmsg [on|off]", "toggle kill TP chat spam");
     uiBlank(player);
     msg(player, C + "8Defeat marks Proving Grounds. Return there for bonus rewards.");
     uiFoot(player);
@@ -1483,6 +1488,59 @@ function showStats(player, targetName) {
     uiFoot(player);
 }
 
+/*
+ * Same storeddata key as Rival System.js / End Dimension Strength.js.
+ * Hides kill TP chat spam only — TP is still awarded.
+ */
+var KILL_TP_CHAT_KEY = "dmz_kill_tp_chat";
+
+function killTpChatEnabled(player) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null || !stored.has(KILL_TP_CHAT_KEY)) return true;
+        var value = lower(stored.get(KILL_TP_CHAT_KEY));
+        return value != "0" && value != "false" && value != "off";
+    } catch (e) {
+        return true;
+    }
+}
+
+function setKillTpChatEnabled(player, enabled) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null) return false;
+        stored.put(KILL_TP_CHAT_KEY, enabled ? "1" : "0");
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function cmdTpMsg(player, mode) {
+    var want = null;
+    var arg = lower(mode);
+    if (arg == "on" || arg == "enable" || arg == "true" || arg == "1") want = true;
+    else if (arg == "off" || arg == "disable" || arg == "false" || arg == "0") want = false;
+    else if (arg == "" || arg == "toggle") want = !killTpChatEnabled(player);
+    else {
+        msg(player, C + "cUsage: /rival tpmsg [on|off]");
+        return;
+    }
+
+    if (!setKillTpChatEnabled(player, want)) {
+        msg(player, C + "cCould not save kill TP chat preference.");
+        return;
+    }
+
+    if (want) {
+        msg(player, C + "a[Rival] Kill TP chat " + C + "fenabled" + C + "a.");
+        msg(player, C + "8You will see TP messages when killing mobs near rivals.");
+    } else {
+        msg(player, C + "e[Rival] Kill TP chat " + C + "fdisabled" + C + "e.");
+        msg(player, C + "8TP is still awarded - only the chat spam is hidden.");
+    }
+}
+
 function showTop(player, category) {
     var db = loadDb();
     var cat = lower(category || "rp");
@@ -1820,6 +1878,8 @@ function routeRivalSub(player, event) {
         showTop(player, target == "" ? "rp" : target);
     } else if (sub == "title") {
         showTitle(player);
+    } else if (sub == "tpmsg" || sub == "tpmessages" || sub == "killtp") {
+        cmdTpMsg(player, target);
     } else if (sub == "journal") {
         showJournal(player, target);
     } else if (sub == "season") {

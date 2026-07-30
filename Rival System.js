@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.18
+ Version: 4.6.19
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1286,6 +1286,13 @@ var RP_KILL_TP_MUTUAL_MULT = 1.45;
 var RP_SHOW_KILL_TP = true;
 
 /*
+ * Per-player kill TP chat preference (storeddata).
+ * /rival tpmsg [on|off] — default ON.
+ * Shared with End Dimension Strength kill-settle messages.
+ */
+var KILL_TP_CHAT_KEY = "dmz_kill_tp_chat";
+
+/*
  * Level-based TP scaling (DMZ StatsData.getLevel()).
  * Applied to ALL rival TP awards.
  *
@@ -1719,7 +1726,24 @@ function rivalScaleTpByLevel(data, amount, kind) {
     return Math.max(1, Math.floor(base * mult));
 }
 
-function rpAwardTP(player, data, amount, reason, kind) {
+function rivalKillTpChatEnabled(player) {
+    try {
+        if (player === null || player === undefined) return true;
+        var stored = player.getStoreddata();
+        if (stored === null || stored === undefined) return true;
+        if (!stored.has(KILL_TP_CHAT_KEY)) return true;
+        var value = String(stored.get(KILL_TP_CHAT_KEY)).toLowerCase();
+        return value !== "0" && value !== "false" && value !== "off";
+    } catch (e) {
+        return true;
+    }
+}
+
+/*
+ * killChat=true: message respects /rival tpmsg preference.
+ * Other awards still show unless RP_SHOW_KILL_TP is false.
+ */
+function rpAwardTP(player, data, amount, reason, kind, killChat) {
     try {
         if (data === null || data === undefined) return false;
         var scaleKind = kind === "drip" ? "drip" : "burst";
@@ -1730,7 +1754,11 @@ function rpAwardTP(player, data, amount, reason, kind) {
         resources.addTrainingPoints(amount);
         var mcPlayer = player.getMCEntity();
         rpNetwork().sendToTrackingEntityAndSelf(new (rpSyncPacket())(mcPlayer), mcPlayer);
-        if (RP_SHOW_KILL_TP) {
+        var show = RP_SHOW_KILL_TP === true;
+        if (killChat === true) {
+            show = show && rivalKillTpChatEnabled(player);
+        }
+        if (show) {
             var note = reason ? String(reason) : "";
             if (RIVAL_LEVEL_TP_SHOW_IN_REASON === true && RIVAL_LEVEL_TP_ENABLED === true) {
                 var lvl = rivalGetDmzLevel(data);
@@ -2080,7 +2108,8 @@ function rpHandleKillNearRivals(killer, victim) {
             var victimData = rpGetDMZ(victim);
             var victimReleased = rpGetReleasedBP(victimData);
             if (victimReleased > killerReleased) {
-                rpAwardTP(killer, killerData, RP_UNDERDOG_WIN_TP, "Underdog victory vs " + directLink.name);
+                rpAwardTP(killer, killerData, RP_UNDERDOG_WIN_TP,
+                    "Underdog victory vs " + directLink.name, "burst", true);
                 dirty = true;
             }
         }
@@ -2101,7 +2130,7 @@ function rpHandleKillNearRivals(killer, victim) {
         if (killStatus === "nemesis") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT * 1.25);
         else if (killStatus === "mutual") tp = Math.floor(tp * RP_KILL_TP_MUTUAL_MULT);
 
-        rpAwardTP(killer, killerData, tp, "Near " + killStatus + " " + link.name);
+        rpAwardTP(killer, killerData, tp, "Near " + killStatus + " " + link.name, "burst", true);
         if (record.career === null || typeof record.career !== "object") record.career = {};
         record.career.killsNearRival = rpNumber(record.career.killsNearRival, 0) + 1;
         dirty = true;
@@ -2115,7 +2144,7 @@ function rpHandleKillNearRivals(killer, victim) {
         var rivalData = rpGetDMZ(rivalPlayer);
         var rivalReleased = rpGetReleasedBP(rivalData);
         if (killerReleased > 0 && rivalReleased <= killerReleased * RP_ANTIGANK_RATIO) {
-            rpAwardTP(killer, killerData, RP_ANTIGANK_WITNESS_KILL_TP, "Rivals watching");
+            rpAwardTP(killer, killerData, RP_ANTIGANK_WITNESS_KILL_TP, "Rivals watching", "burst", true);
             dirty = true;
         }
     }

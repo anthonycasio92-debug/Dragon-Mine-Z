@@ -1,6 +1,6 @@
 # ============================================================
-# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.18)
-# Pair with Rival System.js + Rival Command Handler.js v4.6.18
+# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.19)
+# Pair with Rival System.js + Rival Command Handler.js v4.6.19
 # ============================================================
 # Intended flow:
 #   /rival <player>           -> silent Unknown (they see nothing)
@@ -137,6 +137,19 @@ CustomAlias:
     - asFakeOp! noppes script trigger 226 [playerName]
     AddTabs: true
     ExactMatch: true
+
+  # ---- Kill TP chat toggle (also /rival tpmsg) ----
+  tpmsg:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
+
+  tpmessages:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
 
   # ---- Spectate ----
   spectaterival:
