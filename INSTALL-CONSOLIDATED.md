@@ -1,15 +1,15 @@
-# Consolidated Scripts Pack (v4.7.3 / Sparring v3.1.0)
+# Consolidated Scripts Pack (v4.7.4 / Sparring v3.1.0)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.
 
 ## Rival (Global Player + Command Handler)
-- `Rival System.js` **v4.7.3** → CustomNPCs Global Player  
+- `Rival System.js` **v4.7.4** → CustomNPCs Global Player  
   Events: `init`, `login`, `tick`, `damaged`, `damagedEntity`, `kill`, `died`, `logout`, `trigger`
-- `Rival Command Handler.js` **v4.7.3** → player script-slot (with SkillCheck / Sparring Handler)
+- `Rival Command Handler.js` **v4.7.4** → player script-slot (with SkillCheck / Sparring Handler)
 - `Aliases-Rival.yml` → CMI CustomAlias (`asFakeOp!`) → `/cmi reload`
 
-Path: silent `/rival` → Unknown; both silent → Declared; `/rival declare` → notify;  
+Path: silent `/rival` → Unknown; both silent → Declared; `/rival declare` → Pending;  
 both declare/accept → Mutual; Mutual + 3 death/KO → Nemesis.  
 Nearby TP capped at 2 + recent mob kill. TP scale 60%.  
 Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.

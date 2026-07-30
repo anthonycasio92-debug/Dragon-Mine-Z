@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.7.3
+ Version: 4.7.4
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -15,9 +15,12 @@
  Intended rivalry path:
    /rival <player>           silent Unknown (they see nothing)
    both silent               Declared (both see each other)
-   /rival declare <player>   visible notify; accept/decline/ignore
+   /rival declare <player>   Pending (visible notify; accept/decline/ignore)
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ FIX (4.7.4):
+  Visible /rival declare shows as Pending on /rival list (not Unknown).
 
  FIX (4.6.19):
   Restore /rival tpmsg [on|off] (also /tpmsg, /tpmessages).
@@ -85,12 +88,12 @@ var CH_BACKUP = "dlr.rivalry.v4.challenges.backup";
 var PROG_KEY = "dlr.rivalry.v4.progression";
 
 /*
- Statuses: unknown | declared | mutual | nemesis
+ Statuses: unknown | pending | declared | mutual | nemesis
  Max 2 Mutual (3rd demotes oldest).
 
  /rival <player>          silent Unknown (they see nothing)
  both silent /rival       Declared (both see each other)
- /rival declare <player>  visible declare -> they accept/decline/ignore
+ /rival declare <player>  Pending (visible; accept/decline/ignore)
  both visible declares    Mutual (or accept their declare)
  Mutual Nemesis           after 3+ DEATH losses to that rival
                           (damage-dealt / timer losses do NOT count)
@@ -358,18 +361,16 @@ function linkStatus(link) {
         return "mutual";
     }
     /* Both silently rivaled each other = Declared. */
-    if (link.declaredByMe === true && link.declaredByThem === true) {
+    if (link.declaredByMe === true && link.declaredByThem === true &&
+        link.inviteSent !== true && link.inviteReceived !== true) {
         return "declared";
     }
-    /*
-     * Unknown covers:
-     * - silent one-sided /rival (you see them; they see nothing)
-     * - visible /rival declare pending (sent or received)
-     */
-    if (link.declaredByMe === true ||
-        link.declaredByThem === true ||
-        link.inviteSent === true ||
-        link.inviteReceived === true) {
+    /* Visible /rival declare in flight (sent or received). */
+    if (link.inviteSent === true || link.inviteReceived === true) {
+        return "pending";
+    }
+    /* Silent one-sided /rival (you see them; they see nothing). */
+    if (link.declaredByMe === true || link.declaredByThem === true) {
         return "unknown";
     }
     return "none";
@@ -431,6 +432,7 @@ function linkStatusLabel(status) {
     if (status == "nemesis") return C + "c" + C_BOLD + "Nemesis" + C_RESET;
     if (status == "mutual") return C + "6Mutual" + C_RESET;
     if (status == "declared") return C + "eDeclared" + C_RESET;
+    if (status == "pending") return C + "dPending" + C_RESET;
     if (status == "unknown") return C + "7Unknown" + C_RESET;
     return C + "8None" + C_RESET;
 }
@@ -1211,7 +1213,7 @@ function cmdList(player) {
     uiProp(player, "Mutual", C + "f" + countMutual(pref) + "/" + MAX_MUTUAL +
         C + "8   Nemesis  " + C + "c" + nemName);
 
-    var groups = { nemesis: [], mutual: [], declared: [], unknown: [] };
+    var groups = { nemesis: [], mutual: [], declared: [], pending: [], unknown: [] };
     for (var u in pref.rivals) {
         if (!pref.rivals.hasOwnProperty(u)) continue;
         var link = pref.rivals[u];
@@ -1232,22 +1234,25 @@ function cmdList(player) {
     printGroup("NEMESIS", "c", groups.nemesis, true);
     printGroup("MUTUAL", "6", groups.mutual, true);
     printGroup("DECLARED", "e", groups.declared, false);
+    printGroup("PENDING", "d", groups.pending, false);
     printGroup("UNKNOWN", "7", groups.unknown, false);
 
-    if (groups.nemesis.length + groups.mutual.length + groups.declared.length + groups.unknown.length == 0) {
+    var totalShown = groups.nemesis.length + groups.mutual.length +
+        groups.declared.length + groups.pending.length + groups.unknown.length;
+    if (totalShown == 0) {
         uiBlank(player);
         msg(player, C + "8No rivals yet. Use  " + C + "e/rival <player>");
     }
 
-    var pending = 0;
+    var inbound = 0;
     for (var key in db.requests) {
         if (!db.requests.hasOwnProperty(key)) continue;
         if (str(db.requests[key].toUuid) == pref.uuid) {
-            if (pending == 0) {
+            if (inbound == 0) {
                 uiBlank(player);
-                uiSection(player, "Pending");
+                uiSection(player, "Incoming Declares");
             }
-            pending++;
+            inbound++;
             msg(player, C + "d  > " + C + "f" + db.requests[key].fromName +
                 C + "8  /rival accept " + db.requests[key].fromName);
         }
@@ -1790,6 +1795,13 @@ function printRivalCard(player, L, showPg) {
     var st = linkStatus(L);
     var tier = getTier(L.points);
     msg(player, C + "f  " + L.name + "  " + linkStatusLabel(st));
+    if (st == "pending") {
+        if (L.inviteSent === true) {
+            msg(player, C + "8    Waiting for them to accept / decline / ignore");
+        } else if (L.inviteReceived === true) {
+            msg(player, C + "8    They declared you  " + C + "f/rival accept " + L.name);
+        }
+    }
     msg(player, C + "8    Rank  " + C + tier.color + tier.name + C_RESET +
         C + "8   RP  " + C + "f" + commas(L.points));
     msg(player, C + "8    Record  " + C + "a" + num(L.wins, 0) + C + "8-" +

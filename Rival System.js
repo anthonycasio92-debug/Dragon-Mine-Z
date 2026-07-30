@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.3
+ Version: 4.7.4
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -374,11 +374,17 @@ function rcLinkStatus(link) {
         }
         return "mutual";
     }
-    if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
-    if (link.declaredByMe === true ||
-        link.declaredByThem === true ||
-        link.inviteSent === true ||
-        link.inviteReceived === true) {
+    /* Declared = both silent, with no visible declare still in flight. */
+    if (link.declaredByMe === true && link.declaredByThem === true &&
+        link.inviteSent !== true && link.inviteReceived !== true) {
+        return "declared";
+    }
+    /* Visible /rival declare pending (sent or received). */
+    if (link.inviteSent === true || link.inviteReceived === true) {
+        return "pending";
+    }
+    /* Silent one-sided Unknown. */
+    if (link.declaredByMe === true || link.declaredByThem === true) {
         return "unknown";
     }
     return "none";
@@ -388,6 +394,7 @@ function rcLinkStatusLabel(status) {
     if (status === "nemesis") return RC_COLOR + "c" + RC_COLOR + "lNemesis" + RC_COLOR + "r";
     if (status === "mutual") return RC_COLOR + "6Mutual" + RC_COLOR + "r";
     if (status === "declared") return RC_COLOR + "eDeclared" + RC_COLOR + "r";
+    if (status === "pending") return RC_COLOR + "dPending" + RC_COLOR + "r";
     if (status === "unknown") return RC_COLOR + "7Unknown" + RC_COLOR + "r";
     return RC_COLOR + "8None" + RC_COLOR + "r";
 }
@@ -1932,6 +1939,7 @@ function rpNearRivalPriority(link) {
     if (status === "nemesis") rank = 4;
     else if (status === "mutual") rank = 3;
     else if (status === "declared") rank = 2;
+    else if (status === "pending") rank = 1;
     else if (status === "unknown") rank = 1;
     return rank * 1000000 + rpNumber(link.points, 0);
 }
