@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.2
+ Version: 3.2.3
 
  Combat-Based Training (Sparring v3)
 
@@ -44,6 +44,8 @@
     after success; no partner fallback for non-PvP damage; third-party
     hits no longer poison spar timers; block TP only from spar partner;
     Command Handler ignores non-spar trigger ids.
+  - v3.2.3: /spar mentor works via Command Handler (CMI path); /spar help
+    and /spar stats show current Mentor Bond status.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -3429,7 +3431,26 @@ function sparCmdHelp(player) {
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
-    uiSection(player, "Mentor Bond");
+    uiSection(player, "Your Mentor Bond");
+    try { reconcileMentorBond(player); } catch (eR) {}
+    var helpMentor = getBondMentorName(player);
+    var helpApp = getBondApprenticeName(player);
+    uiProp(player, "Mentor", helpMentor != "" ? sparColor("f") + helpMentor : sparColor("8") + "none");
+    uiProp(player, "Apprentice", helpApp != "" ? sparColor("f") + helpApp : sparColor("8") + "none");
+    var helpInvite = readBondInvite(player);
+    if (helpInvite != null) {
+        if (helpInvite.kind == "mentor") {
+            sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                " wants you as their Mentor.");
+        } else {
+            sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                " wants you as their Apprentice.");
+        }
+        sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar mentor accept" +
+            sparColor("8") + "  or  " + sparColor("e") + "/spar mentor deny");
+    }
+    uiBlank(player);
+    uiSection(player, "Mentor Commands");
     uiCmd(player, "/spar mentor", "bond status");
     uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
     uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
@@ -3509,6 +3530,15 @@ function sparCmdShowPersonal(player, targetName) {
         sparColor("8") + "   Momentum  " + sparColor("e") + formatWholeNumber(profile.momentum));
     uiProp(player, "Streak", sparColor("6") + formatWholeNumber(streakCurrent) + " days" +
         sparColor("8") + "   Best  " + sparColor("6") + formatWholeNumber(streakBest) + " days");
+    if (online != null) {
+        uiBlank(player);
+        uiSection(player, "Mentor Bond");
+        try { reconcileMentorBond(online); } catch (eR2) {}
+        var stMentor = getBondMentorName(online);
+        var stApp = getBondApprenticeName(online);
+        uiProp(player, "Mentor", stMentor != "" ? sparColor("f") + stMentor : sparColor("8") + "none");
+        uiProp(player, "Apprentice", stApp != "" ? sparColor("f") + stApp : sparColor("8") + "none");
+    }
     uiFoot(player);
 }
 

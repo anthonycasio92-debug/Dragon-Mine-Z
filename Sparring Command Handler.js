@@ -1,19 +1,18 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.1.1
+ Version: 3.1.2
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.1.1+):
+ NOTE (v3.1.2+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
   Help lists /spar only (no .spar / !spar / ./spar).
-  Mentor Bond commands are owned by Sparring Tp System.js
-  (Global Player) — this handler skips them so TP share works.
+  Mentor Bond commands work here too (same storeddata keys).
   Non-spar trigger ids are ignored (do not claim dedupe lock).
   Sparring Tp System.js (Global Player) also handles /spar
   triggers 70 / 72-79. This script-slot handler is OPTIONAL.
@@ -81,6 +80,18 @@ var LB_BLOCKS_PREFIX = "spar.leaderboard.blocks.";
 var S_STREAK_CURRENT = "spar.streak.current";
 var S_STREAK_BEST = "spar.streak.best";
 var S_STREAK_LAST_DAY = "spar.streak.lastDay";
+
+var S_MENTOR_NAME = "spar.bond.mentorName";
+var S_APPRENTICE_NAME = "spar.bond.apprenticeName";
+var S_MENTOR_CD_UNTIL = "spar.bond.mentorChangeReadyAt";
+var S_APPRENTICE_CD_UNTIL = "spar.bond.apprenticeChangeReadyAt";
+var S_BOND_INVITE_FROM = "spar.bond.inviteFrom";
+var S_BOND_INVITE_KIND = "spar.bond.inviteKind";
+var S_BOND_INVITE_UNTIL = "spar.bond.inviteUntil";
+var MENTOR_SHARE_PCT = 0.15;
+var MENTOR_SPAR_BONUS_PCT = 0.18;
+var MENTOR_CHANGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+var MENTOR_INVITE_MS = 120000;
 
 /* ========================= BASIC HELPERS ========================= */
 
@@ -480,6 +491,372 @@ function topCategory(category) {
     };
 }
 
+
+/* ========================= MENTOR BOND ========================= */
+
+function nowMs() {
+    try { return Number(Java.type("java.lang.System").currentTimeMillis()); } catch (e) {
+        return Number(new Date().getTime());
+    }
+}
+
+function putNumber(store, key, value) {
+    try { store.put(key, String(Math.floor(Number(value)))); } catch (e) {
+        try { store.put(key, Math.floor(Number(value))); } catch (e2) {}
+    }
+}
+
+function putString(store, key, value) {
+    try { store.put(key, String(value == null ? "" : value)); } catch (e) {}
+}
+
+function bondStored(player) {
+    try { return player.getStoreddata(); } catch (e) { return null; }
+}
+
+function getBondMentorName(player) {
+    var stored = bondStored(player);
+    if (stored == null) return "";
+    return readString(stored, S_MENTOR_NAME, "");
+}
+
+function getBondApprenticeName(player) {
+    var stored = bondStored(player);
+    if (stored == null) return "";
+    return readString(stored, S_APPRENTICE_NAME, "");
+}
+
+function clearBondInvite(player) {
+    var stored = bondStored(player);
+    if (stored == null) return;
+    putString(stored, S_BOND_INVITE_FROM, "");
+    putString(stored, S_BOND_INVITE_KIND, "");
+    putNumber(stored, S_BOND_INVITE_UNTIL, 0);
+}
+
+function readBondInvite(player) {
+    var stored = bondStored(player);
+    if (stored == null) return null;
+    var until = readNumber(stored, S_BOND_INVITE_UNTIL, 0);
+    var from = readString(stored, S_BOND_INVITE_FROM, "");
+    var kind = readString(stored, S_BOND_INVITE_KIND, "");
+    if (from == "" || kind == "" || nowMs() > until) {
+        if (from != "" || kind != "") clearBondInvite(player);
+        return null;
+    }
+    return { from: from, kind: kind, until: until };
+}
+
+function setBondInvite(target, fromName, kind) {
+    var stored = bondStored(target);
+    if (stored == null) return false;
+    putString(stored, S_BOND_INVITE_FROM, fromName);
+    putString(stored, S_BOND_INVITE_KIND, kind);
+    putNumber(stored, S_BOND_INVITE_UNTIL, nowMs() + MENTOR_INVITE_MS);
+    return true;
+}
+
+function bondCooldownLeft(player, key) {
+    var stored = bondStored(player);
+    if (stored == null) return 0;
+    return Math.max(0, readNumber(stored, key, 0) - nowMs());
+}
+
+function setBondCooldown(player, key) {
+    var stored = bondStored(player);
+    if (stored == null) return;
+    putNumber(stored, key, nowMs() + MENTOR_CHANGE_COOLDOWN_MS);
+}
+
+function namesMatch(a, b) {
+    return lower(a) == lower(b) && str(a) != "";
+}
+
+function reconcileMentorBond(player) {
+    if (player == null) return;
+    var stored = bondStored(player);
+    if (stored == null) return;
+    var self = nameOf(player);
+    var app = getBondApprenticeName(player);
+    if (app != "") {
+        var ap = getOnlinePlayerByName(app);
+        if (ap != null && !namesMatch(getBondMentorName(ap), self)) {
+            putString(stored, S_APPRENTICE_NAME, "");
+        }
+    }
+    var ment = getBondMentorName(player);
+    if (ment != "") {
+        var m = getOnlinePlayerByName(ment);
+        if (m != null && !namesMatch(getBondApprenticeName(m), self)) {
+            putString(stored, S_MENTOR_NAME, "");
+        }
+    }
+}
+
+function clearMentorLink(apprentice, mentor, applyCooldown) {
+    if (apprentice != null) {
+        var aStore = bondStored(apprentice);
+        if (aStore != null) {
+            putString(aStore, S_MENTOR_NAME, "");
+            if (applyCooldown === true) setBondCooldown(apprentice, S_MENTOR_CD_UNTIL);
+        }
+    }
+    if (mentor != null) {
+        var mStore = bondStored(mentor);
+        if (mStore != null) {
+            putString(mStore, S_APPRENTICE_NAME, "");
+            if (applyCooldown === true) setBondCooldown(mentor, S_APPRENTICE_CD_UNTIL);
+        }
+    }
+}
+
+function bindMentorApprentice(mentor, apprentice) {
+    var mStore = bondStored(mentor);
+    var aStore = bondStored(apprentice);
+    if (mStore == null || aStore == null) return false;
+    putString(mStore, S_APPRENTICE_NAME, nameOf(apprentice));
+    putString(aStore, S_MENTOR_NAME, nameOf(mentor));
+    clearBondInvite(mentor);
+    clearBondInvite(apprentice);
+    return true;
+}
+
+function showBondOnCard(player) {
+    try { reconcileMentorBond(player); } catch (e) {}
+    var mentor = getBondMentorName(player);
+    var apprentice = getBondApprenticeName(player);
+    uiProp(player, "Mentor", mentor != "" ? C + "f" + mentor : C + "8none");
+    uiProp(player, "Apprentice", apprentice != "" ? C + "f" + apprentice : C + "8none");
+    var invite = readBondInvite(player);
+    if (invite != null) {
+        if (invite.kind == "mentor") {
+            msg(player, C + "e" + invite.from + C + "7 wants you as their Mentor.");
+        } else {
+            msg(player, C + "e" + invite.from + C + "7 wants you as their Apprentice.");
+        }
+        msg(player, C + "8Use  " + C + "e/spar mentor accept" + C + "8  or  " + C + "e/spar mentor deny");
+    }
+}
+
+function cmdBondStatus(player) {
+    uiHead(player, "MENTOR BOND");
+    showBondOnCard(player);
+    uiBlank(player);
+    uiProp(player, "Share", C + "7Mentor receives " + C + "a" + Math.floor(MENTOR_SHARE_PCT * 100) + "%" +
+        C + "7 of apprentice spar TP");
+    uiProp(player, "Bonus", C + "7Apprentice +" + C + "a" + Math.floor(MENTOR_SPAR_BONUS_PCT * 100) + "%" +
+        C + "7 TP while sparring with mentor");
+    var mCd = bondCooldownLeft(player, S_MENTOR_CD_UNTIL);
+    var aCd = bondCooldownLeft(player, S_APPRENTICE_CD_UNTIL);
+    if (mCd > 0) uiProp(player, "Mentor CD", C + "c" + duration(mCd));
+    if (aCd > 0) uiProp(player, "Apprentice CD", C + "c" + duration(aCd));
+    uiBlank(player);
+    uiSection(player, "Commands");
+    uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
+    uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
+    uiCmd(player, "/spar mentor accept | deny", "respond to an invite");
+    uiCmd(player, "/spar mentor clear", "leave your mentor (7d cooldown)");
+    uiCmd(player, "/spar apprentice clear", "release your apprentice (7d cooldown)");
+    uiFoot(player);
+}
+
+function cmdAskMentor(player, targetName) {
+    targetName = str(targetName).replace(/^\s+|\s+$/g, "");
+    if (targetName == "") { cmdBondStatus(player); return; }
+    if (namesMatch(targetName, nameOf(player))) {
+        uiBanner(player, "Mentor Bond", C + "cYou cannot mentor yourself.");
+        return;
+    }
+    if (getBondMentorName(player) != "") {
+        uiBanner(player, "Mentor Bond", C + "cYou already have a mentor (" + getBondMentorName(player) + "). Clear them first.");
+        return;
+    }
+    var cd = bondCooldownLeft(player, S_MENTOR_CD_UNTIL);
+    if (cd > 0) {
+        uiBanner(player, "Mentor Bond", C + "cMentor change cooldown: " + duration(cd));
+        return;
+    }
+    var target = getOnlinePlayerByName(targetName);
+    if (target == null) {
+        uiBanner(player, "Mentor Bond", C + "cPlayer not online.");
+        return;
+    }
+    if (getBondApprenticeName(target) != "") {
+        uiBanner(player, "Mentor Bond", C + "c" + nameOf(target) + " already has an apprentice.");
+        return;
+    }
+    var tCd = bondCooldownLeft(target, S_APPRENTICE_CD_UNTIL);
+    if (tCd > 0) {
+        uiBanner(player, "Mentor Bond", C + "c" + nameOf(target) + " cannot take an apprentice yet (" + duration(tCd) + ").");
+        return;
+    }
+    if (!setBondInvite(target, nameOf(player), "mentor")) {
+        uiBanner(player, "Mentor Bond", C + "cCould not send invite.");
+        return;
+    }
+    uiBanner(player, "Mentor Bond", C + "aInvite sent to " + C + "f" + nameOf(target) + C + "a.");
+    msg(target, C + "6[Mentor Bond] " + C + "f" + nameOf(player) + C + "e wants you as their Mentor.");
+    msg(target, C + "8/spar mentor accept  " + C + "7or  " + C + "8/spar mentor deny");
+}
+
+function cmdAskApprentice(player, targetName) {
+    targetName = str(targetName).replace(/^\s+|\s+$/g, "");
+    if (targetName == "") { cmdBondStatus(player); return; }
+    if (namesMatch(targetName, nameOf(player))) {
+        uiBanner(player, "Mentor Bond", C + "cYou cannot apprentice yourself.");
+        return;
+    }
+    if (getBondApprenticeName(player) != "") {
+        uiBanner(player, "Mentor Bond", C + "cYou already have an apprentice (" + getBondApprenticeName(player) + "). Clear them first.");
+        return;
+    }
+    var cd = bondCooldownLeft(player, S_APPRENTICE_CD_UNTIL);
+    if (cd > 0) {
+        uiBanner(player, "Mentor Bond", C + "cApprentice change cooldown: " + duration(cd));
+        return;
+    }
+    var target = getOnlinePlayerByName(targetName);
+    if (target == null) {
+        uiBanner(player, "Mentor Bond", C + "cPlayer not online.");
+        return;
+    }
+    if (getBondMentorName(target) != "") {
+        uiBanner(player, "Mentor Bond", C + "c" + nameOf(target) + " already has a mentor.");
+        return;
+    }
+    var tCd = bondCooldownLeft(target, S_MENTOR_CD_UNTIL);
+    if (tCd > 0) {
+        uiBanner(player, "Mentor Bond", C + "c" + nameOf(target) + " cannot change mentors yet (" + duration(tCd) + ").");
+        return;
+    }
+    if (!setBondInvite(target, nameOf(player), "apprentice")) {
+        uiBanner(player, "Mentor Bond", C + "cCould not send invite.");
+        return;
+    }
+    uiBanner(player, "Mentor Bond", C + "aInvite sent to " + C + "f" + nameOf(target) + C + "a.");
+    msg(target, C + "6[Mentor Bond] " + C + "f" + nameOf(player) + C + "e wants you as their Apprentice.");
+    msg(target, C + "8/spar mentor accept  " + C + "7or  " + C + "8/spar mentor deny");
+}
+
+function cmdBondAccept(player) {
+    var invite = readBondInvite(player);
+    if (invite == null) {
+        uiBanner(player, "Mentor Bond", C + "cNo pending invite.");
+        return;
+    }
+    var other = getOnlinePlayerByName(invite.from);
+    if (other == null) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", C + "cInviter is no longer online.");
+        return;
+    }
+    var mentor = null;
+    var apprentice = null;
+    if (invite.kind == "mentor") { mentor = player; apprentice = other; }
+    else if (invite.kind == "apprentice") { mentor = other; apprentice = player; }
+    else {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", C + "cInvalid invite.");
+        return;
+    }
+    if (getBondApprenticeName(mentor) != "" && !namesMatch(getBondApprenticeName(mentor), nameOf(apprentice))) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", C + "cMentor already has an apprentice.");
+        return;
+    }
+    if (getBondMentorName(apprentice) != "" && !namesMatch(getBondMentorName(apprentice), nameOf(mentor))) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", C + "cApprentice already has a mentor.");
+        return;
+    }
+    if (!bindMentorApprentice(mentor, apprentice)) {
+        uiBanner(player, "Mentor Bond", C + "cCould not create bond.");
+        return;
+    }
+    msg(mentor, C + "6[Mentor Bond] " + C + "aYou are now mentoring " + C + "f" + nameOf(apprentice) + C + "a.");
+    msg(apprentice, C + "6[Mentor Bond] " + C + "aYour mentor is now " + C + "f" + nameOf(mentor) + C + "a.");
+}
+
+function cmdBondDeny(player) {
+    var invite = readBondInvite(player);
+    if (invite == null) {
+        uiBanner(player, "Mentor Bond", C + "cNo pending invite.");
+        return;
+    }
+    var fromName = invite.from;
+    clearBondInvite(player);
+    uiBanner(player, "Mentor Bond", C + "7Invite denied.");
+    var other = getOnlinePlayerByName(fromName);
+    if (other != null) {
+        msg(other, C + "6[Mentor Bond] " + C + "f" + nameOf(player) + C + "c denied your invite.");
+    }
+}
+
+function cmdClearMentor(player) {
+    var mentorName = getBondMentorName(player);
+    if (mentorName == "") {
+        uiBanner(player, "Mentor Bond", C + "cYou have no mentor.");
+        return;
+    }
+    var mentor = getOnlinePlayerByName(mentorName);
+    clearMentorLink(player, mentor, true);
+    if (mentor == null) {
+        var stored = bondStored(player);
+        if (stored != null) putString(stored, S_MENTOR_NAME, "");
+        setBondCooldown(player, S_MENTOR_CD_UNTIL);
+    }
+    uiBanner(player, "Mentor Bond", C + "7Left mentor " + C + "f" + mentorName + C + "7. 7-day cooldown started.");
+    if (mentor != null) {
+        msg(mentor, C + "6[Mentor Bond] " + C + "f" + nameOf(player) + C + "7 is no longer your apprentice.");
+    }
+}
+
+function cmdClearApprentice(player) {
+    var apprenticeName = getBondApprenticeName(player);
+    if (apprenticeName == "") {
+        uiBanner(player, "Mentor Bond", C + "cYou have no apprentice.");
+        return;
+    }
+    var apprentice = getOnlinePlayerByName(apprenticeName);
+    clearMentorLink(apprentice, player, true);
+    if (apprentice == null) {
+        var stored = bondStored(player);
+        if (stored != null) putString(stored, S_APPRENTICE_NAME, "");
+        setBondCooldown(player, S_APPRENTICE_CD_UNTIL);
+    }
+    uiBanner(player, "Mentor Bond", C + "7Released apprentice " + C + "f" + apprenticeName + C + "7. 7-day cooldown started.");
+    if (apprentice != null) {
+        msg(apprentice, C + "6[Mentor Bond] " + C + "f" + nameOf(player) + C + "7 is no longer your mentor.");
+    }
+}
+
+function routeBond(player, parts) {
+    var sub = parts.length > 0 ? lower(parts[0]) : "";
+    var arg = parts.length > 1 ? parts[1] : "";
+    var arg2 = parts.length > 2 ? parts[2] : "";
+
+    if (sub == "mentor" || sub == "mentors" || sub == "bond") {
+        var action = lower(arg);
+        if (action == "" || action == "status" || action == "info") cmdBondStatus(player);
+        else if (action == "accept" || action == "yes") cmdBondAccept(player);
+        else if (action == "deny" || action == "decline" || action == "no") cmdBondDeny(player);
+        else if (action == "clear" || action == "remove" || action == "leave") cmdClearMentor(player);
+        else if (action == "ask") cmdAskMentor(player, arg2);
+        else cmdAskMentor(player, arg);
+        return true;
+    }
+    if (sub == "apprentice" || sub == "app" || sub == "student") {
+        var aAction = lower(arg);
+        if (aAction == "" || aAction == "status" || aAction == "info") cmdBondStatus(player);
+        else if (aAction == "clear" || aAction == "remove" || aAction == "release") cmdClearApprentice(player);
+        else if (aAction == "ask" || aAction == "take") cmdAskApprentice(player, arg2);
+        else cmdAskApprentice(player, arg);
+        return true;
+    }
+    return false;
+}
+
+
 /* ========================= COMMANDS ========================= */
 
 function cmdHelp(player) {
@@ -504,7 +881,10 @@ function cmdHelp(player) {
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
-    uiSection(player, "Mentor Bond");
+    uiSection(player, "Your Mentor Bond");
+    showBondOnCard(player);
+    uiBlank(player);
+    uiSection(player, "Mentor Commands");
     uiCmd(player, "/spar mentor", "bond status");
     uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
     uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
@@ -574,6 +954,11 @@ function showPersonal(player, targetName) {
         C + "8   Best  " +
         C + "6" + commas(streak.best) + " days"
     );
+    if (online != null) {
+        uiBlank(player);
+        uiSection(player, "Mentor Bond");
+        showBondOnCard(online);
+    }
     uiFoot(player);
 }
 
@@ -661,6 +1046,10 @@ function routeSparSub(player, event) {
 
     var sub = lower(parts[0]);
     var arg = parts.length > 1 ? parts[1] : "";
+
+    if (routeBond(player, parts)) {
+        return;
+    }
 
     if (sub == "help" || sub == "?" || sub == "commands") {
         cmdHelp(player);
@@ -763,19 +1152,6 @@ function trigger(event) {
     var id = Number(event.id);
     if (!(id == 70 || id == 72 || id == 73 || id == 74 ||
           id == 75 || id == 76 || id == 77 || id == 78 || id == 79)) {
-        return;
-    }
-
-    var partsPeek = argsFrom(event, 1);
-    var subPeek = partsPeek.length > 0 ? lower(partsPeek[0]) : "";
-    /*
-     * Mentor Bond + TP share live in Sparring Tp System (Global Player).
-     * Skip claiming these so the Global script can handle them.
-     */
-    if (id == 70 && (
-        subPeek == "mentor" || subPeek == "mentors" || subPeek == "bond" ||
-        subPeek == "apprentice" || subPeek == "app" || subPeek == "student"
-    )) {
         return;
     }
 
