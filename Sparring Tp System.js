@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.1.3
+ Version: 3.1.4
 
  Combat-Based Training (Sparring v3)
 
@@ -32,6 +32,10 @@
     (no session start, TP, or chat spam while fighting).
   - v3.1.3: /spar help no longer advertises .spar / !spar / ./spar
     (those chat prefixes are unreliable and confuse players).
+  - v3.1.4: ki hits score again — queue HP received from damagedEntity
+    (owner-attributed kiblast LivingHurt) as well as victim damaged;
+    never demote a pending ki hit to melee; credit a small floor when
+    a landed ki hit is fully mitigated (HP drop ~0).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -263,6 +267,12 @@ var K_PENDING_KI = "spar.hp.pendingKi";
 var K_PENDING_KI_KIND = "spar.hp.pendingKiKind";
 var K_PENDING_UNTIL = "spar.hp.pendingUntil";
 var PENDING_HP_RESOLVE_MS = 75;
+/*
+ * Fully mitigated kiblasts often cancel LivingDamage (0 HP lost) while
+ * LivingHurt still fired. Credit a token received amount so the action
+ * still pays at MIN_DAMAGE_QUALITY instead of disappearing.
+ */
+var KI_FULL_MIT_FLOOR = 12;
 var K_MOVE_X = "spar.move.x";
 var K_MOVE_Y = "spar.move.y";
 var K_MOVE_Z = "spar.move.z";
@@ -2398,6 +2408,12 @@ function sampleHealthPool(player) {
 /*
  * LivingHurt has not applied mitigation yet. Snapshot the pool and
  * measure the drop on the next tick (same pattern as Rival challenges).
+ *
+ * Queue from BOTH:
+ *  - victim damaged (melee-friendly)
+ *  - attacker damagedEntity (kiblast owner attribution — required for ki)
+ * Never demote an already-pending ki hit to melee if a later event
+ * fails isKiAttack.
  */
 function queueReceivedHit(victim, attacker, isKi, kiKind) {
     if (victim == null || attacker == null) return;
@@ -2408,8 +2424,23 @@ function queueReceivedHit(victim, attacker, isKi, kiKind) {
             putNumber(temp, K_PENDING_SAMPLE, pool);
         }
         putString(temp, K_PENDING_ATK, getPlayerName(attacker));
-        putString(temp, K_PENDING_KI, isKi === true ? "1" : "0");
-        putString(temp, K_PENDING_KI_KIND, isKi === true ? String(kiKind || "other") : "melee");
+
+        var alreadyKi = readString(temp, K_PENDING_KI, "0") == "1";
+        if (isKi === true || alreadyKi) {
+            putString(temp, K_PENDING_KI, "1");
+            if (isKi === true) {
+                putString(temp, K_PENDING_KI_KIND, String(kiKind || "other"));
+            } else {
+                var prevKind = readString(temp, K_PENDING_KI_KIND, "");
+                if (prevKind == "" || prevKind == "melee") {
+                    putString(temp, K_PENDING_KI_KIND, "other");
+                }
+            }
+        } else {
+            putString(temp, K_PENDING_KI, "0");
+            putString(temp, K_PENDING_KI_KIND, "melee");
+        }
+
         putNumber(temp, K_PENDING_UNTIL, nowMs() + PENDING_HP_RESOLVE_MS);
     } catch (e) {}
 }
@@ -2439,7 +2470,15 @@ function resolvePendingReceived(player) {
     var received = sample - nowPool;
     sampleHealthPool(player);
 
-    if (!(received > 0.01)) return false;
+    /*
+     * Prefer real HP/absorption lost. If a kiblast LivingHurt landed but
+     * DMZ fully negated LivingDamage, still credit a token floor so ki
+     * training registers (beam clash already drips separately).
+     */
+    if (!(received > 0.01)) {
+        if (isKi === true) received = KI_FULL_MIT_FLOOR;
+        else return false;
+    }
 
     var partnerName = getPartnerName(player);
     if (partnerName == "" || partnerName.toLowerCase() != atkName.toLowerCase()) return false;
@@ -2528,17 +2567,23 @@ function damagedEntity(event) {
         if (suppressSparringForChallenge(attacker) || isInRivalChallenge(target)) return;
 
         /*
-         * Do NOT score from event.damage here — that is LivingHurt
-         * pre-mitigation DMZ damage dealt. TP uses HP actually lost
-         * (queued on victim damaged, resolved next tick).
+         * Do NOT award from event.damage (LivingHurt pre-mitigation).
+         * Still queue an HP-received sample here: kiblast LivingHurt is
+         * owner-attributed on damagedEntity, while victim damaged often
+         * misses projectile sources — that is why ki stopped scoring.
          */
         var ki = isKiAttack(event);
         var kiKind = ki ? classifyKiType(event) : "melee";
 
         recordCombatExchange(attacker, target, ki, kiKind);
 
-        if (isSessionActive(attacker) && isSessionActive(target) && ki) {
-            try { updateBeamClashState(attacker, target); } catch (eClash) {}
+        if (isSessionActive(attacker) && isSessionActive(target)) {
+            if (getPartnerName(attacker).toLowerCase() == getPlayerName(target).toLowerCase()) {
+                queueReceivedHit(target, attacker, ki, kiKind);
+            }
+            if (ki) {
+                try { updateBeamClashState(attacker, target); } catch (eClash) {}
+            }
         }
     } catch (error) {
         try { print("[Sparring v3] damagedEntity " + error); } catch (x) {}

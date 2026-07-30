@@ -1,4 +1,4 @@
-# Consolidated Scripts Pack (v4.7.6 / Sparring v3.1.3)
+# Consolidated Scripts Pack (v4.7.6 / Sparring v3.1.4)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.
@@ -16,7 +16,7 @@ Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.
 Battle report shows once (no DM+broadcast double).
 
 ## Sparring
-- `Sparring Tp System.js` **v3.1.3** → Global Player
+- `Sparring Tp System.js` **v3.1.4** → Global Player (ki scores via damagedEntity HP queue again)
 - `Sparring Command Handler.js` **v3.0.7** → script-slot
 - `Aliases-Sparring.yml` → CMI (`/spar` only; help no longer lists `.spar` / `!spar`)
 
