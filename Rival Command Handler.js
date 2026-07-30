@@ -812,21 +812,21 @@ function syncCmiTitle(playerName, title) {
 
 function cmdHelp(player) {
     uiHead(player, "RIVAL SYSTEM");
-    uiProp(player, "Path", C + "7Unknown " + C + "8> " + C + "eDeclared " + C + "8> " +
-        C + "6Mutual " + C + "8> " + C + "cNemesis");
+    uiProp(player, "Path", C + "7Unknown " + C + "8> " + C + "eDeclared " + C + "8/ " +
+        C + "dPending " + C + "8> " + C + "6Mutual " + C + "8> " + C + "cNemesis");
     uiProp(player, "Slots", C + "f" + MAX_MUTUAL + C + "7 Mutual max" + C + "8  |  " +
         C + "cNemesis after " + NEMESIS_DEATH_LOSSES + "+ death losses");
     uiProp(player, "Rewards", C + "7RP from official battles" + C + "8  |  " + C + "7TP for those who rival");
     uiBlank(player);
     uiSection(player, "Rivalry");
     uiCmd(player, "/rival <player>", "silent Unknown (they see nothing)");
-    uiCmd(player, "/rival declare <player>", "visible declare (accept/decline/ignore)");
+    uiCmd(player, "/rival declare <player>", "Pending declare (accept/decline/ignore)");
     uiCmd(player, "/rival accept|decline|remove <player>", "");
     uiCmd(player, "/rival list", "rivals + proving grounds");
     uiCmd(player, "/rival stats [player]", "career record");
     uiBlank(player);
     msg(player, C + "8Silent: both /rival each other -> Declared.");
-    msg(player, C + "8Visible: both /rival declare (or accept) -> Mutual.");
+    msg(player, C + "8Visible: /rival declare -> Pending; both declare/accept -> Mutual.");
     msg(player, C + "8Decline/ignore: they gain nothing; you still keep benefits.");
     msg(player, C + "8Nemesis: Mutual + " + NEMESIS_DEATH_LOSSES +
         "+ death/KO losses (not timer/damage).");

@@ -1375,6 +1375,8 @@ function startSession(a, b) {
     /* Seed movement window only — hits/blocks must not refresh AFK gate. */
     refreshMovementActivity(a);
     refreshMovementActivity(b);
+    sampleHealthPool(a);
+    sampleHealthPool(b);
 
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(a, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), bName, sparColor("e"), "."));

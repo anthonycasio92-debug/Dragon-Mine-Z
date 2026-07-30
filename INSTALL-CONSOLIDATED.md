@@ -1,4 +1,4 @@
-# Consolidated Scripts Pack (v4.7.4 / Sparring v3.1.0)
+# Consolidated Scripts Pack (v4.7.4 / Sparring v3.1.1)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.
@@ -15,7 +15,7 @@ Nearby TP capped at 2 + recent mob kill. TP scale 60%.
 Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.
 
 ## Sparring
-- `Sparring Tp System.js` **v3.1.0** → Global Player
+- `Sparring Tp System.js` **v3.1.1** → Global Player
 - `Sparring Command Handler.js` **v3.0.6** → script-slot
 - `Aliases-Sparring.yml` → CMI
 
