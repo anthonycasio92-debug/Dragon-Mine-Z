@@ -14,7 +14,7 @@ both declare/accept → Mutual; Mutual + 3 death/KO → Nemesis.
 Nearby TP capped at 2 + recent mob kill. TP scale 60%.  
 Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.  
 Battle report shows once (no DM+broadcast double).  
-**Challenge cooldown:** 5 minutes between official challenges (both fighters, after battle ends).
+**Challenge cooldown:** 2 minutes between official challenges (both fighters, after battle ends).
 
 ## Sparring
 - `Sparring Tp System.js` **v3.2.8** → Global Player

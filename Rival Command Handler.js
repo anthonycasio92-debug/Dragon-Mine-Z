@@ -20,7 +20,7 @@
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
 
  FIX (4.7.6):
-  Personal cooldown between official challenges (default 5 minutes)
+  Personal cooldown between official challenges (default 2 minutes)
   after a battle ends; /challenge send + accept both check it.
 
  FIX (4.7.4):
@@ -113,7 +113,7 @@ var DECLARE_COOLDOWN_MS = 30 * 1000;
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 /* After a challenge ends, both fighters wait before another official battle. */
-var CH_BETWEEN_COOLDOWN_MS = 5 * 60 * 1000;
+var CH_BETWEEN_COOLDOWN_MS = 2 * 60 * 1000;
 var CH_COUNTDOWN_MS = 5 * 1000;
 var CH_DURATION_MS = 60 * 1000;
 var CH_MIN_MINUTES = 1;

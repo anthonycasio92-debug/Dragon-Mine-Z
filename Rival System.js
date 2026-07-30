@@ -32,7 +32,7 @@
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
 
  Changelog (4.7.7):
- - Personal cooldown between official challenges (default 5 minutes)
+ - Personal cooldown between official challenges (default 2 minutes)
    after a battle ends; blocks send and accept for both fighters.
 
  Changelog (4.7.6):
@@ -2749,7 +2749,7 @@ var CH_LONG_FIGHT_MS = 2 * 60 * 1000;
 var CH_BROADCAST_SCORE_LONG_MS = 60 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
 /* After a challenge ends, both fighters wait before another official battle. */
-var CH_BETWEEN_COOLDOWN_MS = 5 * 60 * 1000;
+var CH_BETWEEN_COOLDOWN_MS = 2 * 60 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
