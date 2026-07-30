@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.17
+ Version: 4.6.18
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -11,6 +11,18 @@
  Gameplay stays in Rival System.js (Global Player).
  This file is the command display / action handler only -
  same split as Sparring TP System + Sparring Command Handler.
+
+ Intended rivalry path:
+   /rival <player>           silent Unknown (they see nothing)
+   both silent               Declared (both see each other)
+   /rival declare <player>   visible notify; accept/decline/ignore
+   both declare or accept    Mutual (benefits both ways)
+   Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ FIX (4.6.18):
+  Align silent/declare heal so pending visible declares are not
+  auto-promoted to Declared. RP tier renamed Vendetta (not Nemesis).
+  Cleanup messaging to match the path above.
 
  FIX (4.6.17 / 4.6.16):
   Nemesis display requires deathLosses >= 3 (clears stale random flags).
@@ -95,12 +107,13 @@ var CH_MIN_MINUTES = 1;
 var CH_MAX_MINUTES = 10;
 var CH_MAX_DISTANCE = 64;
 
+/* RP rank tiers (NOT the Mutual "Nemesis" relationship status). */
 var TIERS = [
     { min: 0,     name: "Acquaintance",  color: "7", tpMult: 1.00, perk: "None" },
     { min: 100,   name: "Competitor",    color: "a", tpMult: 1.05, perk: "Sense farther + 5% rival TP" },
     { min: 300,   name: "Adversary",     color: "2", tpMult: 1.10, perk: "Better reports + 10% rival TP" },
     { min: 700,   name: "Rival",         color: "e", tpMult: 1.15, perk: "Notifications + 15% rival TP" },
-    { min: 1500,  name: "Nemesis",       color: "6", tpMult: 1.25, perk: "Tracker + 25% rival TP" },
+    { min: 1500,  name: "Vendetta",      color: "6", tpMult: 1.25, perk: "Tracker + 25% rival TP" },
     { min: 3000,  name: "Legendary",     color: "c", tpMult: 1.35, perk: "Aura flag + 35% rival TP" },
     { min: 5000,  name: "Arch Rival",    color: "d", tpMult: 1.45, perk: "Entrance flag + 45% rival TP" },
     { min: 7500,  name: "Mortal Enemy",  color: "5", tpMult: 1.55, perk: "Priority alerts + 55% rival TP" },
@@ -367,6 +380,7 @@ function isReciprocatedSilent(link) {
 
 /*
  * If A and B each silently /rival each other one-sided, promote to Declared.
+ * Never heal across a pending visible /rival declare (invite/request).
  */
 function healCrossedSilentDeclares(db) {
     if (db == null || db.players == null) return 0;
@@ -390,8 +404,19 @@ function healCrossedSilentDeclares(db) {
             if (la.mutual === true || lb.mutual === true) continue;
             if (la.declaredByMe !== true || lb.declaredByMe !== true) continue;
             if (isReciprocatedSilent(la) && isReciprocatedSilent(lb)) continue;
+            /* Visible declare in flight: leave for accept/decline/Mutual. */
+            if (la.inviteSent === true || la.inviteReceived === true ||
+                lb.inviteSent === true || lb.inviteReceived === true) {
+                continue;
+            }
+            if (db.requests != null &&
+                (db.requests[reqKey(aUuid, bUuid)] != null ||
+                 db.requests[reqKey(bUuid, aUuid)] != null)) {
+                continue;
+            }
 
             formDeclared(db, a, b, "Healed crossed silent rivals");
+            removeRequests(db, aUuid, bUuid);
             healed++;
         }
     }
@@ -789,7 +814,7 @@ function cmdHelp(player) {
     uiBlank(player);
     uiSection(player, "Rivalry");
     uiCmd(player, "/rival <player>", "silent Unknown (they see nothing)");
-    uiCmd(player, "/rival declare <player>", "visible declare (they can accept/decline)");
+    uiCmd(player, "/rival declare <player>", "visible declare (accept/decline/ignore)");
     uiCmd(player, "/rival accept|decline|remove <player>", "");
     uiCmd(player, "/rival list", "rivals + proving grounds");
     uiCmd(player, "/rival stats [player]", "career record");
@@ -797,6 +822,8 @@ function cmdHelp(player) {
     msg(player, C + "8Silent: both /rival each other -> Declared.");
     msg(player, C + "8Visible: both /rival declare (or accept) -> Mutual.");
     msg(player, C + "8Decline/ignore: they gain nothing; you still keep benefits.");
+    msg(player, C + "8Nemesis: Mutual + " + NEMESIS_DEATH_LOSSES +
+        "+ death/KO losses (not timer/damage).");
     uiBlank(player);
     uiSection(player, "Battle");
     uiCmd(player, "/challenge <player> [1-10]", "official fight (minutes, default 1)");
@@ -865,15 +892,22 @@ function cmdSilent(player, targetName) {
         msg(player, C + "eAlready Declared with " + tref.name +
             C + "8. For Mutual:  " + C + "f/rival declare " + tref.name); return;
     }
+    if (pref.rivals[tu] != null && pref.rivals[tu].inviteSent === true && pref.rivals[tu].mutual !== true) {
+        msg(player, C + "eDeclare already pending for " + tref.name);
+        msg(player, C + "8They can accept/decline, or ignore. You keep benefits.");
+        return;
+    }
     if (pref.rivals[tu] != null && pref.rivals[tu].declaredByMe === true && pref.rivals[tu].mutual !== true) {
-        msg(player, C + "eAlready silently rivaled " + tref.name + C + "8 (Unknown)"); return;
+        msg(player, C + "eAlready silently rivaled " + tref.name + C + "8 (Unknown)");
+        msg(player, C + "8For Mutual:  " + C + "f/rival declare " + tref.name);
+        return;
     }
 
     var cdKey = reqKey(pu, tu);
     var rem = DECLARE_COOLDOWN_MS - (now() - num(db.cooldowns[cdKey], 0));
     if (rem > 0) { msg(player, C + "cWait " + Math.ceil(rem / 1000) + "s."); return; }
 
-    /* Pending visible declare from them -> accepting via silent still ok? Prefer Mutual. */
+    /* Pending visible declare from them -> Mutual (same as /rival accept). */
     var reverse = getRequest(db, tu, pu);
     if (reverse != null) {
         promoteMutual(player, target, db, pref, tref, "Accepted their rival declare");
@@ -946,6 +980,11 @@ function cmdDeclare(player, targetName) {
         return;
     }
 
+    if (pref.rivals[tu] != null && isReciprocatedSilent(pref.rivals[tu])) {
+        msg(player, C + "8You are Declared with " + tref.name +
+            C + "8. Sending a visible declare for Mutual...");
+    }
+
     /* You keep benefits (declaredByMe). They get invite only - no benefits yet. */
     var pl = ensureLink(pref, tref);
     pl.declaredByMe = true;
@@ -978,7 +1017,7 @@ function cmdDeclare(player, targetName) {
     msg(target, C + "8Ignore them and you gain nothing; they still keep benefits.");
 }
 
-/* Alias kept for old CMI shortcuts. */
+/* Legacy alias: /rival request|invite -> visible /rival declare. */
 function cmdRequest(player, targetName) {
     cmdDeclare(player, targetName);
 }
@@ -1578,7 +1617,7 @@ function showAchievements(player) {
     var list = prog != null && prog.achievements != null ? (prog.achievements[uuidOf(player)] || {}) : {};
     var defs = [
         ["first_blood", "First Blood"],
-        ["nemesis", "True Nemesis"],
+        ["nemesis", "Vendetta Rank"],
         ["unbreakable", "Unbreakable"],
         ["comeback_king", "Comeback King"],
         ["legend_killer", "Legend Killer"],
@@ -1696,6 +1735,16 @@ function printRivalCard(player, L, showPg) {
     msg(player, C + "8    Record  " + C + "a" + num(L.wins, 0) + C + "8-" +
         C + "c" + num(L.losses, 0) +
         C + "8   Streak  " + C + "a" + num(L.currentStreak, 0));
+    if (L.mutual === true) {
+        var deaths = num(L.deathLosses, 0);
+        if (st == "nemesis") {
+            msg(player, C + "8    Deaths to them  " + C + "c" + deaths +
+                C + "8  (Nemesis)");
+        } else {
+            msg(player, C + "8    Nemesis  " + C + "f" + deaths + "/" + NEMESIS_DEATH_LOSSES +
+                C + "8  death losses");
+        }
+    }
     if (showPg === true && L.provingGrounds && L.provingGrounds.active === true) {
         var pg = L.provingGrounds;
         var place = str(pg.name);

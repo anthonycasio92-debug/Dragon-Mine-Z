@@ -1,10 +1,13 @@
 # ============================================================
-# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.14+)
+# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.18)
+# Pair with Rival System.js + Rival Command Handler.js v4.6.18
 # ============================================================
 # Intended flow:
 #   /rival <player>           -> silent Unknown (they see nothing)
+#   both silent               -> Declared
 #   /rival declare <player>   -> VISIBLE declare (they are notified)
-#   /rival accept|decline     -> Mutual path
+#   both declare or accept    -> Mutual
+#   Mutual + 3 death/KO       -> Nemesis
 #
 # Paste under your existing CustomAlias: section
 # (do NOT paste a second "CustomAlias:" root if one already exists).
