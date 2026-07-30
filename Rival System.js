@@ -1,17 +1,20 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.6.7
+ Version: 4.6.9
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
  Changelog:
+ - Nemesis ONLY after 3+ mutual death losses (clears stale random /
+   history-based isNemesis flags; counts challenge KO + open-world
+   deaths from died AND kill events; status checks require
+   deathLosses >= 3; /rival list recomputes crown).
  - Challenge damage uses HP/absorption actually lost (damage received),
    not CNPC LivingHurtEvent amount (pre-mitigation DMZ damage).
    Scores only from the victim damaged event (no attacker double-count).
  - Rival path synced with Command Handler: silent /rival = Unknown;
-   both silent = Declared; /rival declare = Mutual path;
-   Nemesis after 3+ death losses (not damage/timer losses).
+   both silent = Declared; /rival declare = Mutual path.
  - Stop challenge countdown/FIGHT chat spam (UUID broadcast dedupe +
    announce locks). Root scripts were missing the rival-v4 spam fix.
  - Only the challenger tick starts FIGHT so both fighters do not
@@ -362,7 +365,14 @@ function rcNormalizeCareer(career) {
 function rcLinkStatus(link) {
     if (link === null || link === undefined) return "none";
     if (link.mutual === true) {
-        if (link.isNemesis === true) return "nemesis";
+        /*
+         * Never trust a stale isNemesis flag from older history-based
+         * builds. Nemesis requires Mutual + 3 death losses.
+         */
+        if (link.isNemesis === true &&
+            rcNumber(link.deathLosses, 0) >= RC_NEMESIS_DEATH_LOSSES) {
+            return "nemesis";
+        }
         return "mutual";
     }
     if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
@@ -397,7 +407,6 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.mutual = link.mutual === true;
     link.declaredByMe = link.declaredByMe === true;
     link.declaredByThem = link.declaredByThem === true;
-    link.isNemesis = link.isNemesis === true && link.mutual === true;
     link.points = Math.max(0, rcNumber(link.points, 0));
     link.wins = rcNumber(link.wins, 0);
     link.losses = rcNumber(link.losses, 0);
@@ -410,6 +419,10 @@ function rcNormalizeRivalLink(link, uuid, name) {
     link.battles = rcNumber(link.battles, link.wins + link.losses + link.draws);
     link.deathLosses = rcNumber(link.deathLosses, 0);
     link.deathWins = rcNumber(link.deathWins, 0);
+    /* Drop legacy random/history Nemesis unless death threshold is met. */
+    link.isNemesis = link.mutual === true &&
+        link.deathLosses >= RC_NEMESIS_DEATH_LOSSES &&
+        link.isNemesis === true;
     link.presenceMs = rcNumber(link.presenceMs, 0);
     link.createdAt = rcNumber(link.createdAt, rcNow());
     link.firstMetAt = rcNumber(link.firstMetAt, link.createdAt);
@@ -914,6 +927,8 @@ function rcRecomputeNemesis(record) {
     for (var uuid in record.rivals) {
         if (!record.rivals.hasOwnProperty(uuid)) continue;
         var link = record.rivals[uuid];
+        link.deathLosses = rcNumber(link.deathLosses, 0);
+        link.deathWins = rcNumber(link.deathWins, 0);
         link.isNemesis = false;
         if (link.mutual !== true) continue;
         var score = rcNemesisScore(link);
@@ -923,11 +938,12 @@ function rcRecomputeNemesis(record) {
         }
     }
 
-    if (bestUuid !== null) {
+    if (bestUuid !== null && bestScore >= 0) {
         record.rivals[bestUuid].isNemesis = true;
         record.nemesisUuid = bestUuid;
         rcRefreshLinkStatus(record.rivals[bestUuid]);
     } else {
+        bestUuid = null;
         record.nemesisUuid = "";
     }
 
@@ -942,10 +958,41 @@ function rcRecomputeNemesis(record) {
             rcMessage(online, RC_COLOR + "c" + RC_COLOR + "lNEMESIS! " +
                 RC_COLOR + "e" + record.rivals[bestUuid].name +
                 RC_COLOR + "7 - fallen to them " +
-                rcNumber(record.rivals[bestUuid].deathLosses, 0) + "+ times by death.");
+                rcNumber(record.rivals[bestUuid].deathLosses, 0) +
+                " times by death (need " + RC_NEMESIS_DEATH_LOSSES + ").");
         }
     }
     return bestUuid;
+}
+
+/*
+ * Record a real death to a Mutual rival for Nemesis progress.
+ * Returns true when deathLosses were incremented.
+ */
+function rcRegisterMutualDeathLoss(database, victimRecord, killerRecord, note) {
+    if (database == null || victimRecord == null || killerRecord == null) return false;
+    if (victimRecord.uuid === killerRecord.uuid) return false;
+
+    var vLink = victimRecord.rivals[killerRecord.uuid];
+    var kLink = killerRecord.rivals[victimRecord.uuid];
+    if (vLink == null || kLink == null) return false;
+    if (vLink.mutual !== true || kLink.mutual !== true) return false;
+
+    vLink.deathLosses = rcNumber(vLink.deathLosses, 0) + 1;
+    kLink.deathWins = rcNumber(kLink.deathWins, 0) + 1;
+    vLink.updatedAt = rcNow();
+    kLink.updatedAt = rcNow();
+    if (!(vLink.history instanceof Array)) vLink.history = [];
+    vLink.history.push({
+        time: rcNow(),
+        type: "death_loss",
+        note: rcString(note || ("Fallen to mutual rival " + killerRecord.name))
+    });
+    while (vLink.history.length > 30) vLink.history.shift();
+
+    rcRecomputeNemesis(victimRecord);
+    rcRecomputeNemesis(killerRecord);
+    return true;
 }
 
 function rcFindOldestMutualUuid(record, excludeUuid) {
@@ -1208,9 +1255,11 @@ function rcDeclare(player, targetName) {
         rcSaveDatabase(player, database);
 
         rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + targetRecord.name);
-        rcMessage(player, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
+        rcMessage(player, RC_COLOR + "7Fall to them " + RC_NEMESIS_DEATH_LOSSES +
+            "+ times by death to forge a Nemesis.");
         rcMessage(target, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + playerRecord.name);
-        rcMessage(target, RC_COLOR + "7Official battles now write your history. Fight for Nemesis.");
+        rcMessage(target, RC_COLOR + "7Fall to them " + RC_NEMESIS_DEATH_LOSSES +
+            "+ times by death to forge a Nemesis.");
         return;
     }
 
@@ -1282,13 +1331,15 @@ function rcAccept(player, targetName) {
     rcSaveDatabase(player, database);
 
     rcMessage(player, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " + RC_COLOR + "e" + fromRecord.name);
-    rcMessage(player, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+    rcMessage(player, RC_COLOR + "7Fall to them " + RC_NEMESIS_DEATH_LOSSES +
+        "+ times by death to forge a Nemesis.");
 
     var online = rcFindOnlinePlayerAnyWorld(fromRecord.name);
     if (online !== null) {
         rcMessage(online, RC_COLOR + "6" + RC_COLOR + "lMUTUAL RIVAL! " +
             RC_COLOR + "e" + playerRecord.name + RC_COLOR + "a accepted!");
-        rcMessage(online, RC_COLOR + "7Official battles forge history. Your greatest rival becomes Nemesis.");
+        rcMessage(online, RC_COLOR + "7Fall to them " + RC_NEMESIS_DEATH_LOSSES +
+            "+ times by death to forge a Nemesis.");
     }
 }
 
@@ -2594,6 +2645,25 @@ function rpHandleDeathToRival(victim, damageSource) {
             }
         } catch (ignored2) {}
     }
+    /* died event may pass IDamageSource - resolve the killing player. */
+    if (!rpIsPlayer(attacker)) {
+        try {
+            if (damageSource !== null && damageSource.getTrueSource) {
+                attacker = damageSource.getTrueSource();
+            }
+        } catch (ignored3) {}
+    }
+    if (!rpIsPlayer(attacker)) {
+        try {
+            if (damageSource !== null && damageSource.getImmediateSource) {
+                var imm = damageSource.getImmediateSource();
+                if (rpIsPlayer(imm)) attacker = imm;
+                else if (imm != null && typeof imm.getMCEntity == "function") {
+                    /* ignore non-players */
+                }
+            }
+        } catch (ignored4) {}
+    }
     if (!rpIsPlayer(attacker)) return;
 
     var database = rpLoadDatabase(victim);
@@ -2601,11 +2671,46 @@ function rpHandleDeathToRival(victim, damageSource) {
 
     var victimUuid = rpUuid(victim);
     var attackerUuid = rpUuid(attacker);
-    var record = database.players[victimUuid];
-    if (record === null || record === undefined) return;
+    var victimRecord = database.players[victimUuid];
+    if (victimRecord == null) victimRecord = rcEnsurePlayer(database, victim);
+    var killerRecord = database.players[attackerUuid];
+    if (killerRecord == null) killerRecord = rcEnsurePlayer(database, attacker);
+    if (victimRecord == null || killerRecord == null) return;
 
-    var link = rpGetLink(record, attackerUuid);
-    if (link === null) return;
+    /*
+     * Challenge KO already counted deathLosses in chApplyRewards.
+     * Skip open-world double-count for a few seconds.
+     */
+    try {
+        var temp = victim.getTempdata();
+        if (temp != null && temp.has("rival.v4.deathLossCounted")) {
+            var countedAt = rpNumber(temp.get("rival.v4.deathLossCounted"), 0);
+            if (rpNow() - countedAt < 5000) return;
+        }
+    } catch (eSkip) {}
+
+    var link = rpGetLink(victimRecord, attackerUuid);
+    if (link == null) return;
+
+    /* Mutual deaths drive Nemesis. One-sided deaths stay flavor history. */
+    if (link.mutual === true) {
+        if (rcRegisterMutualDeathLoss(database, victimRecord, killerRecord, "Fallen to mutual rival in the world")) {
+            try {
+                victim.getTempdata().put("rival.v4.deathLossCounted", String(rpNow()));
+            } catch (eMark) {}
+            rpSaveDatabase(victim, database);
+            var deaths = rcNumber(victimRecord.rivals[attackerUuid].deathLosses, 0);
+            rpMessage(victim, RP_COLOR + "c[Rival] Death to Mutual rival " +
+                RP_COLOR + "e" + killerRecord.name + RP_COLOR + "7 (" +
+                deaths + "/" + RC_NEMESIS_DEATH_LOSSES + " toward Nemesis)");
+            if (deaths >= RC_NEMESIS_DEATH_LOSSES &&
+                rcString(victimRecord.nemesisUuid) === attackerUuid) {
+                /* Announce already handled inside rcRecomputeNemesis when newly crowned. */
+            }
+        }
+        return;
+    }
+
     if (link.declaredByMe !== true) return;
 
     var myData = rpGetDMZ(victim);
@@ -2668,11 +2773,64 @@ function rivalProxDamaged(event) {
     }
 }
 
+/*
+ * Killer-side backup: CNPC died.source is often IDamageSource and may
+ * fail to resolve the player killer. Kill events always know the killer.
+ */
+function rpHandleKillOfMutualRival(killer, victim) {
+    if (!rpIsPlayer(killer) || !rpIsPlayer(victim)) return false;
+
+    try {
+        var temp = victim.getTempdata();
+        if (temp != null && temp.has("rival.v4.deathLossCounted")) {
+            var countedAt = rpNumber(temp.get("rival.v4.deathLossCounted"), 0);
+            if (rpNow() - countedAt < 5000) return false;
+        }
+    } catch (eSkip) {}
+
+    var database = rpLoadDatabase(killer);
+    if (database === null) return false;
+
+    var killerRecord = database.players[rpUuid(killer)];
+    if (killerRecord == null) killerRecord = rcEnsurePlayer(database, killer);
+    var victimRecord = database.players[rpUuid(victim)];
+    if (victimRecord == null) victimRecord = rcEnsurePlayer(database, victim);
+    if (killerRecord == null || victimRecord == null) return false;
+
+    var link = rpGetLink(victimRecord, rpUuid(killer));
+    if (link == null || link.mutual !== true) return false;
+
+    if (!rcRegisterMutualDeathLoss(
+        database,
+        victimRecord,
+        killerRecord,
+        "Fallen to mutual rival in the world"
+    )) {
+        return false;
+    }
+
+    try {
+        victim.getTempdata().put("rival.v4.deathLossCounted", String(rpNow()));
+    } catch (eMark) {}
+    rpSaveDatabase(killer, database);
+
+    var deaths = rcNumber(victimRecord.rivals[rpUuid(killer)].deathLosses, 0);
+    try {
+        rpMessage(victim, RP_COLOR + "c[Rival] Death to Mutual rival " +
+            RP_COLOR + "e" + killerRecord.name + RP_COLOR + "7 (" +
+            deaths + "/" + RC_NEMESIS_DEATH_LOSSES + " toward Nemesis)");
+    } catch (eMsg) {}
+    return true;
+}
+
 function rivalProxKill(event) {
     try {
         var killer = event.player;
         var victim = event.entity;
         if (!rpIsPlayer(killer) || victim === null) return;
+        try { rpHandleKillOfMutualRival(killer, victim); } catch (eDeath) {
+            rpLog("mutual kill death-loss failed: " + eDeath);
+        }
         rpHandleKillNearRivals(killer, victim);
     } catch (error) {
         rpLog("kill failed: " + error);
@@ -3278,7 +3436,11 @@ function chEnsureLink(owner, target) {
     var link = owner.rivals[target.uuid];
     link.name = target.name;
     link.updatedAt = chNow();
-    if (link.isNemesis !== true) link.isNemesis = false;
+    link.deathLosses = chNumber(link.deathLosses, 0);
+    link.deathWins = chNumber(link.deathWins, 0);
+    link.isNemesis = link.mutual === true &&
+        link.deathLosses >= RC_NEMESIS_DEATH_LOSSES &&
+        link.isNemesis === true;
     link.provingGrounds = pgNormalize(link.provingGrounds);
     return link;
 }
@@ -3885,13 +4047,20 @@ function chApplyRewards(player, session, result) {
         var deathLoss = result.knockout === true ||
             result.reason === "knockout" ||
             result.reason === "death";
-        if (deathLoss) {
-            var wLink = winnerRecord.rivals[loserRecord.uuid];
-            var lLink = loserRecord.rivals[winnerRecord.uuid];
-            wLink.deathWins = chNumber(wLink.deathWins, 0) + 1;
-            lLink.deathLosses = chNumber(lLink.deathLosses, 0) + 1;
-        }
-        if (mutual) {
+        if (deathLoss && mutual) {
+            rcRegisterMutualDeathLoss(
+                core,
+                loserRecord,
+                winnerRecord,
+                "Fallen in official challenge"
+            );
+            try {
+                if (loserPlayer != null) {
+                    loserPlayer.getTempdata().put("rival.v4.deathLossCounted", String(chNow()));
+                }
+            } catch (eMarkDeath) {}
+        } else if (mutual) {
+            /* Timer / damage wins never crown or advance Nemesis. */
             rcRecomputeNemesis(winnerRecord);
             rcRecomputeNemesis(loserRecord);
         }
@@ -4422,6 +4591,31 @@ function rivalChKill(event) {
     }
 }
 
+function rivalChResolveKiller(damageSource) {
+    var attacker = null;
+    try { attacker = damageSource; } catch (ignored) {}
+    if (chIsPlayer(attacker)) return attacker;
+    try {
+        if (damageSource != null && damageSource.getSourceEntity) {
+            attacker = damageSource.getSourceEntity();
+            if (chIsPlayer(attacker)) return attacker;
+        }
+    } catch (e1) {}
+    try {
+        if (damageSource != null && damageSource.getTrueSource) {
+            attacker = damageSource.getTrueSource();
+            if (chIsPlayer(attacker)) return attacker;
+        }
+    } catch (e2) {}
+    try {
+        if (damageSource != null && damageSource.getImmediateSource) {
+            attacker = damageSource.getImmediateSource();
+            if (chIsPlayer(attacker)) return attacker;
+        }
+    } catch (e3) {}
+    return null;
+}
+
 function rivalChDied(event) {
     try {
         var victim = event.player;
@@ -4432,9 +4626,9 @@ function rivalChDied(event) {
         if (session === null || session.state !== "active") return;
 
         var source = null;
-        try { source = event.source; } catch (ignored) {}
+        try { source = rivalChResolveKiller(event.source); } catch (ignored) {}
         if (!chIsPlayer(source)) {
-            /* Treat mysterious death as loss for victim vs the other participant */
+            /* Environment / unresolved death still counts as KO vs opponent. */
             var winnerUuid = chUuid(victim) === session.challengerUuid
                 ? session.opponentUuid
                 : session.challengerUuid;
@@ -4447,9 +4641,16 @@ function rivalChDied(event) {
             return;
         }
 
+        var killerUuid = chUuid(source);
+        if (killerUuid !== session.challengerUuid && killerUuid !== session.opponentUuid) {
+            killerUuid = chUuid(victim) === session.challengerUuid
+                ? session.opponentUuid
+                : session.challengerUuid;
+        }
+
         chEndSession(victim, db, session, {
             reason: "knockout",
-            winnerUuid: chUuid(source),
+            winnerUuid: killerUuid,
             loserUuid: chUuid(victim),
             knockout: true
         });
@@ -4734,7 +4935,7 @@ function riScan(player) {
         var rivalData = riDMZ(rival);
         var status = riStatus(rivalData);
         var theirReleased = riReleased(rivalData);
-        var tag = link.isNemesis === true ? "Nemesis" : tier.name;
+        var tag = rcLinkStatus(link) === "nemesis" ? "Nemesis" : tier.name;
 
         /* Arrive: one combined ping when they enter range (not every few seconds). */
         if (!wasNear) {

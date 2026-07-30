@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.15
+ Version: 4.6.17
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -11,6 +11,10 @@
  Gameplay stays in Rival System.js (Global Player).
  This file is the command display / action handler only -
  same split as Sparring TP System + Sparring Command Handler.
+
+ FIX (4.6.17 / 4.6.16):
+  Nemesis display requires deathLosses >= 3 (clears stale random flags).
+  /rival list recomputes Nemesis so 3+ death losses crown correctly.
 
  FIX (4.6.15 / 4.6.14):
   /rival declare <player> is VISIBLE (notifies them).
@@ -330,7 +334,10 @@ function findRecord(db, name) {
 function linkStatus(link) {
     if (link == null) return "none";
     if (link.mutual === true) {
-        if (link.isNemesis === true) return "nemesis";
+        /* Never trust stale isNemesis from old history-based builds. */
+        if (link.isNemesis === true && num(link.deathLosses, 0) >= NEMESIS_DEATH_LOSSES) {
+            return "nemesis";
+        }
         return "mutual";
     }
     /* Both silently rivaled each other = Declared. */
@@ -515,10 +522,12 @@ function ensureLink(owner, target) {
     link.name = target.name;
     link.nameLower = lower(target.name);
     link.updatedAt = now();
-    if (link.isNemesis !== true) link.isNemesis = false;
     if (link.inviteReceived !== true) link.inviteReceived = false;
-    if (link.deathLosses == null) link.deathLosses = 0;
-    if (link.deathWins == null) link.deathWins = 0;
+    link.deathLosses = num(link.deathLosses, 0);
+    link.deathWins = num(link.deathWins, 0);
+    link.isNemesis = link.mutual === true &&
+        link.deathLosses >= NEMESIS_DEATH_LOSSES &&
+        link.isNemesis === true;
     refreshLinkStatus(link);
     return link;
 }
@@ -543,7 +552,7 @@ function nemesisScore(link) {
     var deathLosses = num(link.deathLosses, 0);
     if (deathLosses < NEMESIS_DEATH_LOSSES) return -1;
     /* Prefer the mutual rival who has killed you the most. */
-    return deathLosses * 1000 + num(link.deathsToThem, deathLosses);
+    return deathLosses * 1000 + num(link.deathWins, 0);
 }
 
 function recomputeNemesis(rec) {
@@ -553,15 +562,18 @@ function recomputeNemesis(rec) {
     var prev = str(rec.nemesisUuid);
     for (var u in rec.rivals) {
         if (!rec.rivals.hasOwnProperty(u)) continue;
+        rec.rivals[u].deathLosses = num(rec.rivals[u].deathLosses, 0);
+        rec.rivals[u].deathWins = num(rec.rivals[u].deathWins, 0);
         rec.rivals[u].isNemesis = false;
         if (rec.rivals[u].mutual !== true) continue;
         var sc = nemesisScore(rec.rivals[u]);
         if (sc > bestScore) { bestScore = sc; bestUuid = u; }
     }
-    if (bestUuid != null) {
+    if (bestUuid != null && bestScore >= 0) {
         rec.rivals[bestUuid].isNemesis = true;
         rec.nemesisUuid = bestUuid;
     } else {
+        bestUuid = null;
         rec.nemesisUuid = "";
     }
     for (var u2 in rec.rivals) {
@@ -573,7 +585,8 @@ function recomputeNemesis(rec) {
         if (online != null) {
             msg(online, C + "c" + C_BOLD + "NEMESIS! " + C_RESET + C + "e" + rec.rivals[bestUuid].name +
                 C + "7 - you have fallen to them " +
-                num(rec.rivals[bestUuid].deathLosses, 0) + "+ times in battle.");
+                num(rec.rivals[bestUuid].deathLosses, 0) +
+                " times by death (need " + NEMESIS_DEATH_LOSSES + ").");
         }
     }
     return bestUuid;
@@ -1138,6 +1151,8 @@ function cmdList(player) {
     var db = loadDb();
     cleanupExpiredRequests(db);
     var pref = ensurePlayer(db, player);
+    /* Crown / clear Nemesis from current deathLosses (not stale flags). */
+    recomputeNemesis(pref);
     saveDb(db);
 
     var nemName = "-";
