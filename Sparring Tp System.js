@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.3
+ Version: 3.2.4
 
  Combat-Based Training (Sparring v3)
 
@@ -46,6 +46,9 @@
     Command Handler ignores non-spar trigger ids.
   - v3.2.3: /spar mentor works via Command Handler (CMI path); /spar help
     and /spar stats show current Mentor Bond status.
+  - v3.2.4: Friendly Fist spar heal rewritten — detect KD or ~1 HP, heal
+    from either fighter's tick, mark pending on FF hits, and do not require
+    Java boolean === true (Rhino-safe).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -1504,12 +1507,29 @@ function sparCmdRouteBond(player, parts) {
 
 /* ========================= FRIENDLY FIST SPAR HEAL ========================= */
 
+/*
+ * Rhino/Nashorn can box Java booleans so `=== true` fails.
+ * Accept any truthy Java/JS boolean-like value.
+ */
+function javaFlagTrue(value) {
+    if (value === true) return true;
+    if (value === false || value == null) return false;
+    try {
+        if (value == true) return true;
+    } catch (e1) {}
+    try {
+        if (String(value).toLowerCase() == "true") return true;
+    } catch (e2) {}
+    return false;
+}
+
 function isFriendlyFistOn(player) {
     try {
         var data = getDMZData(player);
         if (data == null) return false;
         var status = data.getStatus();
-        return status != null && status.isFriendlyFistEnabled() === true;
+        if (status == null) return false;
+        return javaFlagTrue(status.isFriendlyFistEnabled());
     } catch (e) { return false; }
 }
 
@@ -1518,45 +1538,131 @@ function isPlayerKnockedDown(player) {
         var data = getDMZData(player);
         if (data == null) return false;
         var status = data.getStatus();
-        return status != null && status.isKnockedDown() === true;
+        if (status == null) return false;
+        return javaFlagTrue(status.isKnockedDown());
     } catch (e) { return false; }
+}
+
+/*
+ * Friendly Fist lethal hits leave the victim at ~1 HP + knocked down.
+ * Detect either signal so heal still fires if the KD flag is late/stale.
+ */
+function needsFriendlyFistHeal(player) {
+    if (player == null) return false;
+    if (isPlayerKnockedDown(player)) return true;
+    try {
+        var health = Number(player.getHealth());
+        if (isNaN(health) || health <= 0) {
+            try { health = Number(player.getMCEntity().getHealth()); } catch (e1) { health = 0; }
+        }
+        if (health > 0 && health <= 1.5) return true;
+    } catch (e) {}
+    return false;
 }
 
 function healSparPlayerFull(player) {
     if (player == null) return false;
     try {
         var maxH = 0;
+        var mc = null;
+        try { mc = player.getMCEntity(); } catch (e0) { mc = null; }
         try { maxH = Number(player.getMaxHealth()); } catch (e1) { maxH = 0; }
-        try {
-            var mc = player.getMCEntity();
-            if (mc != null) {
-                if (!(maxH > 0)) {
-                    try { maxH = Number(mc.getMaxHealth()); } catch (e2) {}
-                }
-                try { mc.setHealth(mc.getMaxHealth()); } catch (e3) {}
-            }
-        } catch (e4) {}
-        if (maxH > 0) {
-            try { player.setHealth(maxH); } catch (e5) {}
+        if (!(maxH > 0) && mc != null) {
+            try { maxH = Number(mc.getMaxHealth()); } catch (e2) {}
+        }
+        if (!(maxH > 0)) maxH = 20;
+
+        /* Restore vanilla health first. */
+        try { player.setHealth(maxH); } catch (e3) {}
+        if (mc != null) {
+            try { mc.setHealth(mc.getMaxHealth()); } catch (e4) {}
+            try { mc.m_21153_(mc.m_21233_()); } catch (e5) {} /* LivingEntity#setHealth */
+            try { mc.m_5634_(maxH); } catch (e6) {} /* heal */
         }
 
         var data = getDMZData(player);
         if (data != null) {
-            try { data.getStatus().setKnockedDown(false); } catch (e6) {}
-            try { data.getCooldowns().removeCooldown("KnockdownDuration"); } catch (e7) {}
+            try { data.getStatus().setKnockedDown(false); } catch (e7) {}
+            try { data.getCooldowns().removeCooldown("KnockdownDuration"); } catch (e8) {}
+            try { data.getCooldowns().setCooldown("KnockdownDuration", 0); } catch (e9) {}
             try {
                 NetworkHandler.sendToTrackingEntityAndSelf(
-                    new StatsSyncS2C(player.getMCEntity()),
-                    player.getMCEntity()
+                    new StatsSyncS2C(mc != null ? mc : player.getMCEntity()),
+                    mc != null ? mc : player.getMCEntity()
                 );
-            } catch (e8) {}
+            } catch (e10) {}
         }
         sampleHealthPool(player);
-        /* Success only if knockdown actually cleared. */
-        return !isPlayerKnockedDown(player);
+
+        var nowH = 0;
+        try { nowH = Number(player.getHealth()); } catch (e11) {}
+        if (!(nowH > 0) && mc != null) {
+            try { nowH = Number(mc.getHealth()); } catch (e12) {}
+        }
+        /*
+         * Success if HP is restored OR knockdown cleared.
+         * Do not require both — DMZ KD clear can lag a tick behind.
+         */
+        return nowH >= Math.max(2, maxH * 0.5) || !isPlayerKnockedDown(player);
     } catch (e) {
         return false;
     }
+}
+
+function markFriendlyFistHealPending(victim) {
+    if (victim == null) return;
+    try {
+        putNumber(victim.getTempdata(), "spar.ff.healPendingUntil", nowMs() + 500);
+    } catch (e) {}
+}
+
+function hasFriendlyFistHealPending(victim) {
+    if (victim == null) return false;
+    try {
+        return nowMs() <= readNumber(victim.getTempdata(), "spar.ff.healPendingUntil", 0);
+    } catch (e) {
+        return false;
+    }
+}
+
+function finishFriendlyFistHeal(healer, target) {
+    if (healer == null || target == null) return false;
+    var tTemp = target.getTempdata();
+    if (readString(tTemp, K_FF_KD_HEALED, "0") == "1") return false;
+
+    if (!healSparPlayerFull(target)) {
+        /* Still mark pending so we retry next ticks while KD/low HP lasts. */
+        markFriendlyFistHealPending(target);
+        return false;
+    }
+
+    putString(tTemp, K_FF_KD_HEALED, "1");
+    try { putNumber(tTemp, "spar.ff.healPendingUntil", 0); } catch (e0) {}
+
+    try {
+        refreshMovementActivity(healer);
+        refreshMovementActivity(target);
+        var now = nowMs();
+        putString(healer.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(target));
+        putNumber(healer.getTempdata(), K_LAST_OUT_TIME, now);
+        putString(target.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(healer));
+        putNumber(target.getTempdata(), K_LAST_OUT_TIME, now);
+        clearGraceState(healer, target);
+    } catch (eKeep) {}
+
+    sendMessage(healer, sparText(
+        sparColor("6"), "[Sparring] ",
+        sparColor("a"), "Friendly Fist ",
+        sparColor("7"), "knockdown — healed ",
+        sparColor("f"), getPlayerName(target), sparColor("7"), "."
+    ));
+    sendMessage(target, sparText(
+        sparColor("6"), "[Sparring] ",
+        sparColor("a"), "Friendly Fist ",
+        sparColor("7"), "heal from ",
+        sparColor("f"), getPlayerName(healer), sparColor("7"), "."
+    ));
+    return true;
 }
 
 function processFriendlyFistKnockdownHeal(player, partner) {
@@ -1564,38 +1670,29 @@ function processFriendlyFistKnockdownHeal(player, partner) {
     if (!isSessionActive(player) || !isSessionActive(partner)) return;
 
     var pTemp = partner.getTempdata();
-    if (!isPlayerKnockedDown(partner)) {
+    var aTemp = player.getTempdata();
+
+    /* Reset heal latch once they are back on their feet / healthy. */
+    if (!needsFriendlyFistHeal(partner) && !hasFriendlyFistHealPending(partner)) {
         putString(pTemp, K_FF_KD_HEALED, "0");
-        return;
     }
-    if (readString(pTemp, K_FF_KD_HEALED, "0") == "1") return;
-    if (!isFriendlyFistOn(player)) return;
+    if (!needsFriendlyFistHeal(player) && !hasFriendlyFistHealPending(player)) {
+        putString(aTemp, K_FF_KD_HEALED, "0");
+    }
 
-    if (!healSparPlayerFull(partner)) return;
-    putString(pTemp, K_FF_KD_HEALED, "1");
-
-    try {
-        refreshMovementActivity(player);
-        refreshMovementActivity(partner);
-        var now = nowMs();
-        putString(player.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(partner));
-        putNumber(player.getTempdata(), K_LAST_OUT_TIME, now);
-        putString(partner.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(player));
-        putNumber(partner.getTempdata(), K_LAST_OUT_TIME, now);
-    } catch (eKeep) {}
-
-    sendMessage(player, sparText(
-        sparColor("6"), "[Sparring] ",
-        sparColor("a"), "Friendly Fist ",
-        sparColor("7"), "knockdown — healed ",
-        sparColor("f"), getPlayerName(partner), sparColor("7"), "."
-    ));
-    sendMessage(partner, sparText(
-        sparColor("6"), "[Sparring] ",
-        sparColor("a"), "Friendly Fist ",
-        sparColor("7"), "heal from ",
-        sparColor("f"), getPlayerName(player), sparColor("7"), "."
-    ));
+    /*
+     * Either fighter can drive the heal:
+     *  - I have Friendly Fist and partner is KD / ~1 HP
+     *  - Partner has Friendly Fist and I am KD / ~1 HP
+     */
+    if ((needsFriendlyFistHeal(partner) || hasFriendlyFistHealPending(partner)) &&
+        isFriendlyFistOn(player)) {
+        finishFriendlyFistHeal(player, partner);
+    }
+    if ((needsFriendlyFistHeal(player) || hasFriendlyFistHealPending(player)) &&
+        isFriendlyFistOn(partner)) {
+        finishFriendlyFistHeal(partner, player);
+    }
 }
 
 /* ========================= MOVEMENT ========================= */
@@ -2974,21 +3071,36 @@ function processSession(player) {
         endSession(player, partner, "fighters changed dimensions");
         return;
     }
+
+    /*
+     * Friendly Fist heal before alive/activity checks.
+     * DMZ leaves the victim at 1 HP + knocked down; heal them immediately
+     * so the spar does not end as a defeat.
+     */
+    try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf) {}
+
     if (!isAlive(player) || !isAlive(partner)) {
-        endSession(player, partner, "a fighter was defeated");
-        return;
+        /*
+         * If Friendly Fist should have saved them, retry once more before
+         * treating this as a real defeat.
+         */
+        try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf2) {}
+        if (!isAlive(player) || !isAlive(partner)) {
+            if (!(isFriendlyFistOn(player) || isFriendlyFistOn(partner))) {
+                endSession(player, partner, "a fighter was defeated");
+                return;
+            }
+            /* FF on — keep session for another tick while heal retries. */
+            if (isAlive(player)) markFriendlyFistHealPending(partner);
+            if (isAlive(partner)) markFriendlyFistHealPending(player);
+            return;
+        }
     }
     if (getPartnerName(partner).toLowerCase() != getPlayerName(player).toLowerCase() ||
         !isSessionActive(partner)) {
         endSession(player, partner, "session data no longer matched");
         return;
     }
-
-    /*
-     * Friendly Fist knockdown heal must run before activity gates —
-     * a knockdown pauses hits/movement and would otherwise end the spar.
-     */
-    try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf) {}
 
     updateMovement(player);
 
@@ -3249,6 +3361,9 @@ function damagedEntity(event) {
         if (isSessionActive(attacker) && isSessionActive(target)) {
             if (getPartnerName(attacker).toLowerCase() == getPlayerName(target).toLowerCase()) {
                 queueReceivedHit(target, attacker, ki, kiKind);
+                if (isFriendlyFistOn(attacker)) {
+                    markFriendlyFistHealPending(target);
+                }
             }
             if (ki) {
                 try { updateBeamClashState(attacker, target); } catch (eClash) {}
@@ -3278,6 +3393,9 @@ function damaged(event) {
             var kiKind = ki ? classifyKiType(event) : "melee";
             /* Snapshot pool now; tick awards from real HP/absorption lost. */
             queueReceivedHit(victim, attacker, ki, kiKind);
+            if (isFriendlyFistOn(attacker)) {
+                markFriendlyFistHealPending(victim);
+            }
 
             if (isPlayerBlocking(victim)) {
                 var temp = victim.getTempdata();
@@ -3326,6 +3444,17 @@ function died(event) {
         var player = event.player;
         if (player == null || !isSessionActive(player)) return;
         var partner = getPlayerByName(player, getPartnerName(player));
+        /*
+         * Friendly Fist should prevent true death (KD at 1 HP). If died
+         * still fires, try the spar heal instead of ending the session.
+         */
+        if (partner != null && (isFriendlyFistOn(partner) || isFriendlyFistOn(player))) {
+            markFriendlyFistHealPending(player);
+            try { processFriendlyFistKnockdownHeal(partner, player); } catch (eFf) {}
+            if (isAlive(player) || needsFriendlyFistHeal(player) || isPlayerKnockedDown(player)) {
+                return;
+            }
+        }
         endSession(player, partner, "a fighter was defeated");
     } catch (e) {}
 }
@@ -3886,7 +4015,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.2] Audit fixes + ki-charge hold | BeamClashManager=" +
+            print("[Sparring v3.2.4] FF heal fix + Mentor Bond | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
