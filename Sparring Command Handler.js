@@ -514,6 +514,7 @@ function cmdHelp(player) {
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
     uiCmd(player, "/spartop", "same as /spar top");
+    uiCmd(player, "/sparmentor | /sparapprentice | /sparbond", "mentor shortcuts");
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);

@@ -3439,6 +3439,7 @@ function sparCmdHelp(player) {
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
     uiCmd(player, "/spartop", "same as /spar top");
+    uiCmd(player, "/sparmentor | /sparapprentice | /sparbond", "mentor shortcuts");
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
@@ -3888,7 +3889,10 @@ function chat(event) {
             lower.indexOf("spar ") == 0 ||
             lower.indexOf("sparhelp") == 0 ||
             lower.indexOf("sparstats") == 0 ||
-            lower.indexOf("spartop") == 0
+            lower.indexOf("spartop") == 0 ||
+            lower.indexOf("sparmentor") == 0 ||
+            lower.indexOf("sparapprentice") == 0 ||
+            lower.indexOf("sparbond") == 0
         )) {
             return;
         }
