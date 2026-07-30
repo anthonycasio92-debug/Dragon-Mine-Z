@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.1
+ Version: 3.2.2
 
  Combat-Based Training (Sparring v3)
 
@@ -40,6 +40,10 @@
     Friendly Fist knockdown during a spar fully heals the partner.
   - v3.2.1: charging / preparing a ki attack holds the spar activity
     timer (hit + movement gates), so sessions no longer end mid-charge.
+  - v3.2.2: audit fixes — mentor reconcile; Friendly Fist heal flag only
+    after success; no partner fallback for non-PvP damage; third-party
+    hits no longer poison spar timers; block TP only from spar partner;
+    Command Handler ignores non-spar trigger ids.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -1095,6 +1099,29 @@ function isMentorOf(mentor, apprentice) {
         namesMatch(getBondMentorName(apprentice), getPlayerName(mentor));
 }
 
+function reconcileMentorBond(player) {
+    if (player == null) return;
+    var stored = bondStored(player);
+    if (stored == null) return;
+    var self = getPlayerName(player);
+
+    var app = getBondApprenticeName(player);
+    if (app != "") {
+        var ap = getPlayerByName(player, app);
+        if (ap != null && !namesMatch(getBondMentorName(ap), self)) {
+            putString(stored, S_APPRENTICE_NAME, "");
+        }
+    }
+
+    var ment = getBondMentorName(player);
+    if (ment != "") {
+        var m = getPlayerByName(player, ment);
+        if (m != null && !namesMatch(getBondApprenticeName(m), self)) {
+            putString(stored, S_MENTOR_NAME, "");
+        }
+    }
+}
+
 function isSparringWithOwnMentor(player, partner) {
     if (player == null || partner == null) return false;
     return isMentorOf(partner, player);
@@ -1523,7 +1550,8 @@ function healSparPlayerFull(player) {
             } catch (e8) {}
         }
         sampleHealthPool(player);
-        return true;
+        /* Success only if knockdown actually cleared. */
+        return !isPlayerKnockedDown(player);
     } catch (e) {
         return false;
     }
@@ -1541,8 +1569,8 @@ function processFriendlyFistKnockdownHeal(player, partner) {
     if (readString(pTemp, K_FF_KD_HEALED, "0") == "1") return;
     if (!isFriendlyFistOn(player)) return;
 
-    putString(pTemp, K_FF_KD_HEALED, "1");
     if (!healSparPlayerFull(partner)) return;
+    putString(pTemp, K_FF_KD_HEALED, "1");
 
     try {
         refreshMovementActivity(player);
@@ -2051,8 +2079,19 @@ function startSession(a, b) {
         sendMessage(a, sparText(sparColor("8"), "TP is earned from real combat actions."));
         sendMessage(b, sparText(sparColor("8"), "TP is earned from real combat actions."));
         if (isMentorOf(a, b) || isMentorOf(b, a)) {
-            sendMessage(a, sparText(sparColor("6"), "[Mentor Bond] ", sparColor("a"), "Mentor spar bonus active."));
-            sendMessage(b, sparText(sparColor("6"), "[Mentor Bond] ", sparColor("a"), "Mentor spar bonus active."));
+            var apprentice = isMentorOf(a, b) ? b : a;
+            var mentor = isMentorOf(a, b) ? a : b;
+            sendMessage(apprentice, sparText(
+                sparColor("6"), "[Mentor Bond] ",
+                sparColor("a"), "+", Math.floor(MENTOR_SPAR_BONUS_PCT * 100),
+                "% TP bonus while training with your mentor."
+            ));
+            sendMessage(mentor, sparText(
+                sparColor("6"), "[Mentor Bond] ",
+                sparColor("7"), "Training your apprentice — you earn ",
+                sparColor("a"), Math.floor(MENTOR_SHARE_PCT * 100), "%",
+                sparColor("7"), " of their spar TP."
+            ));
         }
     }
     return true;
@@ -2410,6 +2449,9 @@ function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
     }
 
     var actionCap = Math.floor(getMaxTpForAction(built.bpMult) * GLOBAL_TP_GAIN_MULT);
+    if (isSparringWithOwnMentor(player, partner)) {
+        actionCap = Math.floor(actionCap * (1.0 + MENTOR_SPAR_BONUS_PCT));
+    }
     if (amount > actionCap) amount = actionCap;
     if (amount <= 0) return 0;
 
@@ -2499,19 +2541,30 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     var aName = getPlayerName(attacker);
     var tName = getPlayerName(target);
 
-    putString(aTemp, K_LAST_OUT_PARTNER, tName);
-    putNumber(aTemp, K_LAST_OUT_TIME, now);
-    putString(tTemp, K_LAST_IN_PARTNER, aName);
-    putNumber(tTemp, K_LAST_IN_TIME, now);
+    /*
+     * While already sparring, only refresh outgoing hit activity toward
+     * the spar partner. Hitting a third party must not poison the timer
+     * and end the session.
+     */
+    var attackerSparring = isSessionActive(attacker);
+    var stampOut = !attackerSparring ||
+        namesMatch(getPartnerName(attacker), tName);
 
-    if (isKi) {
-        putNumber(aTemp, K_LAST_KI_OUT, now);
-        /*
-         * Beams often classify as "beam" or "other". Stamp laser time for
-         * beam/charge and any ki so clash sustain can start from mutual ki.
-         */
-        if (kiKind == "beam" || kiKind == "charge" || kiKind == "other" || kiKind == "basic") {
-            putNumber(aTemp, K_LAST_LASER_OUT, now);
+    if (stampOut) {
+        putString(aTemp, K_LAST_OUT_PARTNER, tName);
+        putNumber(aTemp, K_LAST_OUT_TIME, now);
+        putString(tTemp, K_LAST_IN_PARTNER, aName);
+        putNumber(tTemp, K_LAST_IN_TIME, now);
+
+        if (isKi) {
+            putNumber(aTemp, K_LAST_KI_OUT, now);
+            /*
+             * Beams often classify as "beam" or "other". Stamp laser time for
+             * beam/charge and any ki so clash sustain can start from mutual ki.
+             */
+            if (kiKind == "beam" || kiKind == "charge" || kiKind == "other" || kiKind == "basic") {
+                putNumber(aTemp, K_LAST_LASER_OUT, now);
+            }
         }
     }
 
@@ -3133,11 +3186,10 @@ function resolveAttackerFromDamaged(event, victim) {
             }
         }
     } catch (e9) {}
-    /* Fallback: if only the spar partner could be hitting us, use them. */
-    try {
-        var partnerName = getPartnerName(victim);
-        if (partnerName != "") return getPlayerByName(victim, partnerName);
-    } catch (e10) {}
+    /*
+     * Do NOT fall back to the spar partner. Fall/fire/mob/DoT would then
+     * score as partner hits. damagedEntity already queues partner kiblasts.
+     */
     return null;
 }
 
@@ -3224,28 +3276,28 @@ function damaged(event) {
             var kiKind = ki ? classifyKiType(event) : "melee";
             /* Snapshot pool now; tick awards from real HP/absorption lost. */
             queueReceivedHit(victim, attacker, ki, kiKind);
-        }
 
-        if (!isPlayerBlocking(victim)) return;
+            if (isPlayerBlocking(victim)) {
+                var temp = victim.getTempdata();
+                putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
+                putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
+                awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
 
-        var temp = victim.getTempdata();
-        putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
-        putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
-        awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
-
-        /* Successful block snaps the attacker's combo / Momentum. */
-        if (breakCombo(partner, "attack blocked")) {
-            if (SHOW_COMBO_BREAK_MESSAGES === true) {
-                throttleMessage(
-                    victim,
-                    K_COMBO_BREAK_MSG,
-                    COMBO_BREAK_MSG_COOLDOWN_MS,
-                    sparText(
-                        sparColor("6"), "[Sparring] ",
-                        sparColor("a"), "Block! ",
-                        sparColor("7"), "Opponent combo broken"
-                    )
-                );
+                /* Successful block snaps the attacker's combo / Momentum. */
+                if (breakCombo(partner, "attack blocked")) {
+                    if (SHOW_COMBO_BREAK_MESSAGES === true) {
+                        throttleMessage(
+                            victim,
+                            K_COMBO_BREAK_MSG,
+                            COMBO_BREAK_MSG_COOLDOWN_MS,
+                            sparText(
+                                sparColor("6"), "[Sparring] ",
+                                sparColor("a"), "Block! ",
+                                sparColor("7"), "Opponent combo broken"
+                            )
+                        );
+                    }
+                }
             }
         }
 
@@ -3782,7 +3834,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.1] Ki-charge hold + Mentor Bond | BeamClashManager=" +
+            print("[Sparring v3.2.2] Audit fixes + ki-charge hold | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));

@@ -1,19 +1,20 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.1.0
+ Version: 3.1.1
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.1.0+):
+ NOTE (v3.1.1+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
   Help lists /spar only (no .spar / !spar / ./spar).
   Mentor Bond commands are owned by Sparring Tp System.js
   (Global Player) — this handler skips them so TP share works.
+  Non-spar trigger ids are ignored (do not claim dedupe lock).
   Sparring Tp System.js (Global Player) also handles /spar
   triggers 70 / 72-79. This script-slot handler is OPTIONAL.
   If both are installed, responses are deduped.
@@ -759,6 +760,11 @@ function trigger(event) {
 
     /* Dedupe with Global Player Sparring Tp System v3.0.4+ */
     var id = Number(event.id);
+    if (!(id == 70 || id == 72 || id == 73 || id == 74 ||
+          id == 75 || id == 76 || id == 77 || id == 78 || id == 79)) {
+        return;
+    }
+
     var partsPeek = argsFrom(event, 1);
     var subPeek = partsPeek.length > 0 ? lower(partsPeek[0]) : "";
     /*
@@ -797,8 +803,6 @@ function trigger(event) {
             showTop(player, "perfect");
         } else if (id == 79) {
             showTop(player, "time");
-        } else {
-            msg(player, C + "c[Sparring] Unhandled trigger id " + id);
         }
     } catch (err) {
         msg(player, C + "c[Sparring Command Error] " + err);
