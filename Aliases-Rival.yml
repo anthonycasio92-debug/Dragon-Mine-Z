@@ -9,6 +9,9 @@
 #   both declare or accept    -> Mutual
 #   Mutual + 3 death/KO       -> Nemesis
 #
+# The main /rival alias routes ALL subcommands (title, journal, etc.)
+# Dedicated shortcuts below are optional convenience aliases.
+#
 # Paste under your existing CustomAlias: section
 # (do NOT paste a second "CustomAlias:" root if one already exists).
 #
@@ -17,12 +20,20 @@
 # ============================================================
 
 CustomAlias:
+  # ---- Main router (handles /rival title, /rival journal, etc.) ----
   rival:
     Cmds:
     - asFakeOp! noppes script trigger 200 [playerName] $1-
     AddTabs: true
     ExactMatch: false
 
+  rivalhelp:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] help
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Rivalry path ----
   rivaldeclare:
     Cmds:
     - asFakeOp! noppes script trigger 201 [playerName] $1-
@@ -59,14 +70,77 @@ CustomAlias:
     AddTabs: true
     ExactMatch: false
 
+  # ---- Challenge ----
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengeaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 211 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengedecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 212 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengecancel:
+    Cmds:
+    - asFakeOp! noppes script trigger 213 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Progress / info ----
   rivaltop:
     Cmds:
     - asFakeOp! noppes script trigger 220 [playerName] $1-
     AddTabs: true
     ExactMatch: false
 
-  rivalhelp:
+  rivaltitle:
     Cmds:
-    - asFakeOp! noppes script trigger 200 [playerName] help
+    - asFakeOp! noppes script trigger 221 [playerName]
     AddTabs: true
     ExactMatch: true
+
+  rivaljournal:
+    Cmds:
+    - asFakeOp! noppes script trigger 222 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalseason:
+    Cmds:
+    - asFakeOp! noppes script trigger 223 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalquests:
+    Cmds:
+    - asFakeOp! noppes script trigger 224 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalachievements:
+    Cmds:
+    - asFakeOp! noppes script trigger 225 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalhof:
+    Cmds:
+    - asFakeOp! noppes script trigger 226 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Spectate ----
+  spectaterival:
+    Cmds:
+    - asFakeOp! noppes script trigger 230 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
