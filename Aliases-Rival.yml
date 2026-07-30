@@ -1,0 +1,159 @@
+# ============================================================
+# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.19)
+# Pair with Rival System.js + Rival Command Handler.js v4.6.19
+# ============================================================
+# Intended flow:
+#   /rival <player>           -> silent Unknown (they see nothing)
+#   both silent               -> Declared
+#   /rival declare <player>   -> VISIBLE declare (they are notified)
+#   both declare or accept    -> Mutual
+#   Mutual + 3 death/KO       -> Nemesis
+#
+# The main /rival alias routes ALL subcommands (title, journal, etc.)
+# Dedicated shortcuts below are optional convenience aliases.
+#
+# Paste under your existing CustomAlias: section
+# (do NOT paste a second "CustomAlias:" root if one already exists).
+#
+# IMPORTANT: use asFakeOp! (asOp! does not fire triggers on this server)
+# Then: /cmi reload
+# ============================================================
+
+CustomAlias:
+  # ---- Main router (handles /rival title, /rival journal, etc.) ----
+  rival:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalhelp:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] help
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Rivalry path ----
+  rivaldeclare:
+    Cmds:
+    - asFakeOp! noppes script trigger 201 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 202 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivaldecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 203 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalremove:
+    Cmds:
+    - asFakeOp! noppes script trigger 204 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivallist:
+    Cmds:
+    - asFakeOp! noppes script trigger 205 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalstats:
+    Cmds:
+    - asFakeOp! noppes script trigger 206 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  # ---- Challenge ----
+  challenge:
+    Cmds:
+    - asFakeOp! noppes script trigger 210 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengeaccept:
+    Cmds:
+    - asFakeOp! noppes script trigger 211 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengedecline:
+    Cmds:
+    - asFakeOp! noppes script trigger 212 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  challengecancel:
+    Cmds:
+    - asFakeOp! noppes script trigger 213 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Progress / info ----
+  rivaltop:
+    Cmds:
+    - asFakeOp! noppes script trigger 220 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivaltitle:
+    Cmds:
+    - asFakeOp! noppes script trigger 221 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivaljournal:
+    Cmds:
+    - asFakeOp! noppes script trigger 222 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false
+
+  rivalseason:
+    Cmds:
+    - asFakeOp! noppes script trigger 223 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalquests:
+    Cmds:
+    - asFakeOp! noppes script trigger 224 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalachievements:
+    Cmds:
+    - asFakeOp! noppes script trigger 225 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  rivalhof:
+    Cmds:
+    - asFakeOp! noppes script trigger 226 [playerName]
+    AddTabs: true
+    ExactMatch: true
+
+  # ---- Kill TP chat toggle (also /rival tpmsg) ----
+  tpmsg:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
+
+  tpmessages:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
+
+  # ---- Spectate ----
+  spectaterival:
+    Cmds:
+    - asFakeOp! noppes script trigger 230 [playerName] $1-
+    AddTabs: true
+    ExactMatch: false

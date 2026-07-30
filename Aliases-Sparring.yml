@@ -1,34 +1,48 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3) — OPTIONAL
 # ============================================================
-# Same pattern Rival aliases follow (/rival ... via trigger 200).
+# Sparring Tp System.js v3.0.5+ already handles:
+#   /spar ...   (Bukkit slash hook, no CMI needed)
+#   .spar ...   !spar ...   ./spar ...   (chat fallback)
 #
-# Script-slot: Sparring Command Handler.js
-# Primary router: trigger 70 [playerName] $1-
+# Paste these ONLY if you still want CMI aliases / tab-complete.
+# Merge the keys under your existing CustomAlias: section
+# (do NOT paste a second "CustomAlias:" root if one already exists).
 #
-# In-game help matches these commands:
-#   /spar
-#   /spar help
-#   /spar stats [player]
-#   /spar top [tp|streak|session|payout|perfect|time]
-#
-# asFakeOp! gives noppes a player-like OP source.
-# [playerName] is ALWAYS argument 0 (what the handler reads).
-# $1- passes the rest of the typed args as subcommands.
-#
-# Paste these entries into your server CustomAlias.yml then:
-#   /cmi reload
+# Then: /cmi reload
 # ============================================================
 
+# spar:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# sparstats:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] stats $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# spartop:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] top $1-
+#   AddTabs: true
+#   ExactMatch: false
+#
+# sparhelp:
+#   Cmds:
+#   - asFakeOp! noppes script trigger 70 [playerName] help
+#   AddTabs: true
+#   ExactMatch: true
+
 CustomAlias:
-  # Primary router (same idea as /rival)
   spar:
     Cmds:
     - asFakeOp! noppes script trigger 70 [playerName] $1-
     AddTabs: true
     ExactMatch: false
 
-  # One-word shortcuts inject the same subcommand words
   sparstats:
     Cmds:
     - asFakeOp! noppes script trigger 70 [playerName] stats $1-

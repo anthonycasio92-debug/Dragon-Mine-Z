@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.6.12
+ Version: 4.7.2
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -11,6 +11,31 @@
  Gameplay stays in Rival System.js (Global Player).
  This file is the command display / action handler only -
  same split as Sparring TP System + Sparring Command Handler.
+
+ Intended rivalry path:
+   /rival <player>           silent Unknown (they see nothing)
+   both silent               Declared (both see each other)
+   /rival declare <player>   visible notify; accept/decline/ignore
+   both declare or accept    Mutual (benefits both ways)
+   Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ FIX (4.6.19):
+  Restore /rival tpmsg [on|off] (also /tpmsg, /tpmessages).
+  Hides kill TP chat spam; TP still awarded.
+
+ FIX (4.6.18):
+  Align silent/declare heal so pending visible declares are not
+  auto-promoted to Declared. RP tier renamed Vendetta (not Nemesis).
+  Cleanup messaging to match the path above.
+
+ FIX (4.6.17 / 4.6.16):
+  Nemesis display requires deathLosses >= 3 (clears stale random flags).
+  /rival list recomputes Nemesis so 3+ death losses crown correctly.
+
+ FIX (4.6.15 / 4.6.14):
+  /rival declare <player> is VISIBLE (notifies them).
+  /rival <player> alone is the silent Unknown path.
+  Older builds wrongly made both commands silent.
 
  TRIGGERS:
  200 = Rival help
@@ -61,11 +86,19 @@ var PROG_KEY = "dlr.rivalry.v4.progression";
 
 /*
  Statuses: unknown | declared | mutual | nemesis
- Max 2 Mutual (3rd demotes oldest). One Nemesis from history.
- Unknown  = you silently rivaled them (they are not told)
- Declared = both silently rivaled each other (not Mutual yet)
- Mutual   = both accepted a Mutual invite
+ Max 2 Mutual (3rd demotes oldest).
+
+ /rival <player>          silent Unknown (they see nothing)
+ both silent /rival       Declared (both see each other)
+ /rival declare <player>  visible declare -> they accept/decline/ignore
+ both visible declares    Mutual (or accept their declare)
+ Mutual Nemesis           after 3+ DEATH losses to that rival
+                          (damage-dealt / timer losses do NOT count)
+
+ Benefits: only players who rivaled someone get presence/benefit TP.
+ Ignore/decline leaves the declarer with benefits; target gets none.
 */
+var NEMESIS_DEATH_LOSSES = 3;
 var MAX_MUTUAL = 2;
 var MS_PER_DAY = 24 * 60 * 60 * 1000;
 var REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -78,12 +111,13 @@ var CH_MIN_MINUTES = 1;
 var CH_MAX_MINUTES = 10;
 var CH_MAX_DISTANCE = 64;
 
+/* RP rank tiers (NOT the Mutual "Nemesis" relationship status). */
 var TIERS = [
     { min: 0,     name: "Acquaintance",  color: "7", tpMult: 1.00, perk: "None" },
     { min: 100,   name: "Competitor",    color: "a", tpMult: 1.05, perk: "Sense farther + 5% rival TP" },
     { min: 300,   name: "Adversary",     color: "2", tpMult: 1.10, perk: "Better reports + 10% rival TP" },
     { min: 700,   name: "Rival",         color: "e", tpMult: 1.15, perk: "Notifications + 15% rival TP" },
-    { min: 1500,  name: "Nemesis",       color: "6", tpMult: 1.25, perk: "Tracker + 25% rival TP" },
+    { min: 1500,  name: "Vendetta",      color: "6", tpMult: 1.25, perk: "Tracker + 25% rival TP" },
     { min: 3000,  name: "Legendary",     color: "c", tpMult: 1.35, perk: "Aura flag + 35% rival TP" },
     { min: 5000,  name: "Arch Rival",    color: "d", tpMult: 1.45, perk: "Entrance flag + 45% rival TP" },
     { min: 7500,  name: "Mortal Enemy",  color: "5", tpMult: 1.55, perk: "Priority alerts + 55% rival TP" },
@@ -317,17 +351,80 @@ function findRecord(db, name) {
 function linkStatus(link) {
     if (link == null) return "none";
     if (link.mutual === true) {
-        if (link.isNemesis === true) return "nemesis";
+        /* Never trust stale isNemesis from old history-based builds. */
+        if (link.isNemesis === true && num(link.deathLosses, 0) >= NEMESIS_DEATH_LOSSES) {
+            return "nemesis";
+        }
         return "mutual";
     }
-    /* Both silently rivaled each other = Declared (before Mutual accept). */
-    if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
-    /* One-sided silent rival, or pending Mutual invite = Unknown. */
-    if (link.declaredByMe === true || link.declaredByThem === true ||
-        link.inviteSent === true || link.inviteReceived === true) {
+    /* Both silently rivaled each other = Declared. */
+    if (link.declaredByMe === true && link.declaredByThem === true) {
+        return "declared";
+    }
+    /*
+     * Unknown covers:
+     * - silent one-sided /rival (you see them; they see nothing)
+     * - visible /rival declare pending (sent or received)
+     */
+    if (link.declaredByMe === true ||
+        link.declaredByThem === true ||
+        link.inviteSent === true ||
+        link.inviteReceived === true) {
         return "unknown";
     }
     return "none";
+}
+
+function isReciprocatedSilent(link) {
+    return link != null &&
+        link.mutual !== true &&
+        link.declaredByMe === true &&
+        link.declaredByThem === true;
+}
+
+/*
+ * If A and B each silently /rival each other one-sided, promote to Declared.
+ * Never heal across a pending visible /rival declare (invite/request).
+ */
+function healCrossedSilentDeclares(db) {
+    if (db == null || db.players == null) return 0;
+    var healed = 0;
+    var seen = {};
+    for (var aUuid in db.players) {
+        if (!db.players.hasOwnProperty(aUuid)) continue;
+        var a = db.players[aUuid];
+        if (a == null || a.rivals == null) continue;
+        for (var bUuid in a.rivals) {
+            if (!a.rivals.hasOwnProperty(bUuid)) continue;
+            var pairKey = aUuid < bUuid ? aUuid + "|" + bUuid : bUuid + "|" + aUuid;
+            if (seen[pairKey] === true) continue;
+            seen[pairKey] = true;
+
+            var la = a.rivals[bUuid];
+            var b = db.players[bUuid];
+            if (b == null || b.rivals == null) continue;
+            var lb = b.rivals[aUuid];
+            if (la == null || lb == null) continue;
+            if (la.mutual === true || lb.mutual === true) continue;
+            if (la.declaredByMe !== true || lb.declaredByMe !== true) continue;
+            if (isReciprocatedSilent(la) && isReciprocatedSilent(lb)) continue;
+            /* Visible declare in flight: leave for accept/decline/Mutual. */
+            if (la.inviteSent === true || la.inviteReceived === true ||
+                lb.inviteSent === true || lb.inviteReceived === true) {
+                continue;
+            }
+            if (db.requests != null &&
+                (db.requests[reqKey(aUuid, bUuid)] != null ||
+                 db.requests[reqKey(bUuid, aUuid)] != null)) {
+                continue;
+            }
+
+            formDeclared(db, a, b, "Healed crossed silent rivals");
+            removeRequests(db, aUuid, bUuid);
+            healed++;
+        }
+    }
+    return healed;
 }
 
 function linkStatusLabel(status) {
@@ -440,6 +537,7 @@ function ensureLink(owner, target) {
                 inviteSent: false, inviteReceived: false,
                 isNemesis: false, status: "none",
                 points: 0, wins: 0, losses: 0, draws: 0, battles: 0,
+                deathLosses: 0, deathWins: 0,
                 currentStreak: 0, bestStreak: 0,
                 damageDealt: 0, damageTaken: 0, timeFoughtMs: 0,
                 presenceMs: 0, createdAt: t, firstMetAt: t, firstBattleAt: 0,
@@ -453,8 +551,12 @@ function ensureLink(owner, target) {
     link.name = target.name;
     link.nameLower = lower(target.name);
     link.updatedAt = now();
-    if (link.isNemesis !== true) link.isNemesis = false;
     if (link.inviteReceived !== true) link.inviteReceived = false;
+    link.deathLosses = num(link.deathLosses, 0);
+    link.deathWins = num(link.deathWins, 0);
+    link.isNemesis = link.mutual === true &&
+        link.deathLosses >= NEMESIS_DEATH_LOSSES &&
+        link.isNemesis === true;
     refreshLinkStatus(link);
     return link;
 }
@@ -476,11 +578,10 @@ function countMutual(rec) {
 
 function nemesisScore(link) {
     if (link == null || link.mutual !== true) return -1;
-    var battles = num(link.battles, 0);
-    if (battles <= 0) battles = num(link.wins, 0) + num(link.losses, 0) + num(link.draws, 0);
-    var ageDays = Math.max(0, now() - num(link.mutualSince, link.firstMetAt || link.createdAt || 0)) / MS_PER_DAY;
-    return battles * 10 + num(link.wins, 0) * 5 + num(link.losses, 0) * 3 +
-        num(link.points, 0) * 0.05 + ageDays * 2 + num(link.timeFoughtMs, 0) / 60000.0;
+    var deathLosses = num(link.deathLosses, 0);
+    if (deathLosses < NEMESIS_DEATH_LOSSES) return -1;
+    /* Prefer the mutual rival who has killed you the most. */
+    return deathLosses * 1000 + num(link.deathWins, 0);
 }
 
 function recomputeNemesis(rec) {
@@ -490,21 +591,18 @@ function recomputeNemesis(rec) {
     var prev = str(rec.nemesisUuid);
     for (var u in rec.rivals) {
         if (!rec.rivals.hasOwnProperty(u)) continue;
+        rec.rivals[u].deathLosses = num(rec.rivals[u].deathLosses, 0);
+        rec.rivals[u].deathWins = num(rec.rivals[u].deathWins, 0);
         rec.rivals[u].isNemesis = false;
         if (rec.rivals[u].mutual !== true) continue;
         var sc = nemesisScore(rec.rivals[u]);
         if (sc > bestScore) { bestScore = sc; bestUuid = u; }
     }
-    if (bestUuid != null) {
-        var fights = num(rec.rivals[bestUuid].battles, 0);
-        if (fights <= 0) fights = num(rec.rivals[bestUuid].wins, 0) +
-            num(rec.rivals[bestUuid].losses, 0) + num(rec.rivals[bestUuid].draws, 0);
-        if (fights <= 0) bestUuid = null;
-    }
-    if (bestUuid != null) {
+    if (bestUuid != null && bestScore >= 0) {
         rec.rivals[bestUuid].isNemesis = true;
         rec.nemesisUuid = bestUuid;
     } else {
+        bestUuid = null;
         rec.nemesisUuid = "";
     }
     for (var u2 in rec.rivals) {
@@ -515,7 +613,9 @@ function recomputeNemesis(rec) {
         var online = onlineByName(rec.name);
         if (online != null) {
             msg(online, C + "c" + C_BOLD + "NEMESIS! " + C_RESET + C + "e" + rec.rivals[bestUuid].name +
-                C + "7 is now your greatest rival.");
+                C + "7 - you have fallen to them " +
+                num(rec.rivals[bestUuid].deathLosses, 0) +
+                " times by death (need " + NEMESIS_DEATH_LOSSES + ").");
         }
     }
     return bestUuid;
@@ -624,6 +724,7 @@ function cleanupExpiredRequests(db) {
             delete db.requests[key];
         }
     }
+    healCrossedSilentDeclares(db);
 }
 
 function removeRequests(db, a, b) {
@@ -712,18 +813,21 @@ function cmdHelp(player) {
     uiProp(player, "Path", C + "7Unknown " + C + "8> " + C + "eDeclared " + C + "8> " +
         C + "6Mutual " + C + "8> " + C + "cNemesis");
     uiProp(player, "Slots", C + "f" + MAX_MUTUAL + C + "7 Mutual max" + C + "8  |  " +
-        C + "7Nemesis auto from history");
-    uiProp(player, "Rewards", C + "7RP from official battles" + C + "8  |  " + C + "7TP still active");
+        C + "cNemesis after " + NEMESIS_DEATH_LOSSES + "+ death losses");
+    uiProp(player, "Rewards", C + "7RP from official battles" + C + "8  |  " + C + "7TP for those who rival");
     uiBlank(player);
     uiSection(player, "Rivalry");
-    uiCmd(player, "/rival <player>", "silent rival (Unknown; they are not told)");
-    uiCmd(player, "/rival request <player>", "propose Mutual (they must accept)");
+    uiCmd(player, "/rival <player>", "silent Unknown (they see nothing)");
+    uiCmd(player, "/rival declare <player>", "visible declare (accept/decline/ignore)");
     uiCmd(player, "/rival accept|decline|remove <player>", "");
     uiCmd(player, "/rival list", "rivals + proving grounds");
     uiCmd(player, "/rival stats [player]", "career record");
     uiBlank(player);
-    msg(player, C + "8Unknown = you rivaled them silently. Declared = you both did.");
-    msg(player, C + "8Mutual: /rival request + accept, or both /rival accept when Declared.");
+    msg(player, C + "8Silent: both /rival each other -> Declared.");
+    msg(player, C + "8Visible: both /rival declare (or accept) -> Mutual.");
+    msg(player, C + "8Decline/ignore: they gain nothing; you still keep benefits.");
+    msg(player, C + "8Nemesis: Mutual + " + NEMESIS_DEATH_LOSSES +
+        "+ death/KO losses (not timer/damage).");
     uiBlank(player);
     uiSection(player, "Battle");
     uiCmd(player, "/challenge <player> [1-10]", "official fight (minutes, default 1)");
@@ -734,6 +838,7 @@ function cmdHelp(player) {
     uiCmd(player, "/rival top [rp|wins|streak|damage]", "");
     uiCmd(player, "/rival title | journal | season", "");
     uiCmd(player, "/rival quests | achievements | hof", "");
+    uiCmd(player, "/rival tpmsg [on|off]", "toggle kill TP chat spam");
     uiBlank(player);
     msg(player, C + "8Defeat marks Proving Grounds. Return there for bonus rewards.");
     uiFoot(player);
@@ -747,9 +852,11 @@ function promoteMutual(player, target, db, pref, tref, reason) {
     tref.totals.declarationsAccepted++;
     saveDb(db);
     uiBanner(player, "MUTUAL", C + "e" + tref.name + C_RESET);
-    msg(player, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
+    msg(player, C + "8Both declared. Benefits work for both. " +
+        NEMESIS_DEATH_LOSSES + "+ death losses can forge a Nemesis.");
     uiBanner(target, "MUTUAL", C + "e" + pref.name + C_RESET);
-    msg(target, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
+    msg(target, C + "8Both declared. Benefits work for both. " +
+        NEMESIS_DEATH_LOSSES + "+ death losses can forge a Nemesis.");
 }
 
 function promoteDeclared(player, target, db, pref, tref, reason) {
@@ -759,15 +866,15 @@ function promoteDeclared(player, target, db, pref, tref, reason) {
     pref.totals.declarationsSent++;
     saveDb(db);
     uiBanner(player, "DECLARED", C + "e" + tref.name + C_RESET);
-    msg(player, C + "8You both rivaled each other. Propose Mutual with  " +
-        C + "f/rival request " + tref.name);
+    msg(player, C + "8You both silently rivaled each other.");
+    msg(player, C + "8For Mutual benefits both ways:  " + C + "f/rival declare " + tref.name);
     uiBanner(target, "DECLARED", C + "e" + pref.name + C_RESET);
-    msg(target, C + "8You both rivaled each other. Propose Mutual with  " +
-        C + "f/rival request " + pref.name);
+    msg(target, C + "8You both silently rivaled each other.");
+    msg(target, C + "8For Mutual benefits both ways:  " + C + "f/rival declare " + pref.name);
 }
 
 /* Silent one-sided rival. You see Unknown. Target sees nothing. */
-function cmdDeclare(player, targetName) {
+function cmdSilent(player, targetName) {
     var clean = str(targetName).replace(/^\s+|\s+$/g, "");
     if (clean == "") { msg(player, C + "cUsage: /rival <player>"); return; }
     var target = onlineByName(clean);
@@ -786,32 +893,33 @@ function cmdDeclare(player, targetName) {
         msg(player, C + "eAlready your " + (st == "nemesis" ? "Nemesis" : "mutual rival") +
             " with " + tref.name); return;
     }
-    if (pref.rivals[tu] != null && pref.rivals[tu].declaredByMe === true &&
-        pref.rivals[tu].declaredByThem === true && pref.rivals[tu].mutual !== true) {
+    if (pref.rivals[tu] != null && isReciprocatedSilent(pref.rivals[tu])) {
         msg(player, C + "eAlready Declared with " + tref.name +
-            C + "8. Propose Mutual:  " + C + "f/rival request " + tref.name); return;
+            C + "8. For Mutual:  " + C + "f/rival declare " + tref.name); return;
+    }
+    if (pref.rivals[tu] != null && pref.rivals[tu].inviteSent === true && pref.rivals[tu].mutual !== true) {
+        msg(player, C + "eDeclare already pending for " + tref.name);
+        msg(player, C + "8They can accept/decline, or ignore. You keep benefits.");
+        return;
     }
     if (pref.rivals[tu] != null && pref.rivals[tu].declaredByMe === true && pref.rivals[tu].mutual !== true) {
-        msg(player, C + "eAlready rivaled " + tref.name + C + "8 (Unknown)"); return;
+        msg(player, C + "eAlready silently rivaled " + tref.name + C + "8 (Unknown)");
+        msg(player, C + "8For Mutual:  " + C + "f/rival declare " + tref.name);
+        return;
     }
 
     var cdKey = reqKey(pu, tu);
     var rem = DECLARE_COOLDOWN_MS - (now() - num(db.cooldowns[cdKey], 0));
     if (rem > 0) { msg(player, C + "cWait " + Math.ceil(rem / 1000) + "s."); return; }
 
-    /* Pending Mutual invite from them -> accepting by rivaling promotes Mutual. */
+    /* Pending visible declare from them -> Mutual (same as /rival accept). */
     var reverse = getRequest(db, tu, pu);
     if (reverse != null) {
-        promoteMutual(player, target, db, pref, tref, "Accepted their Mutual request");
+        promoteMutual(player, target, db, pref, tref, "Accepted their rival declare");
         return;
     }
 
-    /* Cancel my own pending Mutual invite if I switch to silent rival. */
-    if (getRequest(db, pu, tu) != null) {
-        removeRequests(db, pu, tu);
-    }
-
-    /* They already silently rivaled you -> Declared for both (not Mutual yet). */
+    /* They already silently rivaled you -> Declared for both. */
     var theirLink = tref.rivals[pu];
     var theyRivaledMe = theirLink != null && theirLink.declaredByMe === true && theirLink.mutual !== true;
     if (theyRivaledMe) {
@@ -826,7 +934,7 @@ function cmdDeclare(player, targetName) {
     pl.inviteReceived = false;
     pl.mutual = false;
     refreshLinkStatus(pl);
-    pushHistory(pl, "declare", "Silent rivalry");
+    pushHistory(pl, "silent", "Silent Unknown rivalry");
 
     db.cooldowns[cdKey] = now();
     pref.totals.declarationsSent++;
@@ -834,18 +942,22 @@ function cmdDeclare(player, targetName) {
     updateLb(db, pref);
     saveDb(db);
 
-    uiBanner(player, "Rival", C + "7Unknown  " + C + "e" + tref.name + C_RESET);
+    uiBanner(player, "UNKNOWN", C + "7" + tref.name + C_RESET);
     msg(player, C + "8Silent  " + C + "7they are not notified and do not see you");
-    msg(player, C + "8If they rival you back, you both become Declared.");
+    msg(player, C + "8You still gain rival benefits. If they /rival you too, it becomes Declared.");
 }
 
-/* Propose Mutual. Target is notified and must accept. */
-function cmdRequest(player, targetName) {
+/*
+ * Visible declare toward Mutual. Target is notified and may accept,
+ * decline, or ignore. You keep benefits either way; they get none until
+ * they declare/accept. Both visible declares -> Mutual.
+ */
+function cmdDeclare(player, targetName) {
     var clean = str(targetName).replace(/^\s+|\s+$/g, "");
-    if (clean == "") { msg(player, C + "cUsage: /rival request <player>"); return; }
+    if (clean == "") { msg(player, C + "cUsage: /rival declare <player>"); return; }
     var target = onlineByName(clean);
     if (target == null) { msg(player, C + "cThat player must be online."); return; }
-    if (uuidOf(player) == uuidOf(target)) { msg(player, C + "cYou cannot request yourself."); return; }
+    if (uuidOf(player) == uuidOf(target)) { msg(player, C + "cYou cannot declare yourself."); return; }
 
     var db = loadDb();
     cleanupExpiredRequests(db);
@@ -855,12 +967,12 @@ function cmdRequest(player, targetName) {
     var tu = tref.uuid;
 
     if (pref.rivals[tu] != null && pref.rivals[tu].mutual === true) {
-        var st2 = linkStatus(pref.rivals[tu]);
-        msg(player, C + "eAlready your " + (st2 == "nemesis" ? "Nemesis" : "mutual rival") +
+        var st = linkStatus(pref.rivals[tu]);
+        msg(player, C + "eAlready your " + (st == "nemesis" ? "Nemesis" : "mutual rival") +
             " with " + tref.name); return;
     }
     if (getRequest(db, pu, tu) != null) {
-        msg(player, C + "eMutual request already pending for " + tref.name); return;
+        msg(player, C + "eDeclare already pending for " + tref.name); return;
     }
 
     var cdKey = reqKey(pu, tu);
@@ -869,35 +981,50 @@ function cmdRequest(player, targetName) {
 
     var reverse = getRequest(db, tu, pu);
     if (reverse != null) {
-        promoteMutual(player, target, db, pref, tref, "Crossed Mutual requests");
+        promoteMutual(player, target, db, pref, tref, "Crossed rival declares");
         return;
     }
 
+    if (pref.rivals[tu] != null && isReciprocatedSilent(pref.rivals[tu])) {
+        msg(player, C + "8You are Declared with " + tref.name +
+            C + "8. Sending a visible declare for Mutual...");
+    }
+
+    /* You keep benefits (declaredByMe). They get invite only - no benefits yet. */
     var pl = ensureLink(pref, tref);
+    pl.declaredByMe = true;
     pl.inviteSent = true;
     pl.mutual = false;
     refreshLinkStatus(pl);
-    pushHistory(pl, "request", "Sent Mutual request");
+    pushHistory(pl, "declare", "Visible rival declare");
 
     var tl = ensureLink(tref, pref);
-    /* inviteReceived only - never declaredByThem (that is silent Declared). */
     tl.inviteReceived = true;
     tl.mutual = false;
+    /* Do NOT set declaredByMe on them - decline/ignore means no benefits for them. */
     refreshLinkStatus(tl);
-    pushHistory(tl, "requested_by", "Received Mutual request");
+    pushHistory(tl, "declared_by", "Received rival declare");
 
     db.requests[reqKey(pu, tu)] = {
-        fromUuid: pu, fromName: pref.name, toUuid: tu, toName: tref.name, createdAt: now()
+        fromUuid: pu, fromName: pref.name, toUuid: tu, toName: tref.name,
+        createdAt: now(), kind: "declare"
     };
     db.cooldowns[cdKey] = now();
     pref.totals.declarationsSent++;
     saveDb(db);
 
-    uiBanner(player, "Mutual", C + "aRequested " + C + "e" + tref.name + C_RESET);
-    msg(player, C + "8Waiting for them to accept.");
-    uiBanner(target, "Mutual", C + "e" + pref.name + C + "7 wants Mutual rivalry");
+    uiBanner(player, "DECLARE", C + "aSent to " + C + "e" + tref.name + C_RESET);
+    msg(player, C + "8They can accept, decline, or ignore.");
+    msg(player, C + "8You keep rival benefits. They gain none until they declare/accept.");
+    uiBanner(target, "DECLARE", C + "e" + pref.name + C + "7 declared you as a rival");
     msg(target, C + "8Accept  " + C + "f/rival accept " + pref.name +
         C + "8  |  Decline  " + C + "f/rival decline " + pref.name);
+    msg(target, C + "8Ignore them and you gain nothing; they still keep benefits.");
+}
+
+/* Legacy alias: /rival request|invite -> visible /rival declare. */
+function cmdRequest(player, targetName) {
+    cmdDeclare(player, targetName);
 }
 
 function cmdAccept(player, fromName) {
@@ -909,59 +1036,28 @@ function cmdAccept(player, fromName) {
     var from = findRecord(db, clean);
     if (from == null) { msg(player, C + "cNo rivalry with that player."); return; }
 
-    /* Pending Mutual invite from them. */
+    /* Accept their visible /rival declare -> Mutual. */
     if (getRequest(db, from.uuid, pref.uuid) != null) {
         var onlineReq = onlineByName(from.name);
-        formMutual(db, pref, from, "Accepted Mutual request");
+        formMutual(db, pref, from, "Accepted rival declare");
         removeRequests(db, from.uuid, pref.uuid);
         pref.totals.declarationsAccepted++;
         from.totals.declarationsAccepted++;
         saveDb(db);
         uiBanner(player, "MUTUAL", C + "e" + from.name + C_RESET);
-        msg(player, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
+        msg(player, C + "8Both sides declared. Benefits work for both.");
+        msg(player, C + "8Nemesis after " + NEMESIS_DEATH_LOSSES +
+            "+ death losses to them (timer/damage losses do not count).");
         if (onlineReq != null) {
             uiBanner(onlineReq, "MUTUAL", C + "e" + pref.name + C + "a accepted!" + C_RESET);
-            msg(onlineReq, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
+            msg(onlineReq, C + "8Both sides declared. Benefits work for both.");
         }
         return;
     }
 
-    /* Declared bond: both must /rival accept to become Mutual. */
-    var link = pref.rivals[from.uuid];
-    var their = from.rivals[pref.uuid];
-    if (link != null && their != null && link.mutual !== true &&
-        link.declaredByMe === true && link.declaredByThem === true &&
-        their.declaredByMe === true && their.declaredByThem === true) {
-        link.mutualAccepted = true;
-        refreshLinkStatus(link);
-        if (their.mutualAccepted === true) {
-            /* Finish Mutual even if they are offline - banners just skip. */
-            formMutual(db, pref, from, "Both accepted Declared rivalry");
-            removeRequests(db, from.uuid, pref.uuid);
-            pref.totals.declarationsAccepted++;
-            from.totals.declarationsAccepted++;
-            saveDb(db);
-            uiBanner(player, "MUTUAL", C + "e" + from.name + C_RESET);
-            msg(player, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
-            var onlineDec = onlineByName(from.name);
-            if (onlineDec != null) {
-                uiBanner(onlineDec, "MUTUAL", C + "e" + pref.name + C_RESET);
-                msg(onlineDec, C + "8Official battles forge history. Your greatest rival becomes Nemesis.");
-            }
-            return;
-        }
-        saveDb(db);
-        uiBanner(player, "Declared", C + "aAccepted  " + C + "e" + from.name + C_RESET);
-        msg(player, C + "8Waiting for them to  " + C + "f/rival accept " + pref.name);
-        var onlineWait = onlineByName(from.name);
-        if (onlineWait != null) {
-            msg(onlineWait, C + "e" + pref.name + C + "7 accepted Declared rivalry.");
-            msg(onlineWait, C + "8Accept Mutual with  " + C + "f/rival accept " + pref.name);
-        }
-        return;
-    }
-
-    msg(player, C + "cNo Mutual request or Declared rivalry with " + from.name);
+    msg(player, C + "cNo pending rival declare from " + from.name);
+    msg(player, C + "8They must  " + C + "f/rival declare " + pref.name +
+        C + "8  first, or you can declare them.");
 }
 
 function cmdDecline(player, fromName) {
@@ -972,14 +1068,36 @@ function cmdDecline(player, fromName) {
     var pref = ensurePlayer(db, player);
     var from = findRecord(db, clean);
     if (from == null || getRequest(db, from.uuid, pref.uuid) == null) {
-        msg(player, C + "cNo active request."); return;
+        msg(player, C + "cNo active rival declare."); return;
     }
     removeRequests(db, from.uuid, pref.uuid);
+    /*
+     * Declarer keeps declaredByMe benefits. Clear only invite flags on both.
+     * Do not give this player declaredByMe.
+     */
+    if (from.rivals[pref.uuid] != null) {
+        from.rivals[pref.uuid].inviteSent = false;
+        refreshLinkStatus(from.rivals[pref.uuid]);
+    }
+    if (pref.rivals[from.uuid] != null) {
+        pref.rivals[from.uuid].inviteReceived = false;
+        if (pref.rivals[from.uuid].declaredByMe !== true &&
+            pref.rivals[from.uuid].declaredByThem !== true &&
+            pref.rivals[from.uuid].mutual !== true) {
+            delete pref.rivals[from.uuid];
+        } else {
+            refreshLinkStatus(pref.rivals[from.uuid]);
+        }
+    }
     pref.totals.declarationsDeclined++;
     saveDb(db);
     msg(player, C + "eDeclined " + from.name);
+    msg(player, C + "8You gain no rival benefits from them.");
     var online = onlineByName(from.name);
-    if (online != null) msg(online, C + "c" + pref.name + " declined your rivalry.");
+    if (online != null) {
+        msg(online, C + "c" + pref.name + " declined your rival declare.");
+        msg(online, C + "8You still keep your rival benefits toward them.");
+    }
 }
 
 function cmdRemove(player, targetName) {
@@ -995,7 +1113,10 @@ function cmdRemove(player, targetName) {
     var st = linkStatus(link);
     var wasShared = (st == "mutual" || st == "nemesis");
     var wasDeclared = (st == "declared");
-    /* Unknown is silent - never tip them off that they were rivaled. */
+    /*
+     * Silent Unknown must stay silent on remove.
+     * Notify only Mutual/Nemesis/Declared (they already know).
+     */
     var notifyThem = wasShared || wasDeclared;
 
     archiveRivalLink(pref, target.uuid);
@@ -1010,7 +1131,7 @@ function cmdRemove(player, targetName) {
         recomputeNemesis(pref);
         recomputeNemesis(target);
     } else if (wasDeclared) {
-        /* Declared: you drop it; they keep a one-way Unknown rivalry if they still declare you. */
+        /* Reciprocated Declared: they keep one-way Declared if they still declare you. */
         if (target.rivals[pref.uuid] != null) {
             var kept = target.rivals[pref.uuid];
             kept.mutual = false;
@@ -1074,6 +1195,8 @@ function cmdList(player) {
     var db = loadDb();
     cleanupExpiredRequests(db);
     var pref = ensurePlayer(db, player);
+    /* Crown / clear Nemesis from current deathLosses (not stale flags). */
+    recomputeNemesis(pref);
     saveDb(db);
 
     var nemName = "-";
@@ -1365,6 +1488,59 @@ function showStats(player, targetName) {
     uiFoot(player);
 }
 
+/*
+ * Same storeddata key as Rival System.js / End Dimension Strength.js.
+ * Hides kill TP chat spam only — TP is still awarded.
+ */
+var KILL_TP_CHAT_KEY = "dmz_kill_tp_chat";
+
+function killTpChatEnabled(player) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null || !stored.has(KILL_TP_CHAT_KEY)) return true;
+        var value = lower(stored.get(KILL_TP_CHAT_KEY));
+        return value != "0" && value != "false" && value != "off";
+    } catch (e) {
+        return true;
+    }
+}
+
+function setKillTpChatEnabled(player, enabled) {
+    try {
+        var stored = player.getStoreddata();
+        if (stored == null) return false;
+        stored.put(KILL_TP_CHAT_KEY, enabled ? "1" : "0");
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function cmdTpMsg(player, mode) {
+    var want = null;
+    var arg = lower(mode);
+    if (arg == "on" || arg == "enable" || arg == "true" || arg == "1") want = true;
+    else if (arg == "off" || arg == "disable" || arg == "false" || arg == "0") want = false;
+    else if (arg == "" || arg == "toggle") want = !killTpChatEnabled(player);
+    else {
+        msg(player, C + "cUsage: /rival tpmsg [on|off]");
+        return;
+    }
+
+    if (!setKillTpChatEnabled(player, want)) {
+        msg(player, C + "cCould not save kill TP chat preference.");
+        return;
+    }
+
+    if (want) {
+        msg(player, C + "a[Rival] Kill TP chat " + C + "fenabled" + C + "a.");
+        msg(player, C + "8You will see TP messages when killing mobs near rivals.");
+    } else {
+        msg(player, C + "e[Rival] Kill TP chat " + C + "fdisabled" + C + "e.");
+        msg(player, C + "8TP is still awarded - only the chat spam is hidden.");
+    }
+}
+
 function showTop(player, category) {
     var db = loadDb();
     var cat = lower(category || "rp");
@@ -1499,7 +1675,7 @@ function showAchievements(player) {
     var list = prog != null && prog.achievements != null ? (prog.achievements[uuidOf(player)] || {}) : {};
     var defs = [
         ["first_blood", "First Blood"],
-        ["nemesis", "True Nemesis"],
+        ["nemesis", "Vendetta Rank"],
         ["unbreakable", "Unbreakable"],
         ["comeback_king", "Comeback King"],
         ["legend_killer", "Legend Killer"],
@@ -1617,6 +1793,16 @@ function printRivalCard(player, L, showPg) {
     msg(player, C + "8    Record  " + C + "a" + num(L.wins, 0) + C + "8-" +
         C + "c" + num(L.losses, 0) +
         C + "8   Streak  " + C + "a" + num(L.currentStreak, 0));
+    if (L.mutual === true) {
+        var deaths = num(L.deathLosses, 0);
+        if (st == "nemesis") {
+            msg(player, C + "8    Deaths to them  " + C + "c" + deaths +
+                C + "8  (Nemesis)");
+        } else {
+            msg(player, C + "8    Nemesis  " + C + "f" + deaths + "/" + NEMESIS_DEATH_LOSSES +
+                C + "8  death losses");
+        }
+    }
     if (showPg === true && L.provingGrounds && L.provingGrounds.active === true) {
         var pg = L.provingGrounds;
         var place = str(pg.name);
@@ -1657,10 +1843,10 @@ function argsFrom(event, start) {
 }
 
 /*
- /rival Steve          => silent declare
- /rival declare Steve  => silent declare
- /rival request Steve  => visible invite (Unknown)
- /rivaldeclare Steve   => trigger 200 <player> declare Steve  (CMI shortcut)
+ /rival Steve          => silent Unknown
+ /rival declare Steve  => visible declare toward Mutual
+ /rival request Steve  => alias of declare (old CMI)
+ /rivaldeclare Steve   => trigger 200 <player> declare Steve
 */
 function routeRivalSub(player, event) {
     var parts = argsFrom(event, 1);
@@ -1677,7 +1863,7 @@ function routeRivalSub(player, event) {
     } else if (sub == "declare") {
         cmdDeclare(player, target);
     } else if (sub == "request" || sub == "invite") {
-        cmdRequest(player, target);
+        cmdDeclare(player, target);
     } else if (sub == "accept") {
         cmdAccept(player, target);
     } else if (sub == "decline") {
@@ -1692,6 +1878,8 @@ function routeRivalSub(player, event) {
         showTop(player, target == "" ? "rp" : target);
     } else if (sub == "title") {
         showTitle(player);
+    } else if (sub == "tpmsg" || sub == "tpmessages" || sub == "killtp") {
+        cmdTpMsg(player, target);
     } else if (sub == "journal") {
         showJournal(player, target);
     } else if (sub == "season") {
@@ -1703,11 +1891,8 @@ function routeRivalSub(player, event) {
     } else if (sub == "hof" || sub == "hall") {
         showHof(player);
     } else {
-        /*
-         Original concept: /Rival <player>
-         Any unknown first word is treated as a declare target.
-        */
-        cmdDeclare(player, parts[0]);
+        /* /rival <player> = silent Unknown */
+        cmdSilent(player, parts[0]);
     }
 }
 

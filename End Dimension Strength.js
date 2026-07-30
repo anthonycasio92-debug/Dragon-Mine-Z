@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.10.2
+ Version: 2.10.3
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -322,6 +322,24 @@ function msg(player, text) {
     try {
         if (player != null) player.message(sanitizeChat(text));
     } catch (e) {}
+}
+
+/*
+ * Same preference as Rival System / /rival tpmsg.
+ * Default ON when unset.
+ */
+var KILL_TP_CHAT_KEY = "dmz_kill_tp_chat";
+
+function killTpChatEnabled(player) {
+    try {
+        if (player == null) return true;
+        var stored = player.getStoreddata();
+        if (stored == null || !stored.has(KILL_TP_CHAT_KEY)) return true;
+        var value = str(stored.get(KILL_TP_CHAT_KEY)).toLowerCase();
+        return value !== "0" && value !== "false" && value !== "off";
+    } catch (e) {
+        return true;
+    }
 }
 
 function broadcastOnce(world, lockKey, text) {
@@ -1720,16 +1738,18 @@ function processEndKillTpClawback(player) {
     if (!adjustPlayerTrainingPoints(player, delta)) return false;
 
     var label = kind === "dragon" ? "Ender Dragon" : str(kind);
-    if (delta > 0) {
-        msg(player,
-            chatColor("6") + "[End] " +
-            chatColor("e") + "+" + formatHpLabel(delta) +
-            chatColor("7") + " End bonus TP" +
-            chatColor("8") + " (" + label + ")");
-    } else {
-        msg(player,
-            chatColor("7") + "[End] Kill TP capped (" +
-            formatHpLabel(target) + " TP max for " + label + ").");
+    if (killTpChatEnabled(player)) {
+        if (delta > 0) {
+            msg(player,
+                chatColor("6") + "[End] " +
+                chatColor("e") + "+" + formatHpLabel(delta) +
+                chatColor("7") + " End bonus TP" +
+                chatColor("8") + " (" + label + ")");
+        } else {
+            msg(player,
+                chatColor("7") + "[End] Kill TP capped (" +
+                formatHpLabel(target) + " TP max for " + label + ").");
+        }
     }
     return true;
 }

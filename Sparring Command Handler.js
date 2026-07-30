@@ -1,36 +1,39 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 2.1.1
+ Version: 3.0.6
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- Gameplay stays in Sparring Tp System.js (Global Player).
- This file is the command display handler only - same split
- as Rival System.js + Rival Command Handler.js.
+ NOTE (v3.0.6+):
+  Command cards match Rival System layout (uiHead / uiProp /
+  uiSection / uiCmd / ranked tops).
+  Sparring Tp System.js (Global Player) also handles /spar
+  triggers 70 / 72-79. This script-slot handler is OPTIONAL.
+  If both are installed, responses are deduped.
 
- Color codes use unicode section escapes only (no literal
- section-sign characters) so Minecraft chat colors stay reliable.
+ Sparring v3: combat-based TP (melee/ki/blocks/momentum).
+ No standing timer payouts.
 
- PRIMARY SYNTAX (matches in-game /spar help):
+ PRIMARY SYNTAX:
    /spar
    /spar help
    /spar stats [player]
-   /spar top [tp|streak|session|payout|perfect|time]
+   /spar top [tp|streak|session|payout|perfect|time|combo|clash]
 
  TRIGGERS:
  70 = /spar router (help + subcommands via $1-)
- 72 = Top total TP (legacy / also used by sparring system note)
+ 72 = Top total TP (legacy)
  73 = Personal sparring statistics
  74 = Top total TP
  75 = Top current streak
  76 = Top longest session
  77 = Top highest payout
- 78 = Top perfect-training payouts
- 79 = Top total rewarded sparring time
+ 78 = Top perfect-training sessions
+ 79 = Top total sparring time
 
  COMMAND FORMAT:
  noppes script trigger <id> <playerName>
@@ -63,6 +66,11 @@ var LB_PERFECT_PREFIX = "spar.leaderboard.perfectPayouts.";
 var LB_HIGHEST_COMBO_PREFIX = "spar.leaderboard.highestCombo.";
 var LB_STREAK_PREFIX = "spar.leaderboard.currentStreak.";
 var LB_BEST_STREAK_PREFIX = "spar.leaderboard.bestStreak.";
+var LB_CLASH_PREFIX = "spar.leaderboard.clash.";
+var LB_MOMENTUM_PREFIX = "spar.leaderboard.momentum.";
+var LB_MELEE_PREFIX = "spar.leaderboard.melee.";
+var LB_KI_PREFIX = "spar.leaderboard.ki.";
+var LB_BLOCKS_PREFIX = "spar.leaderboard.blocks.";
 
 var S_STREAK_CURRENT = "spar.streak.current";
 var S_STREAK_BEST = "spar.streak.best";
@@ -313,6 +321,11 @@ function loadProfile(store, playerName) {
         bestPayout: readNumber(store, LB_BEST_PAYOUT_PREFIX + safe, 0),
         perfect: readNumber(store, LB_PERFECT_PREFIX + safe, 0),
         combo: readNumber(store, LB_HIGHEST_COMBO_PREFIX + safe, 0),
+        momentum: readNumber(store, LB_MOMENTUM_PREFIX + safe, 0),
+        clash: readNumber(store, LB_CLASH_PREFIX + safe, 0),
+        melee: readNumber(store, LB_MELEE_PREFIX + safe, 0),
+        ki: readNumber(store, LB_KI_PREFIX + safe, 0),
+        blocks: readNumber(store, LB_BLOCKS_PREFIX + safe, 0),
         currentStreak: readNumber(store, LB_STREAK_PREFIX + safe, 0),
         bestStreak: readNumber(store, LB_BEST_STREAK_PREFIX + safe, 0)
     };
@@ -406,9 +419,9 @@ function topCategory(category) {
     if (cat == "perfect" || cat == "perfects") {
         return {
             key: LB_PERFECT_PREFIX,
-            title: "PERFECT TRAINING PAYOUTS",
+            title: "PERFECT TRAINING SESSIONS",
             formatter: commas,
-            suffix: "payouts"
+            suffix: "sessions"
         };
     }
 
@@ -426,6 +439,33 @@ function topCategory(category) {
         };
     }
 
+    if (cat == "combo" || cat == "combos" || cat == "hits") {
+        return {
+            key: LB_HIGHEST_COMBO_PREFIX,
+            title: "HIGHEST COMBOS",
+            formatter: commas,
+            suffix: "hits"
+        };
+    }
+
+    if (cat == "clash" || cat == "beam" || cat == "beams") {
+        return {
+            key: LB_CLASH_PREFIX,
+            title: "MOST BEAM CLASH TIME",
+            formatter: duration,
+            suffix: ""
+        };
+    }
+
+    if (cat == "momentum" || cat == "mom") {
+        return {
+            key: LB_MOMENTUM_PREFIX,
+            title: "HIGHEST MOMENTUM",
+            formatter: commas,
+            suffix: "tier"
+        };
+    }
+
     return {
         key: LB_TP_PREFIX,
         title: "TOP SPARRING TP",
@@ -438,29 +478,34 @@ function topCategory(category) {
 
 function cmdHelp(player) {
     uiHead(player, "SPARRING SYSTEM");
-    uiProp(player, "Train", C + "7Exchange melee hits to start a session");
-    uiProp(player, "Pay", C + "7TP every 5s while both stay active");
+    uiProp(player, "Train", C + "7Fight each other " + C + "8(" +
+        C + "fmelee" + C + "8 or " + C + "fki" + C + "8) to start");
+    uiProp(player, "Pay", C + "7TP from combat actions" + C + "8  |  " +
+        C + "7not standing still");
     uiProp(
         player,
         "Bonus",
-        C + "7Duration" + C + "8  |  " +
-        C + "7Combo" + C + "8  |  " +
+        C + "7Momentum" + C + "8  |  " +
+        C + "7Session" + C + "8  |  " +
         C + "7Streak" + C + "8  |  " +
-        C + "7Perfect"
+        C + "7Perfect" + C + "8  |  " +
+        C + "7Style"
     );
     uiBlank(player);
-    uiSection(player, "Commands");
+    uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
-    uiCmd(player, "/spar stats [player]", "personal record");
-    uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time]", "");
+    uiCmd(player, "/spar stats [player]", "personal sparring record");
+    uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
     uiCmd(player, "/spartop", "same as /spar top");
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
-    uiCmd(player, "/sparperfect | /spartime", "");
+    uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
-    msg(player, C + "8Keep moving and trading melee hits to stay in session.");
+    msg(player, C + "8Stay active: trade damage, move, and keep the fight going.");
+    msg(player, C + "8Also works  " + C + "e.spar" + C + "8  /  " +
+        C + "e!spar" + C + "8  /  " + C + "e./spar");
     uiFoot(player);
 }
 
@@ -488,22 +533,26 @@ function showPersonal(player, targetName) {
         streak.best > 0;
 
     if (!hasAny) {
-        uiBanner(player, "Sparring", C + "cNo sparring record for " + displayName);
-        msg(player, C + "8Start a session by exchanging melee hits with another player.");
+        uiBanner(player, "Sparring", C + "cNo record for " + displayName);
+        msg(player, C + "8Start a session by fighting another player (melee or ki).");
         return;
     }
 
     uiHead(player, "SPARRING STATS");
     uiProp(player, "Player", C + "f" + displayName);
+    uiProp(player, "Total TP", C + "a" + commas(profile.totalTP) +
+        C + "8  Best  " + C + "a" + commas(profile.bestPayout) + " TP");
     uiBlank(player);
-    uiProp(player, "Total TP", C + "a" + commas(profile.totalTP));
-    uiProp(player, "Best Payout", C + "a" + commas(profile.bestPayout));
     uiProp(player, "Sessions", C + "f" + commas(profile.sessions));
-    uiProp(player, "Rewarded", C + "b" + duration(profile.totalTime));
-    uiProp(player, "Longest", C + "b" + duration(profile.longest));
-    uiBlank(player);
-    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) + C + "7 payouts");
-    uiProp(player, "Combo", C + "e" + "Tier " + commas(profile.combo));
+    uiProp(player, "Time", C + "b" + duration(profile.totalTime) +
+        C + "8   Longest  " + C + "b" + duration(profile.longest));
+    uiProp(player, "Damage", C + "f" + commas(profile.melee) + C + "7 melee" +
+        C + "8  " + C + "b" + commas(profile.ki) + C + "7 ki");
+    uiProp(player, "Defense", C + "7" + commas(profile.blocks) + " blocks" +
+        C + "8   Clash  " + C + "d" + duration(profile.clash));
+    uiProp(player, "Perfect", C + "d" + commas(profile.perfect) +
+        C + "8   Combo  " + C + "e" + commas(profile.combo) +
+        C + "8   Momentum  " + C + "e" + commas(profile.momentum));
     uiProp(
         player,
         "Streak",
@@ -621,6 +670,11 @@ function routeSparSub(player, event) {
         sub == "perfect" ||
         sub == "perfects" ||
         sub == "time" ||
+        sub == "combo" ||
+        sub == "combos" ||
+        sub == "clash" ||
+        sub == "beam" ||
+        sub == "momentum" ||
         sub == "tp"
     ) {
         /*
@@ -633,14 +687,50 @@ function routeSparSub(player, event) {
     }
 }
 
-function trigger(event) {
-    var player = null;
+function resolveCommandPlayer(event) {
     var arg0 = argAt(event, 0);
+    if (arg0 != "") {
+        var byName = getOnlinePlayerByName(arg0);
+        if (byName != null) return byName;
+        try {
+            var Bukkit = Java.type("org.bukkit.Bukkit");
+            var bp = Bukkit.getPlayerExact(arg0);
+            if (bp == null) bp = Bukkit.getPlayer(arg0);
+            if (bp != null) {
+                var found = getOnlinePlayerByName(String(bp.getName()));
+                if (found != null) return found;
+            }
+        } catch (eBukkit) {}
+    }
+    try { if (event.player != null) return event.player; } catch (e1) {}
+    try { if (event.entity != null) return event.entity; } catch (e2) {}
+    return null;
+}
+
+function claimSparCommand(player) {
+    if (player == null) return false;
+    try {
+        var temp = player.getTempdata();
+        var now = Number(new Date().getTime());
+        var last = 0;
+        try {
+            if (temp.has("spar.cmd.handledAt")) last = Number(temp.get("spar.cmd.handledAt"));
+        } catch (e) {}
+        if (isNaN(last)) last = 0;
+        if (now - last < 750) return false;
+        temp.put("spar.cmd.handledAt", String(now));
+        return true;
+    } catch (e2) {
+        return true;
+    }
+}
+
+function trigger(event) {
+    var arg0 = argAt(event, 0);
+    var player = null;
 
     try {
-        if (arg0 != "") {
-            player = getOnlinePlayerByName(arg0);
-        }
+        player = resolveCommandPlayer(event);
     } catch (e) {}
 
     if (player == null) {
@@ -655,6 +745,9 @@ function trigger(event) {
         return;
     }
 
+    /* Dedupe with Global Player Sparring Tp System v3.0.4+ */
+    if (!claimSparCommand(player)) return;
+
     try {
         var id = Number(event.id);
         var arg1 = argAt(event, 1);
@@ -664,10 +757,6 @@ function trigger(event) {
         } else if (id == 72 || id == 74) {
             showTop(player, arg1 == "" ? "tp" : arg1);
         } else if (id == 73) {
-            /*
-             Legacy /sparstats and old /spar both used 73 for personal stats.
-             If extra args are present, treat 73 like the router for convenience.
-             */
             if (arg1 != "") {
                 routeSparSub(player, event);
             } else {
@@ -683,6 +772,8 @@ function trigger(event) {
             showTop(player, "perfect");
         } else if (id == 79) {
             showTop(player, "time");
+        } else {
+            msg(player, C + "c[Sparring] Unhandled trigger id " + id);
         }
     } catch (err) {
         msg(player, C + "c[Sparring Command Error] " + err);

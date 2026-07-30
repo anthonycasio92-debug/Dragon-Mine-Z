@@ -230,6 +230,16 @@
             ],
             "ScriptList": [
                 {
+                    "Line": "dmz class permission.js"
+                }
+            ]
+        },
+        {
+            "Script": "",
+            "Console": [
+            ],
+            "ScriptList": [
+                {
                     "Line": "tp is sp fabled.js"
                 }
             ]
