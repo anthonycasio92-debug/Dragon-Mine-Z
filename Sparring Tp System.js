@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.1.2
+ Version: 3.1.3
 
  Combat-Based Training (Sparring v3)
 
@@ -30,6 +30,8 @@
     LivingHurt pre-mitigation and is no longer used for payouts.
   - v3.1.2: fully disable sparring during active Rival challenges
     (no session start, TP, or chat spam while fighting).
+  - v3.1.3: /spar help no longer advertises .spar / !spar / ./spar
+    (those chat prefixes are unreliable and confuse players).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -37,7 +39,6 @@
  COMMANDS:
   Native (no CMI required):
     /spar ...   (Bukkit preprocess hook)
-    .spar ...   or  !spar ...  or  ./spar ...  (chat)
   Optional CMI aliases (Aliases-Sparring.yml) -> trigger 70
   Optional: Sparring Command Handler.js in a player script-slot
 
@@ -2722,9 +2723,6 @@ function sparCmdHelp(player) {
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
     sendMessage(player, sparColor("8") + "Stay active: trade damage, move, and keep the fight going.");
-    sendMessage(player, sparColor("8") + "Also works  " + sparColor("e") + ".spar" +
-        sparColor("8") + "  /  " + sparColor("e") + "!spar" +
-        sparColor("8") + "  /  " + sparColor("e") + "./spar");
     uiFoot(player);
 }
 

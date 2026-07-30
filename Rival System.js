@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.5
+ Version: 4.7.6
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -30,6 +30,10 @@
    /rival declare <player>   visible notify; accept/decline/ignore
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ Changelog (4.7.6):
+ - Battle report delivered once (broadcast OR private DM), so fighters
+   no longer see the full report twice.
 
  Changelog (4.7.2 consolidate):
  - Keeps declare-status path: silent Unknown, declare Mutual,
@@ -4018,16 +4022,23 @@ function chDeliverReport(session, result, report) {
             ? session.challengerName : session.opponentName;
     }
 
-    /* Always show the report to both fighters first. */
+    /*
+     Deliver the battle report once only:
+     broadcast when enabled, otherwise private DM to both fighters.
+     Never DM + broadcast the same report (that double-shows for fighters).
+    */
     if (report != null) {
-        for (var i = 0; i < report.length; i++) {
-            if (a !== null) chMessage(a, report[i]);
-            if (b !== null) chMessage(b, report[i]);
+        if (CH_BROADCAST_REPORT === true) {
+            chBroadcastLines(report);
+        } else {
+            for (var i = 0; i < report.length; i++) {
+                if (a !== null) chMessage(a, report[i]);
+                if (b !== null) chMessage(b, report[i]);
+            }
         }
     }
 
     if (CH_BROADCAST_REPORT === true) {
-        chBroadcastLines(report);
         if (result.reason === "draw") {
             chBroadcast(CH_COLOR + "e[Rival Battle] " + CH_COLOR + "fDraw!");
         } else {

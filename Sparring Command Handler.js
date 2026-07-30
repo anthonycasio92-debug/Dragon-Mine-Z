@@ -1,16 +1,17 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring Command Handler
- Version: 3.0.6
+ Version: 3.0.7
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Rival Command Handler.
 
  DO NOT place this in the Global Player Script slot.
 
- NOTE (v3.0.6+):
+ NOTE (v3.0.7+):
   Command cards match Rival System layout (uiHead / uiProp /
   uiSection / uiCmd / ranked tops).
+  Help lists /spar only (no .spar / !spar / ./spar).
   Sparring Tp System.js (Global Player) also handles /spar
   triggers 70 / 72-79. This script-slot handler is OPTIONAL.
   If both are installed, responses are deduped.
@@ -504,8 +505,6 @@ function cmdHelp(player) {
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
     msg(player, C + "8Stay active: trade damage, move, and keep the fight going.");
-    msg(player, C + "8Also works  " + C + "e.spar" + C + "8  /  " +
-        C + "e!spar" + C + "8  /  " + C + "e./spar");
     uiFoot(player);
 }
 

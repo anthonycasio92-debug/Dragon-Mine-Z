@@ -1,10 +1,10 @@
-# Consolidated Scripts Pack (v4.7.5 / Sparring v3.1.2)
+# Consolidated Scripts Pack (v4.7.6 / Sparring v3.1.3)
 
 One branch with the latest good version of each system so installing one PR
 does not wipe features from another.
 
 ## Rival (Global Player + Command Handler)
-- `Rival System.js` **v4.7.5** → CustomNPCs Global Player  
+- `Rival System.js` **v4.7.6** → CustomNPCs Global Player  
   Events: `init`, `login`, `tick`, `damaged`, `damagedEntity`, `kill`, `died`, `logout`, `trigger`
 - `Rival Command Handler.js` **v4.7.5** → player script-slot (with SkillCheck / Sparring Handler)
 - `Aliases-Rival.yml` → CMI CustomAlias (`asFakeOp!`) → `/cmi reload`
@@ -12,12 +12,13 @@ does not wipe features from another.
 Path: silent `/rival` → Unknown; both silent → Declared; `/rival declare` → Pending;  
 both declare/accept → Mutual; Mutual + 3 death/KO → Nemesis.  
 Nearby TP capped at 2 + recent mob kill. TP scale 60%.  
-Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.
+Sparring deaths do not advance Nemesis. `/rival tpmsg` toggles kill TP chat.  
+Battle report shows once (no DM+broadcast double).
 
 ## Sparring
-- `Sparring Tp System.js` **v3.1.2** → Global Player
-- `Sparring Command Handler.js` **v3.0.6** → script-slot
-- `Aliases-Sparring.yml` → CMI
+- `Sparring Tp System.js` **v3.1.3** → Global Player
+- `Sparring Command Handler.js` **v3.0.7** → script-slot
+- `Aliases-Sparring.yml` → CMI (`/spar` only; help no longer lists `.spar` / `!spar`)
 
 ## End
 - `End Dimension Strength.js` **v2.10.3** → Global Player (own tab)
