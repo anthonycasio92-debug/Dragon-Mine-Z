@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.6
+ Version: 4.7.7
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -30,6 +30,10 @@
    /rival declare <player>   visible notify; accept/decline/ignore
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ Changelog (4.7.7):
+ - Personal cooldown between official challenges (default 5 minutes)
+   after a battle ends; blocks send and accept for both fighters.
 
  Changelog (4.7.6):
  - Battle report delivered once (broadcast OR private DM), so fighters
@@ -2744,6 +2748,8 @@ var CH_MAX_MINUTES = 10;
 var CH_LONG_FIGHT_MS = 2 * 60 * 1000;
 var CH_BROADCAST_SCORE_LONG_MS = 60 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
+/* After a challenge ends, both fighters wait before another official battle. */
+var CH_BETWEEN_COOLDOWN_MS = 5 * 60 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
@@ -2967,6 +2973,38 @@ function chFormatMs(ms) {
     seconds = seconds % 60;
     if (minutes <= 0) return seconds + "s";
     return minutes + "m " + seconds + "s";
+}
+
+function chPlayerBattleCdKey(uuid) {
+    return "ended:" + chString(uuid);
+}
+
+function chBattleCooldownRemaining(db, uuid) {
+    if (db == null || db.cooldowns == null) return 0;
+    var last = chNumber(db.cooldowns[chPlayerBattleCdKey(uuid)], 0);
+    if (last <= 0) return 0;
+    return Math.max(0, CH_BETWEEN_COOLDOWN_MS - (chNow() - last));
+}
+
+function chSetBattleCooldown(db, uuid) {
+    if (db == null || db.cooldowns == null) return;
+    var id = chString(uuid);
+    if (id == "") return;
+    db.cooldowns[chPlayerBattleCdKey(id)] = chNow();
+}
+
+function chBlockIfBattleCooldown(player, db, uuid, whoLabel) {
+    var rem = chBattleCooldownRemaining(db, uuid);
+    if (rem <= 0) return false;
+    var who = chString(whoLabel);
+    if (who == "" || who == "you") {
+        chMessage(player, CH_COLOR + "cChallenge cooldown: " + chFormatMs(rem) +
+            CH_COLOR + "7 before another official battle.");
+    } else {
+        chMessage(player, CH_COLOR + "c" + who + " is on challenge cooldown (" +
+            chFormatMs(rem) + ").");
+    }
+    return true;
 }
 
 /* ========================= STORAGE ========================= */
@@ -3374,6 +3412,8 @@ function chChallenge(player, targetName) {
         chMessage(player, CH_COLOR + "cThat player is already in a challenge.");
         return;
     }
+    if (chBlockIfBattleCooldown(player, db, fromUuid, "you")) return;
+    if (chBlockIfBattleCooldown(player, db, toUuid, chName(target))) return;
 
     var cooldownKey = fromUuid + ">" + toUuid;
     var remaining = CH_REQUEST_COOLDOWN_MS - (chNow() - chNumber(db.cooldowns[cooldownKey], 0));
@@ -3513,6 +3553,8 @@ function chAccept(player, fromName) {
         chMessage(player, CH_COLOR + "cGet within " + CH_MAX_DISTANCE + " blocks to accept.");
         return;
     }
+    if (chBlockIfBattleCooldown(player, db, chUuid(player), "you")) return;
+    if (chBlockIfBattleCooldown(player, db, pending.fromUuid, pending.fromName)) return;
 
     chStartCountdown(player, db, pending);
 }
@@ -4073,6 +4115,10 @@ function chEndSession(player, db, session, result) {
     session.winnerUuid = chString(result.winnerUuid);
     session.loserUuid = chString(result.loserUuid);
     try { delete session.pendingEnd; } catch (ePe) {}
+
+    /* Personal between-challenge cooldown for both fighters. */
+    try { chSetBattleCooldown(db, session.challengerUuid); } catch (eCd1) {}
+    try { chSetBattleCooldown(db, session.opponentUuid); } catch (eCd2) {}
 
     delete db.playerSessions[session.challengerUuid];
     delete db.playerSessions[session.opponentUuid];

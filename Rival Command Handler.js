@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.7.5
+ Version: 4.7.6
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -18,6 +18,10 @@
    /rival declare <player>   Pending (visible notify; accept/decline/ignore)
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ FIX (4.7.6):
+  Personal cooldown between official challenges (default 5 minutes)
+  after a battle ends; /challenge send + accept both check it.
 
  FIX (4.7.4):
   Visible /rival declare shows as Pending on /rival list (not Unknown).
@@ -108,6 +112,8 @@ var REQUEST_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
 var DECLARE_COOLDOWN_MS = 30 * 1000;
 var CH_REQUEST_EXPIRE_MS = 30 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
+/* After a challenge ends, both fighters wait before another official battle. */
+var CH_BETWEEN_COOLDOWN_MS = 5 * 60 * 1000;
 var CH_COUNTDOWN_MS = 5 * 1000;
 var CH_DURATION_MS = 60 * 1000;
 var CH_MIN_MINUTES = 1;
@@ -146,6 +152,39 @@ function commas(v) {
     }
     return raw + out;
 }
+
+function formatCdMs(ms) {
+    var seconds = Math.max(0, Math.ceil(num(ms, 0) / 1000));
+    var minutes = Math.floor(seconds / 60);
+    seconds = seconds % 60;
+    if (minutes <= 0) return seconds + "s";
+    return minutes + "m " + seconds + "s";
+}
+
+function playerBattleCdKey(uuid) {
+    return "ended:" + str(uuid);
+}
+
+function battleCooldownRemaining(ch, uuid) {
+    if (ch == null || ch.cooldowns == null) return 0;
+    var last = num(ch.cooldowns[playerBattleCdKey(uuid)], 0);
+    if (last <= 0) return 0;
+    return Math.max(0, CH_BETWEEN_COOLDOWN_MS - (now() - last));
+}
+
+function blockIfBattleCooldown(player, ch, uuid, whoLabel) {
+    var rem = battleCooldownRemaining(ch, uuid);
+    if (rem <= 0) return false;
+    var who = str(whoLabel);
+    if (who == "" || who == "you") {
+        msg(player, C + "cChallenge cooldown: " + formatCdMs(rem) +
+            C + "7 before another official battle.");
+    } else {
+        msg(player, C + "c" + who + " is on challenge cooldown (" + formatCdMs(rem) + ").");
+    }
+    return true;
+}
+
 function getTier(points) {
     var rp = Math.max(0, num(points, 0));
     var tier = TIERS[0];
@@ -835,6 +874,8 @@ function cmdHelp(player) {
     uiCmd(player, "/challenge <player> [1-10]", "official fight (minutes, default 1)");
     uiCmd(player, "/challenge accept|decline|cancel", "");
     uiCmd(player, "/spectaterival <player>", "watch live");
+    msg(player, C + "8" + Math.floor(CH_BETWEEN_COOLDOWN_MS / 60000) +
+        "m cooldown between official challenges.");
     uiBlank(player);
     uiSection(player, "Progress");
     uiCmd(player, "/rival top [rp|wins|streak|damage]", "");
@@ -1304,6 +1345,8 @@ function cmdChallenge(player, targetName, durationRaw) {
     var toU = uuidOf(target);
     if (busy(ch, fromU)) { msg(player, C + "cYou already have a challenge."); return; }
     if (busy(ch, toU)) { msg(player, C + "cThey are busy."); return; }
+    if (blockIfBattleCooldown(player, ch, fromU, "you")) return;
+    if (blockIfBattleCooldown(player, ch, toU, nameOf(target))) return;
 
     var cdKey = fromU + ">" + toU;
     var rem = CH_REQUEST_COOLDOWN_MS - (now() - num(ch.cooldowns[cdKey], 0));
@@ -1423,6 +1466,8 @@ function cmdChallengeAccept(player, fromName) {
     if (dist(player, challenger) > CH_MAX_DISTANCE) {
         msg(player, C + "cGet closer to accept."); return;
     }
+    if (blockIfBattleCooldown(player, ch, uuidOf(player), "you")) return;
+    if (blockIfBattleCooldown(player, ch, pending.fromUuid, pending.fromName)) return;
     startCountdown(ch, pending);
 }
 
