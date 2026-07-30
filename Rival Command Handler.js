@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival Command Handler
- Version: 4.7.2
+ Version: 4.7.3
 
  PLACE THIS SCRIPT IN THE SAME CUSTOMNPCS SCRIPT LOCATION
  AS YOUR WORKING SkillCheckCommand.js / Sparring Command Handler.
@@ -1090,6 +1090,8 @@ function cmdDecline(player, fromName) {
         }
     }
     pref.totals.declarationsDeclined++;
+    /* Promote any silent+silent Declared pairs left after clearing invites. */
+    healCrossedSilentDeclares(db);
     saveDb(db);
     msg(player, C + "eDeclined " + from.name);
     msg(player, C + "8You gain no rival benefits from them.");

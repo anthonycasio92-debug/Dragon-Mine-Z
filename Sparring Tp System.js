@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.9
+ Version: 3.1.0
 
  Combat-Based Training (Sparring v3)
 
@@ -21,6 +21,10 @@
   - Beam clashes via BeamClashManager.isClashing(UUID).
   - Style labels use style IDs; damage-weighted specialists.
   - /spar command cards match Rival System layout.
+  - v3.1.0: movement AFK gate no longer refreshed by hits/blocks;
+    same-dimension required; Fabled prestige via plugin classloader;
+    overworld leaderboard store; sessions counted on end; wave ki
+    typed as beam before explosive.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -169,6 +173,7 @@ var PERFECT_ACTIONBAR_MS = 2500;
 /* Daily streak */
 var ENABLE_TRAINING_STREAK = true;
 var STREAK_MIN_SESSION_MS = 300000;
+var MIN_COUNTED_SESSION_MS = 30000;   // leaderboard session increment
 var STREAK_BONUS_PER_DAY = 0.02;
 var MAX_STREAK_DAYS_FOR_BONUS = 14;
 var MAX_STREAK_MULTIPLIER = 1.25;
@@ -400,6 +405,37 @@ function distanceBetween(a, b) {
         var dz = Number(a.getZ()) - Number(b.getZ());
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     } catch (e) { return 999999; }
+}
+
+function getWorldKey(player) {
+    if (player == null) return "";
+    try {
+        var world = null;
+        try { world = player.getWorld(); } catch (e1) {
+            try { world = player.world; } catch (e2) {}
+        }
+        if (world == null) return "";
+        try {
+            if (typeof world.getDimensionName == "function") {
+                var dim = String(world.getDimensionName());
+                if (dim != "") return dim.toLowerCase();
+            }
+        } catch (e3) {}
+        try {
+            if (typeof world.getName == "function") {
+                var name = String(world.getName());
+                if (name != "") return name.toLowerCase();
+            }
+        } catch (e4) {}
+    } catch (e) {}
+    return "";
+}
+
+function sameWorld(a, b) {
+    var ka = getWorldKey(a);
+    var kb = getWorldKey(b);
+    if (ka == "" || kb == "") return false;
+    return ka == kb;
 }
 
 function sendMessage(player, text) {
@@ -647,10 +683,15 @@ function getFabledPrestigeLevel(player) {
         if (plugin == null || !plugin.isEnabled()) return 0;
         var bukkitPlayer = Bukkit.getPlayerExact(getPlayerName(player));
         if (bukkitPlayer == null) return 0;
-        var methods = plugin.getClass().getMethods();
+
+        /* Load Fabled through its plugin classloader (Arclight / hybrid). */
+        var loader = plugin.getClass().getClassLoader();
+        var fabledClass = loader.loadClass("studio.magemonkey.fabled.Fabled");
+        var methods = fabledClass.getMethods();
         var getDataMethod = null;
         for (var i = 0; i < methods.length; i++) {
-            if (String(methods[i].getName()) == "getData" && methods[i].getParameterTypes().length == 1) {
+            if (String(methods[i].getName()) == "getData" &&
+                methods[i].getParameterTypes().length == 1) {
                 getDataMethod = methods[i];
                 break;
             }
@@ -658,7 +699,39 @@ function getFabledPrestigeLevel(player) {
         if (getDataMethod == null) return 0;
         var fabledData = getDataMethod.invoke(null, bukkitPlayer);
         if (fabledData == null) return 0;
-        var prestigeClass = fabledData.getClass(FABLED_PRESTIGE_CLASS_NAME);
+
+        var prestigeClass = null;
+        try { prestigeClass = fabledData.getClass(FABLED_PRESTIGE_CLASS_NAME); } catch (e1) {}
+        if (prestigeClass == null) {
+            try { prestigeClass = fabledData.getClass("prestige"); } catch (e2) {}
+        }
+        if (prestigeClass == null) {
+            try {
+                var playerClasses = fabledData.getClasses();
+                if (playerClasses != null) {
+                    var it = playerClasses.iterator();
+                    while (it.hasNext()) {
+                        var current = it.next();
+                        if (current == null) continue;
+                        var classData = null;
+                        try { classData = current.getData(); } catch (e3) {}
+                        var label = "";
+                        try {
+                            if (classData != null && typeof classData.getName == "function") {
+                                label = String(classData.getName());
+                            }
+                        } catch (e4) {}
+                        if (label == "") {
+                            try { label = String(current); } catch (e5) {}
+                        }
+                        if (String(label).toLowerCase().indexOf("prestige") >= 0) {
+                            prestigeClass = current;
+                            break;
+                        }
+                    }
+                }
+            } catch (eScan) {}
+        }
         if (prestigeClass == null) return 0;
         var level = Number(prestigeClass.getLevel());
         if (isNaN(level)) return 0;
@@ -1183,9 +1256,10 @@ function classifyKiType(event) {
             var type = types[t];
             if (type.indexOf("scatter") >= 0 || type.indexOf("disk") >= 0) return "scatter";
             if (type.indexOf("charge") >= 0) return "charge";
-            if (type.indexOf("explosive") >= 0 || type.indexOf("wave") >= 0) return "explosive";
+            /* Wave/beam before explosive — "kiwave" must not underpay as explosive. */
+            if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0 || type.indexOf("wave") >= 0) return "beam";
+            if (type.indexOf("explosive") >= 0) return "explosive";
             if (type.indexOf("barrage") >= 0 || type.indexOf("rapid") >= 0) return "barrage";
-            if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0) return "beam";
             if (type.indexOf("kiblast") >= 0 || type.indexOf("blast") >= 0) return "basic";
         }
     } catch (e2) {}
@@ -1269,10 +1343,9 @@ function startSession(a, b) {
         putNumber(bTemp, zeroKeys[i], 0);
     }
 
+    /* Seed movement window only — hits/blocks must not refresh AFK gate. */
     refreshMovementActivity(a);
     refreshMovementActivity(b);
-    recordSparringSessionStarted(a);
-    recordSparringSessionStarted(b);
 
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(a, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), bName, sparColor("e"), "."));
@@ -1350,6 +1423,10 @@ function endSession(player, partner, reason) {
         if (duration >= STREAK_MIN_SESSION_MS) {
             qualifyDailyTrainingStreak(player);
             if (partner != null) qualifyDailyTrainingStreak(partner);
+        }
+        if (duration >= MIN_COUNTED_SESSION_MS) {
+            recordSparringSessionCompleted(player);
+            if (partner != null) recordSparringSessionCompleted(partner);
         }
         updateSparringLeaderboard(player);
         if (partner != null) updateSparringLeaderboard(partner);
@@ -1668,8 +1745,6 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
         putNumber(temp, K_STYLE_MELEE, readNumber(temp, K_STYLE_MELEE, 0) + damage);
     }
 
-    refreshMovementActivity(attacker);
-
     /* Blocked attacks break combo / Momentum instead of extending them. */
     if (isPlayerBlocking(victim)) {
         breakCombo(attacker, "attack blocked");
@@ -1737,6 +1812,7 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     var outTime = readNumber(tTemp, K_LAST_OUT_TIME, 0);
     if (outPartner.toLowerCase() != aName.toLowerCase()) return;
     if (now - outTime > SESSION_START_WINDOW_MS) return;
+    if (!sameWorld(attacker, target)) return;
     if (distanceBetween(attacker, target) > MAX_SPAR_DISTANCE) return;
 
     startSession(attacker, target);
@@ -1751,8 +1827,19 @@ function hasRecentOutgoingHit(player, partnerName) {
 /* ========================= LEADERBOARD / PROFILE ========================= */
 
 function getLeaderboardStore(player) {
-    try { return player.world.getStoreddata(); } catch (e) {
-        try { return player.getWorld().getStoreddata(); } catch (e2) { return null; }
+    /* Always pin to overworld so End/Nether sessions share one board. */
+    try {
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            try {
+                var world = NpcAPI.Instance().getIWorld(names[i]);
+                if (world != null) return world.getStoreddata();
+            } catch (e1) {}
+        }
+    } catch (e) {}
+    try { return player.world.getStoreddata(); } catch (e2) {
+        try { return player.getWorld().getStoreddata(); } catch (e3) { return null; }
     }
 }
 
@@ -1787,7 +1874,7 @@ function ensureLeaderboardName(store, playerName) {
     writeLeaderboardNames(store, names);
 }
 
-function recordSparringSessionStarted(player) {
+function recordSparringSessionCompleted(player) {
     var store = getLeaderboardStore(player);
     if (store == null) return;
     var name = getPlayerName(player);
@@ -1908,13 +1995,12 @@ function refreshClashCombatActivity(player, partner) {
     var aName = getPlayerName(player);
     var bName = getPlayerName(partner);
 
-    /* Keep hit-activity alive so the session timer cannot expire mid-clash. */
+    /* Keep hit-activity alive so the session timer cannot expire mid-clash.
+       Do not refresh movement — clash path already skips the move gate. */
     putString(aTemp, K_LAST_OUT_PARTNER, bName);
     putNumber(aTemp, K_LAST_OUT_TIME, now);
     putString(bTemp, K_LAST_OUT_PARTNER, aName);
     putNumber(bTemp, K_LAST_OUT_TIME, now);
-    refreshMovementActivity(player);
-    refreshMovementActivity(partner);
 }
 
 /* Resolve a CNPC player into a java.util.UUID for DMZ clash APIs. */
@@ -2117,11 +2203,16 @@ function processSession(player) {
         clearSessionData(player);
         return;
     }
+    if (!sameWorld(player, partner)) {
+        endSession(player, partner, "fighters changed dimensions");
+        return;
+    }
     if (!isAlive(player) || !isAlive(partner)) {
         endSession(player, partner, "a fighter was defeated");
         return;
     }
-    if (getPartnerName(partner) != getPlayerName(player) || !isSessionActive(partner)) {
+    if (getPartnerName(partner).toLowerCase() != getPlayerName(player).toLowerCase() ||
+        !isSessionActive(partner)) {
         endSession(player, partner, "session data no longer matched");
         return;
     }
@@ -2238,7 +2329,6 @@ function damaged(event) {
         var temp = victim.getTempdata();
         putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
         putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
-        refreshMovementActivity(victim);
         awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
 
         /* Successful block snaps the attacker's combo / Momentum. */

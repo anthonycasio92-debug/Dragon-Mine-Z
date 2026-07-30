@@ -1,7 +1,7 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases (v3) — OPTIONAL
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3.1.0) — OPTIONAL
 # ============================================================
-# Sparring Tp System.js v3.0.5+ already handles:
+# Sparring Tp System.js v3.1.0+ already handles:
 #   /spar ...   (Bukkit slash hook, no CMI needed)
 #   .spar ...   !spar ...   ./spar ...   (chat fallback)
 #

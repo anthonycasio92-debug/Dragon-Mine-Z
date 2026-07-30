@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.2
+ Version: 4.7.3
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -1136,13 +1136,54 @@ function rcAwardRivalPoints(database, ownerRecord, rivalUuid, amount, reason) {
 
 /* ========================= REQUESTS ========================= */
 
+/*
+ * Match Handler clearInviteFlags so Global Player expiry cannot leave
+ * orphan inviteSent / inviteReceived after deleting db.requests.
+ */
+function rcClearInviteFlags(database, fromU, toU) {
+    if (database == null || database.players == null) return;
+    var from = database.players[fromU];
+    var to = database.players[toU];
+    if (from != null && from.rivals != null && from.rivals[toU] != null) {
+        var fl = from.rivals[toU];
+        fl.inviteSent = false;
+        if (fl.declaredByMe !== true) {
+            fl.inviteReceived = false;
+        }
+        if (fl.declaredByMe !== true && fl.declaredByThem !== true &&
+            fl.inviteReceived !== true && fl.mutual !== true) {
+            delete from.rivals[toU];
+        } else {
+            rcRefreshLinkStatus(fl);
+        }
+    }
+    if (to != null && to.rivals != null && to.rivals[fromU] != null) {
+        var tl = to.rivals[fromU];
+        tl.inviteReceived = false;
+        if (tl.declaredByMe !== true) {
+            tl.declaredByThem = false;
+        }
+        if (tl.declaredByMe !== true && tl.declaredByThem !== true &&
+            tl.inviteSent !== true && tl.mutual !== true) {
+            delete to.rivals[fromU];
+        } else {
+            rcRefreshLinkStatus(tl);
+        }
+    }
+}
+
 /* Expire pending visible /rival declare entries. Commands live in Handler. */
 function rcCleanupExpiredRequests(database) {
+    if (database == null || database.requests == null) return;
     var now = rcNow();
     for (var key in database.requests) {
         if (!database.requests.hasOwnProperty(key)) continue;
-        var createdAt = rcNumber(database.requests[key].createdAt, 0);
+        var req = database.requests[key];
+        var createdAt = rcNumber(req == null ? 0 : req.createdAt, 0);
         if (createdAt <= 0 || now - createdAt > RC_REQUEST_EXPIRE_MS) {
+            if (req != null) {
+                rcClearInviteFlags(database, req.fromUuid, req.toUuid);
+            }
             delete database.requests[key];
         }
     }
@@ -1966,6 +2007,7 @@ function rpProcessPlayer(player) {
     var temp = rpTemp(player);
     var now = rpNow();
     var inChallenge = rpInActiveChallenge(player);
+    var inSparring = rpIsInSparring(player);
 
     var bestMultiplier = 1.0;
     var nearCount = 0;
@@ -2111,7 +2153,7 @@ function rpProcessPlayer(player) {
             dirty = true;
             rpTempPut(temp, presenceKey, now);
 
-            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
+            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true && inSparring !== true) {
                 var pStatus = rcLinkStatus(cappedLink);
                 var presenceTp = 0;
                 /*
@@ -2371,6 +2413,18 @@ function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
     }
 }
 
+/* Sparring sessions must not advance Rival Nemesis / presence TP. */
+function rpIsInSparring(player) {
+    if (player == null) return false;
+    try {
+        var temp = player.getTempdata();
+        if (temp == null || !temp.has("spar.active")) return false;
+        return rpString(temp.get("spar.active")) === "1";
+    } catch (e) {
+        return false;
+    }
+}
+
 function rpHandleDeathToRival(victim, damageSource) {
     var attacker = null;
     try { attacker = damageSource; } catch (ignored) {}
@@ -2401,6 +2455,7 @@ function rpHandleDeathToRival(victim, damageSource) {
         } catch (ignored4) {}
     }
     if (!rpIsPlayer(attacker)) return;
+    if (rpIsInSparring(victim) || rpIsInSparring(attacker)) return;
 
     var database = rpLoadDatabase(victim);
     if (database === null) return;
@@ -2515,6 +2570,7 @@ function rivalProxDamaged(event) {
  */
 function rpHandleKillOfMutualRival(killer, victim) {
     if (!rpIsPlayer(killer) || !rpIsPlayer(victim)) return false;
+    if (rpIsInSparring(killer) || rpIsInSparring(victim)) return false;
 
     try {
         var temp = victim.getTempdata();
@@ -3514,7 +3570,8 @@ function chBeginBattle(player, db, session) {
     session.state = "active";
     var durationMs = chNumber(session.durationMs, CH_DURATION_MS);
     if (durationMs < CH_DURATION_MS) durationMs = CH_DURATION_MS;
-    session.battleEndsAt = chNow() + durationMs;
+    session.battleStartedAt = chNow();
+    session.battleEndsAt = session.battleStartedAt + durationMs;
     session.lastScoreBroadcastAt = 0;
     session.announcedFight = true;
     chSaveChallengeDb(player, db);
@@ -3566,7 +3623,7 @@ function chBuildReport(session, winnerName, loserName) {
         lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
     }
     lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
-        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        chFormatMs(chBattleElapsedMs(session)) +
         CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
@@ -3651,7 +3708,7 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
-    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    var battleDuration = chBattleElapsedMs(session);
     function touchDuration(record, wonFlag) {
         if (record === null) return;
         record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
