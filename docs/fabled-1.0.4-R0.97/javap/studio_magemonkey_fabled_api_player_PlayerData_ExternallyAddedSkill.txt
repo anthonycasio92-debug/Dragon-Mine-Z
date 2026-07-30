@@ -1,0 +1,10 @@
+Compiled from "PlayerData.java"
+public class studio.magemonkey.fabled.api.player.PlayerData$ExternallyAddedSkill {
+  public java.lang.String getId();
+  public org.bukkit.NamespacedKey getKey();
+  public int getLevel();
+  public boolean equals(java.lang.Object);
+  public int hashCode();
+  public java.lang.String toString();
+  public studio.magemonkey.fabled.api.player.PlayerData$ExternallyAddedSkill(java.lang.String, org.bukkit.NamespacedKey, int);
+}

@@ -1,0 +1,17 @@
+Compiled from "AttributeListener.java"
+public class studio.magemonkey.fabled.listener.attribute.AttributeListener extends studio.magemonkey.fabled.listener.FabledListener {
+  public static final java.lang.String PHYSICAL;
+  public studio.magemonkey.fabled.listener.attribute.AttributeListener();
+  public void init();
+  public void onJoin(org.bukkit.entity.Player);
+  public void onRespawn(org.bukkit.event.player.PlayerRespawnEvent);
+  public void onLevelUp(studio.magemonkey.fabled.api.event.PlayerLevelUpEvent);
+  public void onManaRegen(studio.magemonkey.fabled.api.event.PlayerManaGainEvent);
+  public void onPhysicalDamage(studio.magemonkey.fabled.api.event.PhysicalDamageEvent);
+  public void onSkillDamage(studio.magemonkey.fabled.api.event.SkillDamageEvent);
+  public void onDamage(org.bukkit.event.entity.EntityDamageEvent);
+  public void onExp(studio.magemonkey.fabled.api.event.PlayerExperienceGainEvent);
+  public void onWorldChange(org.bukkit.event.player.PlayerChangedWorldEvent);
+  public void onHungerChange(org.bukkit.event.entity.FoodLevelChangeEvent);
+  public void onHungerHeal(org.bukkit.event.entity.EntityRegainHealthEvent);
+}

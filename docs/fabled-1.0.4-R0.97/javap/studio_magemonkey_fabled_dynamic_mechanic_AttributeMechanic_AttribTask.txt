@@ -1,0 +1,6 @@
+Compiled from "AttributeMechanic.java"
+class studio.magemonkey.fabled.dynamic.mechanic.AttributeMechanic$AttribTask extends org.bukkit.scheduler.BukkitRunnable {
+  public void stop();
+  public org.bukkit.scheduler.BukkitTask runTaskLater(org.bukkit.plugin.Plugin, long);
+  public void run();
+}

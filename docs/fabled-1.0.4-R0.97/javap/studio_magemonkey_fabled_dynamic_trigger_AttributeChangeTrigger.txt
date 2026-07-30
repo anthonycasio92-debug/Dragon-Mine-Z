@@ -1,0 +1,14 @@
+Compiled from "AttributeChangeTrigger.java"
+public class studio.magemonkey.fabled.dynamic.trigger.AttributeChangeTrigger implements studio.magemonkey.fabled.dynamic.trigger.Trigger<studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent> {
+  public studio.magemonkey.fabled.dynamic.trigger.AttributeChangeTrigger();
+  public java.lang.String getKey();
+  public java.lang.Class<studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent> getEvent();
+  public boolean shouldTrigger(studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent, int, studio.magemonkey.fabled.api.Settings);
+  public void setValues(studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent, studio.magemonkey.fabled.api.CastData);
+  public org.bukkit.entity.LivingEntity getCaster(studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent);
+  public org.bukkit.entity.LivingEntity getTarget(studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent, studio.magemonkey.fabled.api.Settings);
+  public org.bukkit.entity.LivingEntity getTarget(org.bukkit.event.Event, studio.magemonkey.fabled.api.Settings);
+  public org.bukkit.entity.LivingEntity getCaster(org.bukkit.event.Event);
+  public void setValues(org.bukkit.event.Event, studio.magemonkey.fabled.api.CastData);
+  public boolean shouldTrigger(org.bukkit.event.Event, int, studio.magemonkey.fabled.api.Settings);
+}

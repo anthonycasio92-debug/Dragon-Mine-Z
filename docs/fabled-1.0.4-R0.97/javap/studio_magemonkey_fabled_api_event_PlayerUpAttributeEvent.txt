@@ -1,0 +1,4 @@
+Compiled from "PlayerUpAttributeEvent.java"
+public class studio.magemonkey.fabled.api.event.PlayerUpAttributeEvent extends studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent {
+  public studio.magemonkey.fabled.api.event.PlayerUpAttributeEvent(studio.magemonkey.fabled.api.player.PlayerData, java.lang.String, int);
+}

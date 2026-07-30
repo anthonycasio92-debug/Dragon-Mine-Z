@@ -1,0 +1,16 @@
+Compiled from "FabledAttribute.java"
+public class studio.magemonkey.fabled.manager.FabledAttribute implements studio.magemonkey.fabled.gui.tool.IconHolder {
+  public studio.magemonkey.fabled.manager.FabledAttribute(studio.magemonkey.codex.mccore.config.parse.DataSection, java.lang.String);
+  public java.lang.String getName();
+  public org.bukkit.inventory.ItemStack getIcon(studio.magemonkey.fabled.api.player.PlayerData);
+  public boolean isAllowed(org.bukkit.entity.Player);
+  public org.bukkit.inventory.ItemStack getToolIcon();
+  public double modify(studio.magemonkey.fabled.dynamic.EffectComponent, java.lang.String, double, int);
+  public double modifyStat(java.lang.String, double, int);
+  public java.lang.String getKey();
+  public int getMax();
+  public void setMax(int);
+  public int getCostBase();
+  public double getCostModifier();
+  public void setCostModifier(double);
+}

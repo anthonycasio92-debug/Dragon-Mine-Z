@@ -1,0 +1,32 @@
+Compiled from "PlayerSkill.java"
+public final class studio.magemonkey.fabled.api.player.PlayerSkill {
+  public studio.magemonkey.fabled.api.player.PlayerSkill(studio.magemonkey.fabled.api.player.PlayerData, studio.magemonkey.fabled.api.skills.Skill, studio.magemonkey.fabled.api.player.PlayerClass);
+  public studio.magemonkey.fabled.api.player.PlayerSkill(studio.magemonkey.fabled.api.player.PlayerData, studio.magemonkey.fabled.api.skills.Skill, studio.magemonkey.fabled.api.player.PlayerClass, boolean);
+  public boolean isUnlocked();
+  public studio.magemonkey.fabled.api.skills.Skill getData();
+  public studio.magemonkey.fabled.api.player.PlayerClass getPlayerClass();
+  public studio.magemonkey.fabled.api.player.PlayerData getPlayerData();
+  public org.bukkit.Material getBind();
+  public int getLevel();
+  public boolean isExternal();
+  public int getCost();
+  public int getInvestedCost();
+  public double getManaCost();
+  public int getLevelReq();
+  public boolean isOnCooldown();
+  public boolean isMaxed();
+  public int getCooldownLeft();
+  public float getPreciseCooldownLeft();
+  public studio.magemonkey.fabled.api.enums.SkillStatus getStatus();
+  public void addLevels(int);
+  public void setBind(org.bukkit.Material);
+  public void revert();
+  public void startCooldown();
+  public void refreshCooldown();
+  public void subtractCooldown(double);
+  public void addCooldown(double);
+  public void startPreview();
+  public long getCooldown();
+  public void setCooldown(long);
+  public void setLevel(int);
+}

@@ -1,0 +1,4 @@
+Compiled from "PlayerRefundAttributeEvent.java"
+public class studio.magemonkey.fabled.api.event.PlayerRefundAttributeEvent extends studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent {
+  public studio.magemonkey.fabled.api.event.PlayerRefundAttributeEvent(studio.magemonkey.fabled.api.player.PlayerData, java.lang.String, int);
+}

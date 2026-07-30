@@ -1,0 +1,6 @@
+Compiled from "AttributeMechanic.java"
+public class studio.magemonkey.fabled.dynamic.mechanic.AttributeMechanic extends studio.magemonkey.fabled.dynamic.mechanic.MechanicComponent {
+  public studio.magemonkey.fabled.dynamic.mechanic.AttributeMechanic();
+  public java.lang.String getKey();
+  public boolean execute(org.bukkit.entity.LivingEntity, int, java.util.List<org.bukkit.entity.LivingEntity>, boolean);
+}

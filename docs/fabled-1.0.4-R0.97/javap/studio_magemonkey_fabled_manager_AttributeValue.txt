@@ -1,0 +1,6 @@
+Compiled from "AttributeValue.java"
+public class studio.magemonkey.fabled.manager.AttributeValue {
+  public studio.magemonkey.fabled.manager.AttributeValue(java.lang.String);
+  public boolean passes(studio.magemonkey.fabled.dynamic.EffectComponent);
+  public double apply(double, int);
+}

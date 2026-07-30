@@ -1,0 +1,18 @@
+Compiled from "PlayerAccounts.java"
+public class studio.magemonkey.fabled.api.player.PlayerAccounts {
+  public studio.magemonkey.fabled.api.player.PlayerAccounts(org.bukkit.OfflinePlayer);
+  public int getActiveId();
+  public studio.magemonkey.fabled.api.player.PlayerData getActiveData();
+  public org.bukkit.entity.Player getPlayer();
+  public org.bukkit.OfflinePlayer getOfflinePlayer();
+  public java.lang.String getPlayerName();
+  public int getAccountLimit();
+  public boolean hasData(int);
+  public studio.magemonkey.fabled.api.player.PlayerData getData(int);
+  public studio.magemonkey.fabled.api.player.PlayerData getData(int, org.bukkit.OfflinePlayer, boolean);
+  public java.util.Map<java.lang.Integer, studio.magemonkey.fabled.api.player.PlayerData> getAllData();
+  public void setAccount(int);
+  public void setAccount(int, boolean);
+  public boolean isLoaded();
+  public studio.magemonkey.fabled.api.player.PlayerAccounts isLoaded(boolean);
+}

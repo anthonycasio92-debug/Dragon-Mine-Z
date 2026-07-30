@@ -1,0 +1,16 @@
+Compiled from "ExpSource.java"
+public final class studio.magemonkey.fabled.api.enums.ExpSource extends java.lang.Enum<studio.magemonkey.fabled.api.enums.ExpSource> {
+  public static final studio.magemonkey.fabled.api.enums.ExpSource MOB;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource BLOCK_BREAK;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource BLOCK_PLACE;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource CRAFT;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource COMMAND;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource SPECIAL;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource EXP_BOTTLE;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource SMELT;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource QUEST;
+  public static final studio.magemonkey.fabled.api.enums.ExpSource PLUGIN;
+  public static studio.magemonkey.fabled.api.enums.ExpSource[] values();
+  public static studio.magemonkey.fabled.api.enums.ExpSource valueOf(java.lang.String);
+  public int getId();
+}

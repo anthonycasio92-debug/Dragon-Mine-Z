@@ -1,0 +1,10 @@
+Compiled from "PlayerAttributeModifier.java"
+public class studio.magemonkey.fabled.api.player.PlayerAttributeModifier {
+  public studio.magemonkey.fabled.api.player.PlayerAttributeModifier(java.lang.String, double, studio.magemonkey.fabled.api.enums.Operation, boolean);
+  public double applyOn(double);
+  public java.util.UUID getUUID();
+  public java.lang.String getName();
+  public double getAmount();
+  public studio.magemonkey.fabled.api.enums.Operation getOperation();
+  public boolean isPersistent();
+}

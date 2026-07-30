@@ -1,0 +1,10 @@
+Compiled from "PointSource.java"
+public final class studio.magemonkey.fabled.api.enums.PointSource extends java.lang.Enum<studio.magemonkey.fabled.api.enums.PointSource> {
+  public static final studio.magemonkey.fabled.api.enums.PointSource LEVEL;
+  public static final studio.magemonkey.fabled.api.enums.PointSource REFUND;
+  public static final studio.magemonkey.fabled.api.enums.PointSource COMMAND;
+  public static final studio.magemonkey.fabled.api.enums.PointSource SPECIAL;
+  public static final studio.magemonkey.fabled.api.enums.PointSource INITIALIZATION;
+  public static studio.magemonkey.fabled.api.enums.PointSource[] values();
+  public static studio.magemonkey.fabled.api.enums.PointSource valueOf(java.lang.String);
+}

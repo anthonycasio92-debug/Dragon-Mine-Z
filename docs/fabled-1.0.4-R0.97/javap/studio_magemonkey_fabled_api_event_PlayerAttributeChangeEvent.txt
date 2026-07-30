@@ -1,0 +1,12 @@
+Compiled from "PlayerAttributeChangeEvent.java"
+public class studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent extends org.bukkit.event.player.PlayerEvent implements org.bukkit.event.Cancellable {
+  public studio.magemonkey.fabled.api.event.PlayerAttributeChangeEvent(studio.magemonkey.fabled.api.player.PlayerData, java.lang.String, int);
+  public static org.bukkit.event.HandlerList getHandlerList();
+  public org.bukkit.event.HandlerList getHandlers();
+  public studio.magemonkey.fabled.api.player.PlayerData getPlayerData();
+  public java.lang.String getAttribute();
+  public int getChange();
+  public boolean isCancelled();
+  public void setChange(int);
+  public void setCancelled(boolean);
+}

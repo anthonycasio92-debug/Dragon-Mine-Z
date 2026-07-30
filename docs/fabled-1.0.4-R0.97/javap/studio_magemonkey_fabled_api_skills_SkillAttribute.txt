@@ -1,0 +1,11 @@
+Compiled from "SkillAttribute.java"
+public final class studio.magemonkey.fabled.api.skills.SkillAttribute {
+  public static final java.lang.String COOLDOWN;
+  public static final java.lang.String MANA;
+  public static final java.lang.String MANA_COST;
+  public static final java.lang.String LEVEL;
+  public static final java.lang.String COST;
+  public static final java.lang.String RANGE;
+  public static final java.lang.String POINTS_SPENT_REQ;
+  public studio.magemonkey.fabled.api.skills.SkillAttribute();
+}

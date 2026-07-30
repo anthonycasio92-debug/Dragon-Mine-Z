@@ -1,0 +1,6 @@
+Compiled from "ClassAttribute.java"
+public final class studio.magemonkey.fabled.api.classes.ClassAttribute {
+  public static final java.lang.String HEALTH;
+  public static final java.lang.String MANA;
+  public studio.magemonkey.fabled.api.classes.ClassAttribute();
+}

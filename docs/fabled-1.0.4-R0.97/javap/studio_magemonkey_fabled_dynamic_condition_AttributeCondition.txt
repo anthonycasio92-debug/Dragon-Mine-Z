@@ -1,0 +1,5 @@
+Compiled from "AttributeCondition.java"
+public class studio.magemonkey.fabled.dynamic.condition.AttributeCondition extends studio.magemonkey.fabled.dynamic.condition.ConditionComponent {
+  public studio.magemonkey.fabled.dynamic.condition.AttributeCondition();
+  public java.lang.String getKey();
+}

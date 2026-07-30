@@ -1,0 +1,5 @@
+Compiled from "FabledAttributeProvider.java"
+public class studio.magemonkey.fabled.api.FabledAttributeProvider implements studio.magemonkey.codex.registry.provider.AttributeProvider {
+  public studio.magemonkey.fabled.api.FabledAttributeProvider();
+  public double scaleAttribute(java.lang.String, org.bukkit.entity.LivingEntity, double);
+}

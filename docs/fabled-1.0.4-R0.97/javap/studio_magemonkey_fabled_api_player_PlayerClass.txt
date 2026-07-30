@@ -1,0 +1,29 @@
+Compiled from "PlayerClass.java"
+public class studio.magemonkey.fabled.api.player.PlayerClass {
+  public studio.magemonkey.fabled.api.player.PlayerClass(studio.magemonkey.fabled.api.player.PlayerData, studio.magemonkey.fabled.api.classes.FabledClass);
+  public studio.magemonkey.fabled.api.player.PlayerData getPlayerData();
+  public studio.magemonkey.fabled.api.classes.FabledClass getData();
+  public double getExp();
+  public void setExp(double);
+  public int getRequiredExp();
+  public double getTotalExp();
+  public int getLevel();
+  public void setLevel(int);
+  public int getPoints();
+  public void setPoints(int);
+  public void setEarnedPoints(int);
+  public int getEarnedPoints();
+  public boolean isLevelMaxed();
+  public double getHealth();
+  public double getMana();
+  public void givePoints(int);
+  public void givePoints(int, studio.magemonkey.fabled.api.enums.PointSource);
+  public void usePoints(int);
+  public void giveExp(double, studio.magemonkey.fabled.api.enums.ExpSource);
+  public void giveExp(double, studio.magemonkey.fabled.api.enums.ExpSource, boolean);
+  public void loseExp(double, boolean, boolean, boolean);
+  public void loseExp(double);
+  public void giveLevels(int);
+  public void loseLevels(int);
+  public void setClassData(studio.magemonkey.fabled.api.classes.FabledClass);
+}

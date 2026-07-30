@@ -1,0 +1,6 @@
+Compiled from "AttributeHandler.java"
+public class studio.magemonkey.fabled.gui.handlers.AttributeHandler extends studio.magemonkey.fabled.gui.tool.GUIHolder<studio.magemonkey.fabled.manager.FabledAttribute> {
+  public studio.magemonkey.fabled.gui.handlers.AttributeHandler();
+  public void onClick(studio.magemonkey.fabled.manager.FabledAttribute, int, boolean, boolean);
+  public void onClick(studio.magemonkey.fabled.gui.tool.IconHolder, int, boolean, boolean);
+}

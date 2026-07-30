@@ -1,0 +1,5 @@
+Compiled from "CmdAttribute.java"
+public class studio.magemonkey.fabled.cmd.CmdAttribute implements studio.magemonkey.codex.mccore.commands.IFunction {
+  public studio.magemonkey.fabled.cmd.CmdAttribute();
+  public void execute(studio.magemonkey.codex.mccore.commands.ConfigurableCommand, org.bukkit.plugin.Plugin, org.bukkit.command.CommandSender, java.lang.String[], boolean);
+}
