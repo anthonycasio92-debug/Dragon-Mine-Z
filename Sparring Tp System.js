@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.2.0
+ Version: 3.2.1
 
  Combat-Based Training (Sparring v3)
 
@@ -38,6 +38,8 @@
     a landed ki hit is fully mitigated (HP drop ~0).
   - v3.2.0: Mentor Bond (/spar mentor|apprentice); global spar TP +50%;
     Friendly Fist knockdown during a spar fully heals the partner.
+  - v3.2.1: charging / preparing a ki attack holds the spar activity
+    timer (hit + movement gates), so sessions no longer end mid-charge.
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -168,10 +170,10 @@ var MELEE_EFF = 1.00;
 
 /* Session / activity */
 var MAX_SPAR_DISTANCE = 30.0;
-var HIT_ACTIVITY_WINDOW_MS = 6000;
+var HIT_ACTIVITY_WINDOW_MS = 10000;    // was 6s — too short for charged ki
 var SESSION_START_WINDOW_MS = 15000;
 var PAIR_RESTART_COOLDOWN_MS = 3000;
-var SESSION_GRACE_PERIOD_MS = 3000;
+var SESSION_GRACE_PERIOD_MS = 4000;
 var DISTANCE_GRACE_PERIOD_MS = 4000;
 var SHOW_GRACE_WARNING = true;
 var MOVEMENT_ACTIVITY_WINDOW_MS = 10000;
@@ -815,8 +817,29 @@ function isPlayerChargingKi(player) {
         try {
             if (status.isActionCharging() === true) return true;
         } catch (e2) {}
+        try {
+            var techniques = data.getTechniques();
+            if (techniques != null && techniques.isTechniqueCharging() === true) return true;
+        } catch (e3) {}
     } catch (e) {}
     return false;
+}
+
+/*
+ * True while either fighter is charging / winding up a ki technique.
+ * Standing still mid-charge must not trip AFK or hit-activity gates.
+ */
+function isEitherPreparingKi(player, partner) {
+    return isPlayerChargingKi(player) || isPlayerChargingKi(partner);
+}
+
+function holdSparForKiCharge(player, partner) {
+    if (player == null || partner == null) return false;
+    if (!isEitherPreparingKi(player, partner)) return false;
+    refreshClashCombatActivity(player, partner);
+    try { refreshMovementActivity(player); } catch (e1) {}
+    try { refreshMovementActivity(partner); } catch (e2) {}
+    return true;
 }
 
 function awardTrainingPoints(player, playerData, amount) {
@@ -2917,13 +2940,16 @@ function processSession(player) {
     /*
      * Clash first: beam locks often stop damage ticks, which used to trip
      * the hit-activity timer and end the spar before the clash finished.
+     * Ki charge holds the same way — fighters stand still while winding up.
      */
     var inClash = processBeamClash(player, partner);
+    var inKiCharge = false;
+    try { inKiCharge = holdSparForKiCharge(player, partner); } catch (eKiHold) {}
 
     var failureReason = "";
     if (distanceBetween(player, partner) > MAX_SPAR_DISTANCE) {
         failureReason = "fighters moved too far apart";
-    } else if (!inClash) {
+    } else if (!inClash && !inKiCharge) {
         if (
             !hasRecentOutgoingHit(player, partnerName) ||
             !hasRecentOutgoingHit(partner, getPlayerName(player))
@@ -3756,7 +3782,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.2.0] Mentor Bond + TP+50% + FF heal | BeamClashManager=" +
+            print("[Sparring v3.2.1] Ki-charge hold + Mentor Bond | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
