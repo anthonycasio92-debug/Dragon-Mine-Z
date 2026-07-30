@@ -1,7 +1,7 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases (v3.2.1) — OPTIONAL
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3.2.2) — OPTIONAL
 # ============================================================
-# Sparring Tp System.js v3.2.1+ already handles:
+# Sparring Tp System.js v3.2.2+ already handles:
 #   /spar ...   (Bukkit slash hook, no CMI needed)
 #
 # Paste these ONLY if you still want CMI aliases / tab-complete.
@@ -10,30 +10,6 @@
 #
 # Then: /cmi reload
 # ============================================================
-
-# spar:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# sparstats:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] stats $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# spartop:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] top $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# sparhelp:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] help
-#   AddTabs: true
-#   ExactMatch: true
 
 CustomAlias:
   spar:
@@ -95,3 +71,24 @@ CustomAlias:
     - asFakeOp! noppes script trigger 70 [playerName] help
     AddTabs: true
     ExactMatch: true
+
+  # ---- Mentor Bond ----
+  # /spar mentor ... already works via the spar alias above.
+  # These shortcuts are for tab-complete / convenience.
+  sparmentor:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparapprentice:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] apprentice $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparbond:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor $1-
+    AddTabs: true
+    ExactMatch: false

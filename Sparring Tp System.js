@@ -3670,6 +3670,21 @@ function parseSparCommandLine(line) {
     if (lower == "sparpayout") return ["top", "payout"];
     if (lower == "sparperfect") return ["top", "perfect"];
     if (lower == "spartime") return ["top", "time"];
+    if (lower == "sparmentor" || lower.indexOf("sparmentor ") == 0) {
+        var mRest = text.length > 10 ? text.substring(10).replace(/^\s+/, "") : "";
+        if (mRest == "") return ["mentor"];
+        return ["mentor"].concat(mRest.split(/\s+/));
+    }
+    if (lower == "sparbond" || lower.indexOf("sparbond ") == 0) {
+        var bRest = text.length > 8 ? text.substring(8).replace(/^\s+/, "") : "";
+        if (bRest == "") return ["mentor"];
+        return ["mentor"].concat(bRest.split(/\s+/));
+    }
+    if (lower == "sparapprentice" || lower.indexOf("sparapprentice ") == 0) {
+        var aRest = text.length > 14 ? text.substring(14).replace(/^\s+/, "") : "";
+        if (aRest == "") return ["apprentice"];
+        return ["apprentice"].concat(aRest.split(/\s+/));
+    }
 
     return null;
 }
@@ -3744,7 +3759,13 @@ function isSparSlashMessage(msg) {
         lower == "/sparlongest" ||
         lower == "/sparpayout" ||
         lower == "/sparperfect" ||
-        lower == "/spartime"
+        lower == "/spartime" ||
+        lower == "/sparmentor" ||
+        lower.indexOf("/sparmentor ") == 0 ||
+        lower == "/sparapprentice" ||
+        lower.indexOf("/sparapprentice ") == 0 ||
+        lower == "/sparbond" ||
+        lower.indexOf("/sparbond ") == 0
     );
 }
 
