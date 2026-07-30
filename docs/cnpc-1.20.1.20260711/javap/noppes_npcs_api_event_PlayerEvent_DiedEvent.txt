@@ -1,0 +1,7 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$DiedEvent extends noppes.npcs.api.event.PlayerEvent {
+  public final noppes.npcs.api.IDamageSource damageSource;
+  public final java.lang.String type;
+  public final noppes.npcs.api.entity.IEntity source;
+  public noppes.npcs.api.event.PlayerEvent$DiedEvent(noppes.npcs.api.entity.IPlayer, net.minecraft.world.damagesource.DamageSource, net.minecraft.world.entity.Entity);
+}

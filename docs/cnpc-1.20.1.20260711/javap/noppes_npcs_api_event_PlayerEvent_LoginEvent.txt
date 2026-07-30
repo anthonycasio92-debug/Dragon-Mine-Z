@@ -1,0 +1,4 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$LoginEvent extends noppes.npcs.api.event.PlayerEvent {
+  public noppes.npcs.api.event.PlayerEvent$LoginEvent(noppes.npcs.api.entity.IPlayer);
+}

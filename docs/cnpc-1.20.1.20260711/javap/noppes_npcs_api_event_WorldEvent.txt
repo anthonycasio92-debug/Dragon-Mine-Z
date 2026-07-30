@@ -1,0 +1,5 @@
+Compiled from "WorldEvent.java"
+public class noppes.npcs.api.event.WorldEvent extends noppes.npcs.api.event.CustomNPCsEvent {
+  public final noppes.npcs.api.IWorld world;
+  public noppes.npcs.api.event.WorldEvent(noppes.npcs.api.IWorld);
+}

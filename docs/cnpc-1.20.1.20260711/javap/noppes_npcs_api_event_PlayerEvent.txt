@@ -1,0 +1,5 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent extends noppes.npcs.api.event.CustomNPCsEvent {
+  public final noppes.npcs.api.entity.IPlayer player;
+  public noppes.npcs.api.event.PlayerEvent(noppes.npcs.api.entity.IPlayer);
+}

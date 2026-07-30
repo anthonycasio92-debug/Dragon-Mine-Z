@@ -1,0 +1,22 @@
+Compiled from "ScriptPlayerEventHandler.java"
+public class noppes.npcs.ScriptPlayerEventHandler {
+  public noppes.npcs.ScriptPlayerEventHandler();
+  public void onServerTick(net.minecraftforge.event.TickEvent$PlayerTickEvent);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerInteractEvent$LeftClickBlock);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerInteractEvent$RightClickBlock);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerInteractEvent$EntityInteract);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerInteractEvent$RightClickItem);
+  public void invoke(net.minecraftforge.event.entity.player.ArrowLooseEvent);
+  public void invoke(net.minecraftforge.event.level.BlockEvent$BreakEvent);
+  public void invoke(net.minecraftforge.event.entity.item.ItemTossEvent);
+  public void invoke(net.minecraftforge.event.entity.player.EntityItemPickupEvent);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerContainerEvent$Open);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerContainerEvent$Close);
+  public void invoke(net.minecraftforge.event.entity.living.LivingDeathEvent);
+  public void invoke(net.minecraftforge.event.entity.living.LivingHurtEvent);
+  public void invoke(net.minecraftforge.event.entity.living.LivingAttackEvent);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerEvent$PlayerLoggedInEvent);
+  public void invoke(net.minecraftforge.event.entity.player.PlayerEvent$PlayerLoggedOutEvent);
+  public void invoke(net.minecraftforge.event.ServerChatEvent);
+  public noppes.npcs.ScriptPlayerEventHandler registerForgeEvents();
+}

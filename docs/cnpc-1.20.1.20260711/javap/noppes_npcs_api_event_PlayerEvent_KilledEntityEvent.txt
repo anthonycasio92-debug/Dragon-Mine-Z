@@ -1,0 +1,5 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$KilledEntityEvent extends noppes.npcs.api.event.PlayerEvent {
+  public final noppes.npcs.api.entity.IEntityLiving entity;
+  public noppes.npcs.api.event.PlayerEvent$KilledEntityEvent(noppes.npcs.api.entity.IPlayer, net.minecraft.world.entity.LivingEntity);
+}

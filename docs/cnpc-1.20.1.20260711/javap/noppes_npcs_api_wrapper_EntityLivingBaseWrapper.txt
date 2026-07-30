@@ -1,0 +1,45 @@
+Compiled from "EntityLivingBaseWrapper.java"
+public class noppes.npcs.api.wrapper.EntityLivingBaseWrapper<T extends net.minecraft.world.entity.LivingEntity> extends noppes.npcs.api.wrapper.EntityWrapper<T> implements noppes.npcs.api.entity.IEntityLiving {
+  public noppes.npcs.api.wrapper.EntityLivingBaseWrapper(T);
+  public float getHealth();
+  public void setHealth(float);
+  public float getMaxHealth();
+  public void setMaxHealth(float);
+  public boolean isAttacking();
+  public void setAttackTarget(noppes.npcs.api.entity.IEntityLiving);
+  public noppes.npcs.api.entity.IEntityLiving getAttackTarget();
+  public noppes.npcs.api.entity.IEntityLiving getLastAttacked();
+  public int getLastAttackedTime();
+  public boolean canSeeEntity(noppes.npcs.api.entity.IEntity);
+  public void swingMainhand();
+  public void swingOffhand();
+  public void addPotionEffect(java.lang.String, int, int, boolean);
+  public void addPotionEffect(int, int, int, boolean);
+  public void addPotionEffect(net.minecraft.world.effect.MobEffect, int, int, boolean);
+  public void clearPotionEffects();
+  public int getPotionEffect(int);
+  public noppes.npcs.api.item.IItemStack getMainhandItem();
+  public void setMainhandItem(noppes.npcs.api.item.IItemStack);
+  public noppes.npcs.api.item.IItemStack getOffhandItem();
+  public void setOffhandItem(noppes.npcs.api.item.IItemStack);
+  public noppes.npcs.api.item.IItemStack getArmor(int);
+  public void setArmor(int, noppes.npcs.api.item.IItemStack);
+  public float getRotation();
+  public void setRotation(float);
+  public int getType();
+  public boolean typeOf(int);
+  public boolean isChild();
+  public noppes.npcs.api.entity.data.IMark addMark(int);
+  public void removeMark(noppes.npcs.api.entity.data.IMark);
+  public noppes.npcs.api.entity.data.IMark[] getMarks();
+  public float getMoveForward();
+  public void setMoveForward(float);
+  public float getMoveStrafing();
+  public void setMoveStrafing(float);
+  public float getMoveVertical();
+  public void setMoveVertical(float);
+  public boolean isJumping();
+  public boolean isMoving();
+  public float getSpeed();
+  public net.minecraft.world.entity.LivingEntity getMCEntity();
+}

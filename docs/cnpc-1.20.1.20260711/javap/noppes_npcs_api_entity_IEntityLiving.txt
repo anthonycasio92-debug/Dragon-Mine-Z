@@ -1,0 +1,40 @@
+Compiled from "IEntityLiving.java"
+public interface noppes.npcs.api.entity.IEntityLiving<T extends net.minecraft.world.entity.LivingEntity> extends noppes.npcs.api.entity.IEntity<T> {
+  public abstract float getHealth();
+  public abstract void setHealth(float);
+  public abstract float getMaxHealth();
+  public abstract void setMaxHealth(float);
+  public abstract boolean isAttacking();
+  public abstract void setAttackTarget(noppes.npcs.api.entity.IEntityLiving);
+  public abstract noppes.npcs.api.entity.IEntityLiving getAttackTarget();
+  public abstract noppes.npcs.api.entity.IEntityLiving getLastAttacked();
+  public abstract int getLastAttackedTime();
+  public abstract boolean canSeeEntity(noppes.npcs.api.entity.IEntity);
+  public abstract void swingMainhand();
+  public abstract void swingOffhand();
+  public abstract noppes.npcs.api.item.IItemStack getMainhandItem();
+  public abstract void setMainhandItem(noppes.npcs.api.item.IItemStack);
+  public abstract noppes.npcs.api.item.IItemStack getOffhandItem();
+  public abstract void setOffhandItem(noppes.npcs.api.item.IItemStack);
+  public abstract noppes.npcs.api.item.IItemStack getArmor(int);
+  public abstract void setArmor(int, noppes.npcs.api.item.IItemStack);
+  public abstract void addPotionEffect(int, int, int, boolean);
+  public abstract void addPotionEffect(java.lang.String, int, int, boolean);
+  public abstract void clearPotionEffects();
+  public abstract int getPotionEffect(int);
+  public abstract noppes.npcs.api.entity.data.IMark addMark(int);
+  public abstract void removeMark(noppes.npcs.api.entity.data.IMark);
+  public abstract noppes.npcs.api.entity.data.IMark[] getMarks();
+  public abstract boolean isChild();
+  public abstract T getMCEntity();
+  public abstract float getMoveForward();
+  public abstract void setMoveForward(float);
+  public abstract float getMoveStrafing();
+  public abstract void setMoveStrafing(float);
+  public abstract float getMoveVertical();
+  public abstract void setMoveVertical(float);
+  public abstract boolean isJumping();
+  public abstract boolean isMoving();
+  public abstract float getSpeed();
+  public default net.minecraft.world.entity.Entity getMCEntity();
+}

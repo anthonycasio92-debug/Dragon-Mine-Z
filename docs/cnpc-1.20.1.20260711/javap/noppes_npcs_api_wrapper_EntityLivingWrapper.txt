@@ -1,0 +1,14 @@
+Compiled from "EntityLivingWrapper.java"
+public class noppes.npcs.api.wrapper.EntityLivingWrapper<T extends net.minecraft.world.entity.Mob> extends noppes.npcs.api.wrapper.EntityLivingBaseWrapper<T> implements noppes.npcs.api.entity.IMob {
+  public noppes.npcs.api.wrapper.EntityLivingWrapper(T);
+  public void navigateTo(double, double, double, double);
+  public void clearNavigation();
+  public noppes.npcs.api.IPos getNavigationPath();
+  public boolean isNavigating();
+  public boolean isAttacking();
+  public void setAttackTarget(noppes.npcs.api.entity.IEntityLiving);
+  public noppes.npcs.api.entity.IEntityLiving getAttackTarget();
+  public boolean canSeeEntity(noppes.npcs.api.entity.IEntity);
+  public void jump();
+  public net.minecraft.world.entity.Mob getMCEntity();
+}

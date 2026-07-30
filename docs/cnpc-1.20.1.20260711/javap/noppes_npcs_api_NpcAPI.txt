@@ -1,0 +1,36 @@
+Compiled from "NpcAPI.java"
+public abstract class noppes.npcs.api.NpcAPI {
+  public noppes.npcs.api.NpcAPI();
+  public abstract noppes.npcs.api.entity.ICustomNpc createNPC(net.minecraft.world.level.Level);
+  public abstract noppes.npcs.api.entity.ICustomNpc spawnNPC(net.minecraft.world.level.Level, int, int, int);
+  public abstract noppes.npcs.api.entity.IEntity getIEntity(net.minecraft.world.entity.Entity);
+  public abstract noppes.npcs.api.block.IBlock getIBlock(net.minecraft.world.level.Level, net.minecraft.core.BlockPos);
+  public abstract noppes.npcs.api.IContainer getIContainer(net.minecraft.world.Container);
+  public abstract noppes.npcs.api.IContainer getIContainer(net.minecraft.world.inventory.AbstractContainerMenu);
+  public abstract noppes.npcs.api.item.IItemStack getIItemStack(net.minecraft.world.item.ItemStack);
+  public abstract noppes.npcs.api.IWorld getIWorld(net.minecraft.server.level.ServerLevel);
+  public abstract noppes.npcs.api.IWorld getIWorld(java.lang.String);
+  public abstract noppes.npcs.api.IWorld getIWorld(net.minecraft.world.level.dimension.DimensionType);
+  public abstract noppes.npcs.api.IWorld[] getIWorlds();
+  public abstract noppes.npcs.api.INbt getINbt(net.minecraft.nbt.CompoundTag);
+  public abstract noppes.npcs.api.IPos getIPos(double, double, double);
+  public abstract noppes.npcs.api.handler.IFactionHandler getFactions();
+  public abstract noppes.npcs.api.handler.IRecipeHandler getRecipes();
+  public abstract noppes.npcs.api.handler.IQuestHandler getQuests();
+  public abstract noppes.npcs.api.handler.IDialogHandler getDialogs();
+  public abstract noppes.npcs.api.handler.ICloneHandler getClones();
+  public abstract noppes.npcs.api.IDamageSource getIDamageSource(net.minecraft.world.damagesource.DamageSource);
+  public abstract noppes.npcs.api.INbt stringToNbt(java.lang.String);
+  public abstract noppes.npcs.api.entity.data.IPlayerMail createMail(java.lang.String, java.lang.String);
+  public abstract noppes.npcs.api.gui.ICustomGui createCustomGui(int, int, int, boolean, noppes.npcs.api.entity.IPlayer);
+  public abstract noppes.npcs.api.overlay.IOverlay createOverlay(int);
+  public abstract noppes.npcs.api.INbt getRawPlayerData(java.lang.String);
+  public abstract net.minecraftforge.eventbus.api.IEventBus events();
+  public abstract java.io.File getGlobalDir();
+  public abstract java.io.File getLevelDir();
+  public static boolean IsAvailable();
+  public static noppes.npcs.api.NpcAPI Instance();
+  public abstract boolean hasPermissionNode(java.lang.String);
+  public abstract java.lang.String executeCommand(noppes.npcs.api.IWorld, java.lang.String);
+  public abstract java.lang.String getRandomName(int, int);
+}

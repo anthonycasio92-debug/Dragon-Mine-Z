@@ -1,0 +1,5 @@
+Compiled from "ForgeEvent.java"
+public class noppes.npcs.api.event.ForgeEvent$EntityEvent extends noppes.npcs.api.event.ForgeEvent {
+  public final noppes.npcs.api.entity.IEntity entity;
+  public noppes.npcs.api.event.ForgeEvent$EntityEvent(net.minecraftforge.event.entity.EntityEvent, noppes.npcs.api.entity.IEntity);
+}

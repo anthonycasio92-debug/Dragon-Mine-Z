@@ -1,0 +1,48 @@
+Compiled from "IWorld.java"
+public interface noppes.npcs.api.IWorld {
+  public abstract noppes.npcs.api.entity.IEntity[] getNearbyEntities(int, int, int, int, int);
+  public abstract noppes.npcs.api.entity.IEntity[] getNearbyEntities(noppes.npcs.api.IPos, int, int);
+  public abstract noppes.npcs.api.entity.IEntity getClosestEntity(int, int, int, int, int);
+  public abstract noppes.npcs.api.entity.IEntity getClosestEntity(noppes.npcs.api.IPos, int, int);
+  public abstract noppes.npcs.api.entity.IEntity[] getAllEntities(int);
+  public abstract long getTime();
+  public abstract void setTime(long);
+  public abstract long getTotalTime();
+  public abstract noppes.npcs.api.block.IBlock getBlock(int, int, int);
+  public abstract noppes.npcs.api.block.IBlock getBlock(noppes.npcs.api.IPos);
+  public abstract void setBlock(int, int, int, java.lang.String, int);
+  public abstract noppes.npcs.api.block.IBlock setBlock(noppes.npcs.api.IPos, java.lang.String);
+  public abstract void removeBlock(int, int, int);
+  public abstract void removeBlock(noppes.npcs.api.IPos);
+  public abstract float getLightValue(int, int, int);
+  public abstract noppes.npcs.api.entity.IPlayer getPlayer(java.lang.String);
+  public abstract boolean isDay();
+  public abstract boolean isRaining();
+  public abstract noppes.npcs.api.IDimension getDimension();
+  public abstract void setRaining(boolean);
+  public abstract void thunderStrike(double, double, double);
+  public abstract void playSoundAt(noppes.npcs.api.IPos, java.lang.String, float, float);
+  public abstract void spawnParticle(java.lang.String, double, double, double, double, double, double, double, int);
+  public abstract void broadcast(java.lang.String);
+  public abstract noppes.npcs.api.IScoreboard getScoreboard();
+  public abstract noppes.npcs.api.entity.data.IData getTempdata();
+  public abstract noppes.npcs.api.entity.data.IData getStoreddata();
+  public abstract noppes.npcs.api.item.IItemStack createItem(java.lang.String, int);
+  public abstract noppes.npcs.api.item.IItemStack createItemFromNbt(noppes.npcs.api.INbt);
+  public abstract void explode(double, double, double, float, boolean, boolean);
+  public abstract noppes.npcs.api.entity.IPlayer[] getAllPlayers();
+  public abstract java.lang.String getBiomeName(int, int);
+  public abstract void spawnEntity(noppes.npcs.api.entity.IEntity);
+  public abstract noppes.npcs.api.entity.IEntity spawnClone(double, double, double, int, java.lang.String);
+  public abstract noppes.npcs.api.entity.IEntity getClone(int, java.lang.String);
+  public abstract int getRedstonePower(int, int, int);
+  public abstract net.minecraft.server.level.ServerLevel getMCLevel();
+  public abstract net.minecraft.core.BlockPos getMCBlockPos(int, int, int);
+  public abstract noppes.npcs.api.entity.IEntity getEntity(java.lang.String);
+  public abstract noppes.npcs.api.entity.IEntity createEntityFromNBT(noppes.npcs.api.INbt);
+  public abstract noppes.npcs.api.entity.IEntity createEntity(java.lang.String);
+  public abstract noppes.npcs.api.block.IBlock getSpawnPoint();
+  public abstract void setSpawnPoint(noppes.npcs.api.block.IBlock);
+  public abstract java.lang.String getName();
+  public abstract void trigger(int, java.lang.Object...);
+}

@@ -1,0 +1,5 @@
+Compiled from "CustomNPCsEvent.java"
+public class noppes.npcs.api.event.CustomNPCsEvent extends net.minecraftforge.eventbus.api.Event {
+  public final noppes.npcs.api.NpcAPI API;
+  public noppes.npcs.api.event.CustomNPCsEvent();
+}

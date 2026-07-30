@@ -1,0 +1,10 @@
+Compiled from "DamageSourceWrapper.java"
+public class noppes.npcs.api.wrapper.DamageSourceWrapper implements noppes.npcs.api.IDamageSource {
+  public noppes.npcs.api.wrapper.DamageSourceWrapper(net.minecraft.world.damagesource.DamageSource);
+  public java.lang.String getType();
+  public boolean isUnblockable();
+  public boolean isProjectile();
+  public net.minecraft.world.damagesource.DamageSource getMCDamageSource();
+  public noppes.npcs.api.entity.IEntity getTrueSource();
+  public noppes.npcs.api.entity.IEntity getImmediateSource();
+}

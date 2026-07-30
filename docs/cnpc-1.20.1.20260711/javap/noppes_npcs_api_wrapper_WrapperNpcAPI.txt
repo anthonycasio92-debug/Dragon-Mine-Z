@@ -1,0 +1,38 @@
+Compiled from "WrapperNpcAPI.java"
+public class noppes.npcs.api.wrapper.WrapperNpcAPI extends noppes.npcs.api.NpcAPI {
+  public static final net.minecraftforge.eventbus.api.IEventBus EVENT_BUS;
+  public noppes.npcs.api.wrapper.WrapperNpcAPI();
+  public static void clearCache();
+  public noppes.npcs.api.entity.IEntity getIEntity(net.minecraft.world.entity.Entity);
+  public noppes.npcs.api.entity.ICustomNpc createNPC(net.minecraft.world.level.Level);
+  public void registerPermissionNode(java.lang.String, int);
+  public boolean hasPermissionNode(java.lang.String);
+  public noppes.npcs.api.entity.ICustomNpc spawnNPC(net.minecraft.world.level.Level, int, int, int);
+  public static noppes.npcs.api.NpcAPI Instance();
+  public net.minecraftforge.eventbus.api.IEventBus events();
+  public noppes.npcs.api.block.IBlock getIBlock(net.minecraft.world.level.Level, net.minecraft.core.BlockPos);
+  public noppes.npcs.api.item.IItemStack getIItemStack(net.minecraft.world.item.ItemStack);
+  public noppes.npcs.api.IWorld getIWorld(net.minecraft.server.level.ServerLevel);
+  public noppes.npcs.api.IWorld getIWorld(net.minecraft.world.level.dimension.DimensionType);
+  public noppes.npcs.api.IWorld getIWorld(java.lang.String);
+  public noppes.npcs.api.IContainer getIContainer(net.minecraft.world.inventory.AbstractContainerMenu);
+  public noppes.npcs.api.IContainer getIContainer(net.minecraft.world.Container);
+  public noppes.npcs.api.handler.IFactionHandler getFactions();
+  public noppes.npcs.api.handler.IRecipeHandler getRecipes();
+  public noppes.npcs.api.handler.IQuestHandler getQuests();
+  public noppes.npcs.api.IWorld[] getIWorlds();
+  public noppes.npcs.api.IPos getIPos(double, double, double);
+  public java.io.File getGlobalDir();
+  public java.io.File getLevelDir();
+  public noppes.npcs.api.INbt getINbt(net.minecraft.nbt.CompoundTag);
+  public noppes.npcs.api.INbt stringToNbt(java.lang.String);
+  public noppes.npcs.api.IDamageSource getIDamageSource(net.minecraft.world.damagesource.DamageSource);
+  public noppes.npcs.api.handler.IDialogHandler getDialogs();
+  public noppes.npcs.api.handler.ICloneHandler getClones();
+  public java.lang.String executeCommand(noppes.npcs.api.IWorld, java.lang.String);
+  public noppes.npcs.api.INbt getRawPlayerData(java.lang.String);
+  public noppes.npcs.api.entity.data.IPlayerMail createMail(java.lang.String, java.lang.String);
+  public noppes.npcs.api.gui.ICustomGui createCustomGui(int, int, int, boolean, noppes.npcs.api.entity.IPlayer);
+  public noppes.npcs.api.overlay.IOverlay createOverlay(int);
+  public java.lang.String getRandomName(int, int);
+}

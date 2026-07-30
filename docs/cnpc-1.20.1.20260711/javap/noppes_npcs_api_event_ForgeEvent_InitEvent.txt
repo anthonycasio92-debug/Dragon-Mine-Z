@@ -1,0 +1,4 @@
+Compiled from "ForgeEvent.java"
+public class noppes.npcs.api.event.ForgeEvent$InitEvent extends noppes.npcs.api.event.ForgeEvent {
+  public noppes.npcs.api.event.ForgeEvent$InitEvent();
+}

@@ -1,0 +1,27 @@
+Compiled from "ScriptController.java"
+public class noppes.npcs.controllers.ScriptController {
+  public static noppes.npcs.controllers.ScriptController Instance;
+  public static boolean HasStart;
+  public java.util.Map<java.lang.String, java.lang.String> languages;
+  public java.util.Map<java.lang.String, javax.script.ScriptEngineFactory> factories;
+  public java.util.Map<java.lang.String, java.lang.String> scripts;
+  public noppes.npcs.controllers.data.PlayerScriptData playerScripts;
+  public noppes.npcs.controllers.data.ForgeScriptData forgeScripts;
+  public long lastLoaded;
+  public long lastPlayerUpdate;
+  public java.io.File dir;
+  public java.io.File localDir;
+  public net.minecraft.nbt.CompoundTag compound;
+  public java.util.Map<java.lang.String, java.util.function.Supplier<noppes.npcs.controllers.IScriptExecutor>> executorProviders;
+  public boolean shouldSave;
+  public noppes.npcs.controllers.ScriptController();
+  public void loadCategories();
+  public boolean loadStoredData();
+  public boolean loadPlayerScripts();
+  public void setPlayerScripts(net.minecraft.nbt.CompoundTag);
+  public boolean loadForgeScripts();
+  public void setForgeScripts(net.minecraft.nbt.CompoundTag);
+  public javax.script.ScriptEngine getEngineByName(java.lang.String);
+  public net.minecraft.nbt.ListTag nbtLanguages();
+  public void saveLevel(net.minecraftforge.event.level.LevelEvent$Save);
+}

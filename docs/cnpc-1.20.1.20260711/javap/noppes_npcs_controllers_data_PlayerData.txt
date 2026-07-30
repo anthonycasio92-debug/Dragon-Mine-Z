@@ -1,0 +1,42 @@
+Compiled from "PlayerData.java"
+public class noppes.npcs.controllers.data.PlayerData implements net.minecraftforge.common.capabilities.ICapabilityProvider {
+  public static net.minecraftforge.common.capabilities.Capability<noppes.npcs.controllers.data.PlayerData> PLAYERDATA_CAPABILITY;
+  public net.minecraft.core.BlockPos scriptBlockPos;
+  public noppes.npcs.controllers.data.PlayerDialogData dialogData;
+  public noppes.npcs.controllers.data.PlayerBankData bankData;
+  public noppes.npcs.controllers.data.PlayerQuestData questData;
+  public noppes.npcs.controllers.data.PlayerTransportData transportData;
+  public noppes.npcs.controllers.data.PlayerFactionData factionData;
+  public noppes.npcs.controllers.data.PlayerItemGiverData itemgiverData;
+  public noppes.npcs.controllers.data.PlayerMailData mailData;
+  public noppes.npcs.controllers.data.PlayerSkinData skinData;
+  public noppes.npcs.controllers.data.PlayerScriptData scriptData;
+  public net.minecraft.nbt.CompoundTag scriptStoreddata;
+  public noppes.npcs.entity.data.DataTimers timers;
+  public noppes.npcs.entity.EntityNPCInterface editingNpc;
+  public net.minecraft.nbt.CompoundTag cloned;
+  public net.minecraft.world.entity.player.Player player;
+  public java.lang.String playername;
+  public java.lang.String uuid;
+  public int companionID;
+  public int playerLevel;
+  public boolean updateClient;
+  public int dialogId;
+  public net.minecraft.world.item.ItemStack prevHeldItem;
+  public net.minecraft.world.entity.Entity mounted;
+  public noppes.npcs.api.wrapper.ScreenSize screenSize;
+  public noppes.npcs.controllers.data.PlayerData();
+  public void setNBT(net.minecraft.nbt.CompoundTag);
+  public net.minecraft.nbt.CompoundTag getSyncNBT();
+  public net.minecraft.nbt.CompoundTag getNBT();
+  public boolean hasCompanion();
+  public void setCompanion(noppes.npcs.entity.EntityNPCInterface);
+  public void updateCompanion(net.minecraft.world.level.Level);
+  public <T> net.minecraftforge.common.util.LazyOptional<T> getCapability(net.minecraftforge.common.capabilities.Capability<T>, net.minecraft.core.Direction);
+  public static void register(net.minecraftforge.event.AttachCapabilitiesEvent<net.minecraft.world.entity.Entity>);
+  public synchronized void save(boolean);
+  public static net.minecraft.nbt.CompoundTag loadPlayerData(java.lang.String);
+  public static noppes.npcs.controllers.data.PlayerData get(net.minecraft.world.entity.player.Player);
+  public noppes.npcs.api.wrapper.ScreenSize getScreenSize();
+  public void setScreenSize(noppes.npcs.api.wrapper.ScreenSize);
+}

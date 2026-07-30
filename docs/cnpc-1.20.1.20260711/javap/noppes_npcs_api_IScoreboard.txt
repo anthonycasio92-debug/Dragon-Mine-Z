@@ -1,0 +1,20 @@
+Compiled from "IScoreboard.java"
+public interface noppes.npcs.api.IScoreboard {
+  public abstract noppes.npcs.api.IScoreboardObjective[] getObjectives();
+  public abstract noppes.npcs.api.IScoreboardObjective getObjective(java.lang.String);
+  public abstract boolean hasObjective(java.lang.String);
+  public abstract void removeObjective(java.lang.String);
+  public abstract noppes.npcs.api.IScoreboardObjective addObjective(java.lang.String, java.lang.String);
+  public abstract void setPlayerScore(java.lang.String, java.lang.String, int);
+  public abstract int getPlayerScore(java.lang.String, java.lang.String);
+  public abstract boolean hasPlayerObjective(java.lang.String, java.lang.String);
+  public abstract void deletePlayerScore(java.lang.String, java.lang.String);
+  public abstract noppes.npcs.api.IScoreboardTeam[] getTeams();
+  public abstract boolean hasTeam(java.lang.String);
+  public abstract noppes.npcs.api.IScoreboardTeam addTeam(java.lang.String);
+  public abstract noppes.npcs.api.IScoreboardTeam getTeam(java.lang.String);
+  public abstract void removeTeam(java.lang.String);
+  public abstract noppes.npcs.api.IScoreboardTeam getPlayerTeam(java.lang.String);
+  public abstract void removePlayerTeam(java.lang.String);
+  public abstract java.lang.String[] getPlayerList();
+}

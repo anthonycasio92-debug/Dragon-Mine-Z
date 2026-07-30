@@ -1,0 +1,8 @@
+Compiled from "WorldEvent.java"
+public class noppes.npcs.api.event.WorldEvent$ScriptTriggerEvent extends noppes.npcs.api.event.WorldEvent {
+  public final java.lang.Object[] arguments;
+  public final noppes.npcs.api.IPos pos;
+  public final noppes.npcs.api.entity.IEntity entity;
+  public final int id;
+  public noppes.npcs.api.event.WorldEvent$ScriptTriggerEvent(int, noppes.npcs.api.IWorld, noppes.npcs.api.IPos, noppes.npcs.api.entity.IEntity, java.lang.Object[]);
+}

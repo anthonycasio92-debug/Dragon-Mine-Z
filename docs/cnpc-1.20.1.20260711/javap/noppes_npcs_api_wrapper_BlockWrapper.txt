@@ -1,0 +1,34 @@
+Compiled from "BlockWrapper.java"
+public class noppes.npcs.api.wrapper.BlockWrapper implements noppes.npcs.api.block.IBlock {
+  public int getX();
+  public int getY();
+  public int getZ();
+  public noppes.npcs.api.IPos getPos();
+  public java.lang.Object getProperty(java.lang.String);
+  public void setProperty(java.lang.String, java.lang.Object);
+  public java.lang.String[] getProperties();
+  public void remove();
+  public boolean isRemoved();
+  public boolean isAir();
+  public noppes.npcs.api.wrapper.BlockWrapper setBlock(java.lang.String);
+  public noppes.npcs.api.wrapper.BlockWrapper setBlock(noppes.npcs.api.block.IBlock);
+  public boolean isContainer();
+  public noppes.npcs.api.IContainer getContainer();
+  public noppes.npcs.api.entity.data.IData getTempdata();
+  public noppes.npcs.api.entity.data.IData getStoreddata();
+  public java.lang.String getName();
+  public java.lang.String getDisplayName();
+  public noppes.npcs.api.IWorld getWorld();
+  public net.minecraft.world.level.block.Block getMCBlock();
+  public static noppes.npcs.api.block.IBlock createNew(net.minecraft.world.level.Level, net.minecraft.core.BlockPos, net.minecraft.world.level.block.state.BlockState);
+  public static void clearCache();
+  public boolean hasTileEntity();
+  public noppes.npcs.api.INbt getBlockEntityNBT();
+  public void setTileEntityNBT(noppes.npcs.api.INbt);
+  public net.minecraft.world.level.block.entity.BlockEntity getMCTileEntity();
+  public net.minecraft.world.level.block.state.BlockState getMCBlockState();
+  public void blockEvent(int, int);
+  public void interact(int);
+  public noppes.npcs.api.block.IBlock setBlock(noppes.npcs.api.block.IBlock);
+  public noppes.npcs.api.block.IBlock setBlock(java.lang.String);
+}

@@ -1,0 +1,7 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$DamagedEntityEvent extends noppes.npcs.api.event.PlayerEvent {
+  public final noppes.npcs.api.IDamageSource damageSource;
+  public final noppes.npcs.api.entity.IEntity target;
+  public float damage;
+  public noppes.npcs.api.event.PlayerEvent$DamagedEntityEvent(noppes.npcs.api.entity.IPlayer, net.minecraft.world.entity.Entity, float, net.minecraft.world.damagesource.DamageSource);
+}

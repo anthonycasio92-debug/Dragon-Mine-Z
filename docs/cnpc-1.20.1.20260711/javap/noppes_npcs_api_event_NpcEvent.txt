@@ -1,0 +1,5 @@
+Compiled from "NpcEvent.java"
+public class noppes.npcs.api.event.NpcEvent extends noppes.npcs.api.event.CustomNPCsEvent {
+  public final noppes.npcs.api.entity.ICustomNpc npc;
+  public noppes.npcs.api.event.NpcEvent(noppes.npcs.api.entity.ICustomNpc);
+}

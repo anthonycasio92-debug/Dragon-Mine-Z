@@ -1,0 +1,10 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$KeyPressedEvent extends noppes.npcs.api.event.PlayerEvent {
+  public final int key;
+  public final boolean isCtrlPressed;
+  public final boolean isAltPressed;
+  public final boolean isShiftPressed;
+  public final boolean isMetaPressed;
+  public final java.lang.String openGui;
+  public noppes.npcs.api.event.PlayerEvent$KeyPressedEvent(noppes.npcs.api.entity.IPlayer, int, boolean, boolean, boolean, boolean, java.lang.String);
+}

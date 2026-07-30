@@ -1,0 +1,4 @@
+noppes.npcs.api.event.WorldEvent$ScriptTriggerEvent
+noppes.npcs.api.NpcAPI
+noppes.npcs.constants.EnumScriptType
+noppes.npcs.controllers.data.PlayerData

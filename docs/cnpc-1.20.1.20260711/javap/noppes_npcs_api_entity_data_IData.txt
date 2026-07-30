@@ -1,0 +1,9 @@
+Compiled from "IData.java"
+public interface noppes.npcs.api.entity.data.IData {
+  public abstract void put(java.lang.String, java.lang.Object);
+  public abstract java.lang.Object get(java.lang.String);
+  public abstract void remove(java.lang.String);
+  public abstract boolean has(java.lang.String);
+  public abstract java.lang.String[] getKeys();
+  public abstract void clear();
+}

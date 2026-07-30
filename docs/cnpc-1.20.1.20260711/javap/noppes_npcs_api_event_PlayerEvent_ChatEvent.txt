@@ -1,0 +1,5 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$ChatEvent extends noppes.npcs.api.event.PlayerEvent {
+  public java.lang.String message;
+  public noppes.npcs.api.event.PlayerEvent$ChatEvent(noppes.npcs.api.entity.IPlayer, java.lang.String);
+}

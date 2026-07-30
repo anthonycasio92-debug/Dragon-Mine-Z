@@ -1,0 +1,4 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$UpdateEvent extends noppes.npcs.api.event.PlayerEvent {
+  public noppes.npcs.api.event.PlayerEvent$UpdateEvent(noppes.npcs.api.entity.IPlayer);
+}

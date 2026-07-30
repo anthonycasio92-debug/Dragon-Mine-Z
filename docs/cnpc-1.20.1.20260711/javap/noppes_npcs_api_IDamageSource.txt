@@ -1,0 +1,9 @@
+Compiled from "IDamageSource.java"
+public interface noppes.npcs.api.IDamageSource {
+  public abstract java.lang.String getType();
+  public abstract boolean isUnblockable();
+  public abstract boolean isProjectile();
+  public abstract noppes.npcs.api.entity.IEntity getTrueSource();
+  public abstract noppes.npcs.api.entity.IEntity getImmediateSource();
+  public abstract net.minecraft.world.damagesource.DamageSource getMCDamageSource();
+}

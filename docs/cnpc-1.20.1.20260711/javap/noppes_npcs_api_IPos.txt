@@ -1,0 +1,27 @@
+Compiled from "IPos.java"
+public interface noppes.npcs.api.IPos {
+  public abstract int getX();
+  public abstract int getY();
+  public abstract int getZ();
+  public abstract noppes.npcs.api.IPos up();
+  public abstract noppes.npcs.api.IPos up(int);
+  public abstract noppes.npcs.api.IPos down();
+  public abstract noppes.npcs.api.IPos down(int);
+  public abstract noppes.npcs.api.IPos north();
+  public abstract noppes.npcs.api.IPos north(int);
+  public abstract noppes.npcs.api.IPos east();
+  public abstract noppes.npcs.api.IPos east(int);
+  public abstract noppes.npcs.api.IPos south();
+  public abstract noppes.npcs.api.IPos south(int);
+  public abstract noppes.npcs.api.IPos west();
+  public abstract noppes.npcs.api.IPos west(int);
+  public abstract noppes.npcs.api.IPos add(int, int, int);
+  public abstract noppes.npcs.api.IPos add(noppes.npcs.api.IPos);
+  public abstract noppes.npcs.api.IPos subtract(int, int, int);
+  public abstract noppes.npcs.api.IPos subtract(noppes.npcs.api.IPos);
+  public abstract double[] normalize();
+  public abstract net.minecraft.core.BlockPos getMCBlockPos();
+  public abstract noppes.npcs.api.IPos offset(int);
+  public abstract noppes.npcs.api.IPos offset(int, int);
+  public abstract double distanceTo(noppes.npcs.api.IPos);
+}

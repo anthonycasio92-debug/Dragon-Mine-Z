@@ -1,0 +1,5 @@
+Compiled from "PlayerEvent.java"
+public class noppes.npcs.api.event.PlayerEvent$TimerEvent extends noppes.npcs.api.event.PlayerEvent {
+  public final int id;
+  public noppes.npcs.api.event.PlayerEvent$TimerEvent(noppes.npcs.api.entity.IPlayer, int);
+}
