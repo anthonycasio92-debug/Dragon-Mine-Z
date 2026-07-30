@@ -51,16 +51,17 @@ var RESET_RETRY_CHECKS = 5;
 // Capitalization is ignored.
 //
 // Each entry must line up with the corresponding entry in
-// REQUIRED_FABLED_SKILLS and RESTRICTED_RACE_DISPLAY_NAMES.
-// Nashorn requires a comma after EVERY entry except the last.
+// REQUIRED_FABLED_SKILLS.
 var RESTRICTED_RACE_IDS = [
-    "ancient_saiyan",
-    "sento_saiyan"
+    "ancient_saiyan"
 ];
 
 
 // Exact Fabled skill key OR displayed skill name required for
 // each restricted race.
+//
+// For the current test, the race "test" requires a Fabled skill
+// whose key or displayed name is also "test".
 //
 // Example for later:
 //
@@ -76,8 +77,7 @@ var RESTRICTED_RACE_IDS = [
 //     "race_unlock_yardrat"
 // ];
 var REQUIRED_FABLED_SKILLS = [
-    "Ancient Saiyan",
-    "Sento Saiyan"
+    "Ancient Saiyan"
 ];
 
 
@@ -85,8 +85,7 @@ var REQUIRED_FABLED_SKILLS = [
 //
 // Each position must match RESTRICTED_RACE_IDS.
 var RESTRICTED_RACE_DISPLAY_NAMES = [
-    "Ancient Saiyan",
-    "Sento Saiyan"
+    "Ancient Saiyan"
 ];
 
 
@@ -346,7 +345,7 @@ function clearStuckSagaDifficulty(player, dmzData, notify) {
 
             if (!synced) {
                 player.message(
-                    "\u00A7c[Race Lock] Client sync failed - relog after unlock."
+                    "\u00A7c[Race Lock] Client sync failed — relog after unlock."
                 );
             }
 
@@ -978,7 +977,7 @@ function tick(event) {
         // not created. Stop checking until the player creates
         // another character.
         //
-        // Also unlock stuck saga difficulty once - dmzstats
+        // Also unlock stuck saga difficulty once — dmzstats
         // reset leaves difficultyChosen true, which blocks the
         // picker until requestDifficultyReselect runs.
 
@@ -1461,7 +1460,7 @@ function tick(event) {
         /*
          * Clear stuck saga difficulty as soon as the reset
          * command is issued. Do not wait for the character-
-         * created flag to flip - that is what blocks the picker.
+         * created flag to flip — that is what blocks the picker.
          */
         clearStuckSagaDifficulty(
             player,

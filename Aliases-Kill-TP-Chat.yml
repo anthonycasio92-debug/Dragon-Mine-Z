@@ -1,0 +1,20 @@
+# ============================================================
+# Optional CMI aliases for kill TP chat toggle
+# ============================================================
+# Requires Rival Command Handler.js (trigger 200).
+#
+# Paste into CustomAlias.yml then: /cmi reload
+# ============================================================
+
+CustomAlias:
+  tpmessages:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
+
+  tpmsg:
+    Cmds:
+    - asFakeOp! noppes script trigger 200 [playerName] tpmsg $1-
+    AddTabs: true
+    ExactMatch: false
