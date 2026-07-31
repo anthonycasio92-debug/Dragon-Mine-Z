@@ -1,7 +1,7 @@
 /*
 ============================================================
  End Dimension Strength
- Version: 2.10.3
+ Version: 2.11.0
 
  DESIGN (why this exists):
  - DMZ StatsData / DMZ HP attaches to PLAYERS ONLY. Mobs/dragon cannot hold
@@ -12,8 +12,7 @@
  - DMZ kill TP = entity.getMaxHealth() * tpHealthRatio (default 0.25) then
    TP boosts. Absurd vanilla HP ? billions of TP. So HP stays modest and
    DEF carries the fight (flat absorb + % reduction like DMZ).
- - End kill TP is SETTLED with dampened BP scaling + per-mob level softcaps
-   (e.g. ~200k enderman at level ~4000).
+ - Dragon kill TP is SETTLED with dampened BP scaling + softcaps.
  - Per-hit damage caps remain as a safety net vs one-shot skills.
  - Dragon max_health is applied ONCE (spawn / real HP change only).
 
@@ -23,11 +22,15 @@
  - Extra dragon attacks: real DragonMineZ ki beams + ki blasts (not vanilla fireballs)
  - Clear "dragon already alive" notice on /enddragon when one exists
  - Dragon ~200-300 matched hits via DEF + hit caps (not multi-million HP)
- - End mobs ~10-22 matched hits
+ - End mob scaling DISABLED (v2.11.0) - vanilla End mobs only
  - /enddragon spawn (trigger 50) + /cleardragons cleanup (trigger 51)
  - Natural dragon respawn every 5 minutes if none exists
  - Dragon Egg item reward (clears podium egg block)
  - End crystals destroyed after each dragon kill
+
+ Changelog (2.11.0):
+ - Removed End mob HP/DEF/damage scaling and End-mob kill TP settle.
+   Only Ender Dragon spawn + scaling remain.
 
  INSTALL (TWO scripts - this is what made trigger 50 work before):
    1) THIS file ? Global Player, OWN tab
@@ -129,11 +132,12 @@ var END_DAMAGE_HIT_CAP_MULT = 1.0; /* 1.0 => ~exact hit-target length */
 var ENDERMAN_ATTACK_DAMAGE = 12;
 
 /*
- * End mob tiers - short fights.
- * hp/hpCap = TP-safe vanilla pools (mirrored from player DMZ HP).
- * defense  = base DEF; real DEF scales from player DMZ defense/melee.
+ * End mob tiers - DISABLED (v2.11.0).
+ * Kept for reference / easy re-enable. Set END_MOB_SCALING_ENABLED = true
+ * to restore HP/DEF buffs + End-mob kill TP settle.
  */
-var END_MOB_DEF_ENABLED = true;
+var END_MOB_SCALING_ENABLED = false;
+var END_MOB_DEF_ENABLED = false;
 var END_MOB_TIERS = {
     endermite: { tier: 1, hp: 1200, damage: 40, defense: 5000,  hits: 10, label: "Endermite", hpCap: 2200 },
     phantom:   { tier: 2, hp: 1800, damage: 70, defense: 9000,  hits: 14, label: "Phantom",   hpCap: 3200 },
@@ -1849,6 +1853,7 @@ function calcMobHp(tier, power) {
 }
 
 function buffMob(entity, world) {
+    if (END_MOB_SCALING_ENABLED !== true) return false;
     var kind = classifyEndEntity(entity);
     if (kind == null || kind === "dragon") return false;
     var tier = END_MOB_TIERS[kind];
@@ -3561,7 +3566,7 @@ function tick(event) {
                         }
                     } catch (eRep) {}
                     maybeRescaleDragon(ent, world, player);
-                } else if (kind != null) {
+                } else if (kind != null && END_MOB_SCALING_ENABLED === true) {
                     repairEndHealthIfStripped(ent, kind);
                     buffMob(ent, world);
                 }
@@ -3580,10 +3585,15 @@ function kill(event) {
         var kind = classifyEndEntity(victim);
         if (kind == null) return;
 
-        /* Settle HP-scaled DMZ kill TP up/down to Sparring-scale End payout. */
-        try {
-            scheduleEndKillTpClawback(player, kind, getEntityMaxHealthSafe(victim));
-        } catch (eTp) {}
+        /*
+         * End kill TP settle: dragon always; other End mobs only when
+         * END_MOB_SCALING_ENABLED is on.
+         */
+        if (kind === "dragon" || END_MOB_SCALING_ENABLED === true) {
+            try {
+                scheduleEndKillTpClawback(player, kind, getEntityMaxHealthSafe(victim));
+            } catch (eTp) {}
+        }
 
         if (kind !== "dragon") return;
 

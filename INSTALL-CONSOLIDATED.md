@@ -34,7 +34,8 @@ Battle report shows once (no DM+broadcast double).
 - `Aliases-Sparring.yml` → CMI (`/spar` + mentor shortcuts + `/sparmentorcd`)
 
 ## End
-- `End Dimension Strength.js` **v2.10.3** → Global Player (own tab)
+- `End Dimension Strength.js` **v2.11.0** → Global Player (own tab)
+  - Ender Dragon spawn + scaling only (End mob scaling disabled)
 - `EndDragon-Forge-Trigger.js` → Global Forge Scripts
 - `EndDragon-Alias.yml` → CMI
 
