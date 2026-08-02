@@ -1,6 +1,8 @@
 /*
  * DBZ Legacy Reborn - Disable Apotheosis Spawner Upgrades
  *
+ * Pure ASCII file so KubeJS UTF-8 reader never hits MalformedInputException.
+ *
  * 1) Removes apotheosis:spawner_modifier recipes EXCEPT redstone control
  *    (comparator) so spawners can still be toggled with redstone.
  * 2) Converts EXISTING world spawners back to vanilla stats while keeping
@@ -686,7 +688,7 @@ ServerEvents.recipes(function (event) {
                     }
                 }
             } else {
-                /* Unknown shape — also keep if recipe id mentions redstone. */
+                /* Unknown shape - also keep if recipe id mentions redstone. */
                 try {
                     var rid = String(recipe.getId());
                     if (rid.toLowerCase().indexOf("redstone") >= 0) keep = true;
