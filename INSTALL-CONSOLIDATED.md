@@ -45,9 +45,16 @@ Battle report shows once (no DM+broadcast double).
 - `AndrioidConversion.js`, `bioevolution.json`, `character.json`
 - `ShadowDummyLimiter.js`, `ShadowDummyForgeProtect.js`
 - `Fabled Sync.js` (combined Prestige Sync + Faction Sync + Value Cleaner — do **not** also load `Prestige Sync Fabled.js`)
-- Fabled bonus persist fixes, Apotheosis spawner disable (+ world vanillaize), Disable End Portals
+- Fabled bonus persist fixes, Disable End Portals
 - `Aliases-Kill-TP-Chat.yml` (optional; also covered by Aliases-Rival `tpmsg`)
-- `kubejs/server_scripts/remove_silk_touch.js` — strips **Silk Touch** from items/books (keeps the item)
 
-## Do not mix older rival/sparring branches on top of this pack
-Use this branch as the install set. Older open PRs are superseded here.
+## KubeJS (server + startup)
+- `kubejs/server_scripts/remove_silk_touch.js` — strips **Silk Touch** from items/books (keeps the item)
+- `kubejs/server_scripts/apotheosis_spawner_disable.js` — disables Apotheosis spawner upgrades; vanillaizes world spawners; **comparator right-click** enables redstone control
+- `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` — chunk-load queue for spawner vanillaize (**full restart** once)
+- Also present: `apotheosis_balance.js`, `capsule_disable.js`
+
+Reload server scripts with `/kubejs reload server_scripts` (or `/reload`). Startup script needs a server restart.
+
+## Do not mix older script branches on top of this pack
+Use this branch as the install set. Supersedes open PRs **#44** (Rival/Sparring), **#45** (Silk Touch), **#46** (spawners/redstone).
