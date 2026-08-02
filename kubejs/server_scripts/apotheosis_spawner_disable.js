@@ -398,11 +398,7 @@ function vanillaizeSpawnersInChunk(level, chunkX, chunkZ) {
             chunk = level.getChunk(chunkX, chunkZ);
         } catch (e1) {
             try {
-                chunk = level.getChunkAt(
-                    chunkX * 16,
-                    64,
-                    chunkZ * 16
-                );
+                chunk = level.minecraftLevel.getChunk(chunkX, chunkZ);
             } catch (e2) {}
         }
         if (chunk == null) return 0;
@@ -415,55 +411,55 @@ function vanillaizeSpawnersInChunk(level, chunkX, chunkZ) {
                 map = chunk.blockEntities;
             } catch (eMap2) {}
         }
+        if (map == null) return 0;
 
-        if (map != null) {
-            var values = null;
-            try {
-                values = map.values();
-            } catch (eVal) {}
-            if (values != null) {
-                var it = values.iterator();
-                while (it.hasNext()) {
-                    var be = it.next();
-                    try {
-                        var pos = be.getBlockPos();
-                        var block = level.getBlock(pos.x, pos.y, pos.z);
-                        if (vanillaizeSpawnerBlock(block)) count++;
-                    } catch (eOne) {
-                        /* Fallback: vanillaize via tile fields directly. */
-                        try {
-                            if (vanillaizeApothTileFields(be)) count++;
-                        } catch (eTwo) {}
-                    }
-                }
-                return count;
-            }
-        }
-    } catch (err) {}
-
-    /* Slow fallback: scan chunk volume for spawner blocks. */
-    try {
-        var minY = -64;
-        var maxY = 320;
+        var entries = null;
         try {
-            minY = level.minBuildHeight;
-            maxY = level.maxBuildHeight;
-        } catch (eY) {}
-        var x0 = chunkX * 16;
-        var z0 = chunkZ * 16;
-        for (var x = x0; x < x0 + 16; x++) {
-            for (var z = z0; z < z0 + 16; z++) {
-                for (var y = minY; y < maxY; y += 1) {
-                    try {
-                        var b = level.getBlock(x, y, z);
-                        if (isSpawnerBlockId(b.id) && vanillaizeSpawnerBlock(b)) {
-                            count++;
-                        }
-                    } catch (eB) {}
-                }
-            }
+            entries = map.entrySet();
+        } catch (eEnt) {
+            try {
+                entries = map.values();
+            } catch (eVal) {}
         }
-    } catch (eScan) {}
+        if (entries == null) return 0;
+
+        var it = entries.iterator();
+        while (it.hasNext()) {
+            var next = it.next();
+            var be = null;
+            var pos = null;
+            try {
+                /* entrySet style */
+                be = next.getValue();
+                pos = next.getKey();
+            } catch (eEntry) {
+                /* values() style */
+                be = next;
+                try {
+                    pos = be.getBlockPos();
+                } catch (ePos) {}
+            }
+            if (be == null) continue;
+
+            var did = false;
+            try {
+                if (pos != null) {
+                    var block = level.getBlock(pos.x, pos.y, pos.z);
+                    if (vanillaizeSpawnerBlock(block)) did = true;
+                }
+            } catch (eBlock) {}
+            if (!did) {
+                try {
+                    if (vanillaizeApothTileFields(be)) did = true;
+                } catch (eTile) {}
+            }
+            if (did) count++;
+        }
+    } catch (err) {
+        if (DEBUG_SPAWNER) {
+            console.error("[Apotheosis Spawner] chunk scan error: " + err);
+        }
+    }
     return count;
 }
 
