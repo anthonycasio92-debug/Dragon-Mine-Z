@@ -1,15 +1,15 @@
 /*
  * DBZ Legacy Reborn - Disable Apotheosis Spawner Upgrades
  *
- * 1) Removes every apotheosis:spawner_modifier recipe so players cannot
- *    upgrade spawners (spawn count, delays, ignore light, no AI, etc.).
+ * 1) Removes apotheosis:spawner_modifier recipes EXCEPT redstone control
+ *    (comparator) so spawners can still be toggled with redstone.
  * 2) Converts EXISTING world spawners back to vanilla stats while keeping
- *    the spawned mob type (SpawnData).
- * 3) Strips upgrade NBT from spawner items in inventories / on the ground
- *    so silk-touched upgraded spawners place as vanilla again.
+ *    the spawned mob type (SpawnData) AND redstone_control if enabled.
+ * 3) Strips other upgrade NBT from spawner items in inventories / ground.
  *
  * Still allowed:
  * - Changing spawner mob type with spawn eggs
+ * - Redstone control (Apotheosis comparator modifier)
  *
  * Reload: /reload  or  /kubejs reload server_scripts
  */
@@ -24,15 +24,16 @@ var VANILLA_MAX_NEARBY = 6;
 var VANILLA_PLAYER_RANGE = 16;
 var VANILLA_SPAWN_RANGE = 4;
 
-var APOTH_BOOL_KEYS = [
+/* Cleared on vanillaize. redstone_control is intentionally preserved. */
+var APOTH_BOOL_KEYS_CLEAR = [
     "ignore_players",
     "ignore_conditions",
-    "redstone_control",
     "ignore_light",
     "no_ai",
     "silent",
     "baby"
 ];
+var APOTH_BOOL_PRESERVE = ["redstone_control"];
 
 var PLAYER_SCAN_INTERVAL = 100; /* 5s */
 var PLAYER_SCAN_CHUNK_RADIUS = 3; /* chunks around player */
@@ -126,14 +127,14 @@ function nbtRemove(tag, key) {
 }
 
 /*
- * True if this spawner NBT is not plain vanilla (Apotheosis upgrades or
- * non-default numeric stats). SpawnData / mob type is ignored.
+ * True if this spawner NBT is not plain vanilla (banned Apotheosis upgrades
+ * or non-default numeric stats). SpawnData / redstone_control ignored.
  */
 function nbtNeedsVanillaReset(tag) {
     if (tag == null) return false;
 
-    for (var i = 0; i < APOTH_BOOL_KEYS.length; i++) {
-        if (nbtGetBool(tag, APOTH_BOOL_KEYS[i])) return true;
+    for (var i = 0; i < APOTH_BOOL_KEYS_CLEAR.length; i++) {
+        if (nbtGetBool(tag, APOTH_BOOL_KEYS_CLEAR[i])) return true;
     }
 
     if (nbtGetInt(tag, "MinSpawnDelay", VANILLA_MIN_DELAY) !== VANILLA_MIN_DELAY) {
@@ -163,19 +164,24 @@ function nbtNeedsVanillaReset(tag) {
     return false;
 }
 
-/* Mutate tag in place to vanilla stats. Keeps SpawnData / SpawnPotentials. */
+/* Mutate tag in place to vanilla stats. Keeps SpawnData + redstone_control. */
 function applyVanillaStatsToNbt(tag) {
     if (tag == null) return false;
     var changed = false;
+    var keepRedstone = nbtGetBool(tag, "redstone_control");
 
-    for (var i = 0; i < APOTH_BOOL_KEYS.length; i++) {
-        var key = APOTH_BOOL_KEYS[i];
+    for (var i = 0; i < APOTH_BOOL_KEYS_CLEAR.length; i++) {
+        var key = APOTH_BOOL_KEYS_CLEAR[i];
         if (nbtGetBool(tag, key)) {
             nbtPutBool(tag, key, false);
             changed = true;
         }
-        /* Also drop the keys so future reads are clean. */
         if (nbtRemove(tag, key)) changed = true;
+    }
+
+    /* Restore preserved redstone_control after cleanup. */
+    if (keepRedstone) {
+        nbtPutBool(tag, "redstone_control", true);
     }
 
     if (nbtGetInt(tag, "MinSpawnDelay", VANILLA_MIN_DELAY) !== VANILLA_MIN_DELAY) {
@@ -231,10 +237,7 @@ function vanillaizeApothTileFields(be) {
             be.ignoresConditions = false;
             changed = true;
         }
-        if (be.redstoneControl === true) {
-            be.redstoneControl = false;
-            changed = true;
-        }
+        /* Keep be.redstoneControl as-is so redstone toggling still works. */
         if (be.ignoresLight === true) {
             be.ignoresLight = false;
             changed = true;
@@ -629,9 +632,99 @@ function purgeSpawnerItems(player) {
 /* ========================= EVENTS ========================= */
 
 ServerEvents.recipes(function (event) {
-    event.remove({ type: "apotheosis:spawner_modifier" });
+    var removed = 0;
+    var kept = 0;
+
+    /*
+     * Keep only modifiers whose stat_changes are exclusively redstone_control.
+     * Everything else (ignore light, no AI, delays, spawn count, etc.) goes.
+     */
+    event.forEachRecipe({ type: "apotheosis:spawner_modifier" }, function (recipe) {
+        var keep = false;
+        try {
+            var json = recipe.json;
+            var changes = null;
+            try {
+                changes = json.get("stat_changes");
+            } catch (e1) {
+                try {
+                    changes = json.stat_changes;
+                } catch (e2) {}
+            }
+            if (changes != null) {
+                var size = 0;
+                try {
+                    size = changes.size();
+                } catch (eSize) {
+                    try {
+                        size = changes.length;
+                    } catch (eLen) {
+                        size = 0;
+                    }
+                }
+                if (size > 0) {
+                    keep = true;
+                    for (var i = 0; i < size; i++) {
+                        var entry = null;
+                        try {
+                            entry = changes.get(i);
+                        } catch (eGet) {
+                            entry = changes[i];
+                        }
+                        var text = String(entry);
+                        try {
+                            if (entry.get) {
+                                var id = entry.get("id") || entry.get("type") || entry.get("stat");
+                                if (id != null) text = String(id);
+                            }
+                        } catch (eId) {}
+                        text = text.toLowerCase();
+                        if (text.indexOf("redstone_control") < 0) {
+                            keep = false;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                /* Unknown shape — also keep if recipe id mentions redstone. */
+                try {
+                    var rid = String(recipe.getId());
+                    if (rid.toLowerCase().indexOf("redstone") >= 0) keep = true;
+                } catch (eRid) {}
+            }
+        } catch (eParse) {
+            keep = false;
+        }
+
+        if (keep) {
+            kept++;
+            if (DEBUG_SPAWNER) {
+                try {
+                    console.info(
+                        "[Apotheosis Spawner] Keeping redstone modifier: " +
+                            recipe.getId()
+                    );
+                } catch (eLog) {}
+            }
+        } else {
+            try {
+                event.remove({ id: recipe.getId() });
+                removed++;
+            } catch (eRem) {
+                try {
+                    recipe.remove();
+                    removed++;
+                } catch (eRem2) {}
+            }
+        }
+    });
+
     console.info(
-        "[DBZ Legacy Reborn] Apotheosis spawner upgrade recipes removed."
+        "[DBZ Legacy Reborn] Apotheosis spawner modifiers: removed " +
+            removed +
+            ", kept " +
+            kept +
+            " redstone_control."
     );
 });
 
@@ -782,5 +875,5 @@ EntityEvents.spawned("minecraft:item", function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled; world spawners vanillaized on chunk load / nearby scan."
+    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled (redstone control kept); world spawners vanillaized on chunk load / nearby scan."
 );
