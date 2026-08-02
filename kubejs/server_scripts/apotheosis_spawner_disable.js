@@ -3,15 +3,17 @@
  *
  * Pure ASCII file so KubeJS UTF-8 reader never hits MalformedInputException.
  *
- * 1) Removes apotheosis:spawner_modifier recipes EXCEPT redstone control
- *    (comparator) so spawners can still be toggled with redstone.
+ * 1) Removes ALL apotheosis:spawner_modifier recipes, then re-adds only
+ *    redstone_control (+ inverted). Also handles comparator right-click
+ *    directly so redstone control works even if recipe reload fails.
  * 2) Converts EXISTING world spawners back to vanilla stats while keeping
  *    the spawned mob type (SpawnData) AND redstone_control if enabled.
  * 3) Strips other upgrade NBT from spawner items in inventories / ground.
  *
  * Still allowed:
  * - Changing spawner mob type with spawn eggs
- * - Redstone control (Apotheosis comparator modifier)
+ * - Redstone control (right-click spawner with comparator)
+ *   Offhand quartz + comparator removes redstone control.
  *
  * Reload: /reload  or  /kubejs reload server_scripts
  */
@@ -35,7 +37,16 @@ var APOTH_BOOL_KEYS_CLEAR = [
     "silent",
     "baby"
 ];
-var APOTH_BOOL_PRESERVE = ["redstone_control"];
+
+/* Java field names on ApothSpawnerTile (not NBT keys). */
+var APOTH_BOOL_FIELDS_CLEAR = [
+    "ignoresPlayers",
+    "ignoresConditions",
+    "ignoresLight",
+    "hasNoAI",
+    "silent",
+    "baby"
+];
 
 var PLAYER_SCAN_INTERVAL = 100; /* 5s */
 var PLAYER_SCAN_CHUNK_RADIUS = 3; /* chunks around player */
@@ -43,6 +54,7 @@ var DEBUG_SPAWNER = false;
 
 var ApothSpawnerTileClass = null;
 var ApothTried = false;
+var ApothFieldCache = {};
 
 function getApothSpawnerTileClass() {
     if (ApothTried) return ApothSpawnerTileClass;
@@ -60,6 +72,104 @@ function getApothSpawnerTileClass() {
         );
     }
     return ApothSpawnerTileClass;
+}
+
+function getApothJavaClass(be) {
+    var cls = getApothSpawnerTileClass();
+    if (cls == null || be == null) return null;
+    try {
+        if (be instanceof cls) return cls;
+    } catch (e1) {}
+    try {
+        var raw = be;
+        try {
+            if (typeof be.getClass === "function") {
+                var cn = String(be.getClass().getName());
+                if (cn.indexOf("ApothSpawnerTile") >= 0) return cls;
+            }
+        } catch (e2) {}
+        try {
+            if (be.blockEntity != null) raw = be.blockEntity;
+        } catch (e3) {}
+        try {
+            if (raw instanceof cls) return cls;
+        } catch (e4) {}
+    } catch (e5) {}
+    return null;
+}
+
+function getDeclaredField(cls, name) {
+    if (cls == null || !name) return null;
+    var key = String(name);
+    if (ApothFieldCache[key] !== undefined) return ApothFieldCache[key];
+    var field = null;
+    try {
+        field = cls.getDeclaredField(key);
+        field.setAccessible(true);
+    } catch (e1) {
+        try {
+            field = cls.getField(key);
+        } catch (e2) {
+            try {
+                /* Some KubeJS wraps expose .class */
+                field = cls.class.getDeclaredField(key);
+                field.setAccessible(true);
+            } catch (e3) {
+                field = null;
+            }
+        }
+    }
+    ApothFieldCache[key] = field;
+    return field;
+}
+
+function reflectGetBoolean(be, fieldName) {
+    var cls = getApothJavaClass(be);
+    if (cls == null) return null;
+    try {
+        var field = getDeclaredField(cls, fieldName);
+        if (field == null) return null;
+        return !!field.getBoolean(be);
+    } catch (e1) {
+        try {
+            return !!be[fieldName];
+        } catch (e2) {
+            return null;
+        }
+    }
+}
+
+function reflectSetBoolean(be, fieldName, value) {
+    var cls = getApothJavaClass(be);
+    if (cls == null) return false;
+    try {
+        var field = getDeclaredField(cls, fieldName);
+        if (field != null) {
+            field.setBoolean(be, !!value);
+            return true;
+        }
+    } catch (e1) {}
+    try {
+        be[fieldName] = !!value;
+        return true;
+    } catch (e2) {
+        return false;
+    }
+}
+
+function syncSpawnerTile(be) {
+    if (be == null) return;
+    try {
+        be.setChanged();
+    } catch (e1) {}
+    try {
+        var level = be.getLevel();
+        var pos = be.getBlockPos();
+        if (level != null && pos != null) {
+            var state = level.getBlockState(pos);
+            level.sendBlockUpdated(pos, state, state, 3);
+        }
+    } catch (e2) {}
 }
 
 function isSpawnerBlockId(id) {
@@ -168,6 +278,8 @@ function nbtNeedsVanillaReset(tag) {
 
 function readTileRedstoneControl(be) {
     if (be == null) return false;
+    var reflected = reflectGetBoolean(be, "redstoneControl");
+    if (reflected !== null) return reflected;
     try {
         if (be.redstoneControl === true) return true;
     } catch (e1) {}
@@ -179,6 +291,7 @@ function readTileRedstoneControl(be) {
 
 function writeTileRedstoneControl(be, value) {
     if (be == null) return false;
+    if (reflectSetBoolean(be, "redstoneControl", value)) return true;
     try {
         be.redstoneControl = !!value;
         return true;
@@ -190,6 +303,89 @@ function writeTileRedstoneControl(be, value) {
             return false;
         }
     }
+}
+
+/* Resolve the live ApothSpawnerTile from a KubeJS block or Java BE. */
+function resolveApothTile(blockOrBe) {
+    if (blockOrBe == null) return null;
+    var candidates = [];
+    candidates.push(blockOrBe);
+    try {
+        if (blockOrBe.entity != null) candidates.push(blockOrBe.entity);
+    } catch (e1) {}
+    try {
+        if (typeof blockOrBe.getEntity === "function") {
+            candidates.push(blockOrBe.getEntity());
+        }
+    } catch (e2) {}
+    try {
+        if (blockOrBe.blockEntity != null) candidates.push(blockOrBe.blockEntity);
+    } catch (e3) {}
+    try {
+        if (blockOrBe.level != null && blockOrBe.pos != null) {
+            candidates.push(blockOrBe.level.getBlockEntity(blockOrBe.pos));
+        }
+    } catch (e4) {}
+    try {
+        if (
+            typeof blockOrBe.getLevel === "function" &&
+            typeof blockOrBe.getBlockPos === "function"
+        ) {
+            candidates.push(blockOrBe); /* already a BE */
+        }
+    } catch (e5) {}
+
+    for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (c == null) continue;
+        if (getApothJavaClass(c) != null) return c;
+    }
+    return null;
+}
+
+/*
+ * Direct comparator apply (does not depend on recipe manager).
+ * Returns true if the redstone_control flag changed or was forced.
+ */
+function applyComparatorRedstone(block, enable) {
+    var be = resolveApothTile(block);
+    var before = readTileRedstoneControl(be);
+    var ok = false;
+
+    if (be != null) {
+        ok = writeTileRedstoneControl(be, enable) || ok;
+        syncSpawnerTile(be);
+    }
+
+    try {
+        var tag = readBlockEntityNbt(block);
+        if (tag != null) {
+            nbtPutBool(tag, "redstone_control", !!enable);
+            if (writeBlockEntityNbt(block, tag)) ok = true;
+        }
+    } catch (eNbt) {}
+
+    /* Re-assert on live tile after NBT write (NBT load can clobber fields). */
+    if (be != null) {
+        writeTileRedstoneControl(be, enable);
+        syncSpawnerTile(be);
+        ok = true;
+    }
+
+    var after = readTileRedstoneControl(be);
+    if (DEBUG_SPAWNER) {
+        console.info(
+            "[Apotheosis Spawner] comparator apply enable=" +
+                enable +
+                " before=" +
+                before +
+                " after=" +
+                after +
+                " ok=" +
+                ok
+        );
+    }
+    return ok || before !== after || (enable && after === true);
 }
 
 /*
@@ -261,45 +457,50 @@ function applyVanillaStatsToNbt(tag, forceKeepRedstone) {
 }
 
 function vanillaizeApothTileFields(be) {
-    var cls = getApothSpawnerTileClass();
-    if (cls == null || be == null) return false;
-    try {
-        if (!(be instanceof cls)) return false;
-    } catch (eInst) {
-        return false;
+    be = resolveApothTile(be) || be;
+    if (be == null || getApothJavaClass(be) == null) return false;
+
+    var keepRedstone = readTileRedstoneControl(be);
+    var changed = false;
+
+    for (var i = 0; i < APOTH_BOOL_FIELDS_CLEAR.length; i++) {
+        var fname = APOTH_BOOL_FIELDS_CLEAR[i];
+        var cur = reflectGetBoolean(be, fname);
+        if (cur === true) {
+            if (reflectSetBoolean(be, fname, false)) changed = true;
+        } else {
+            try {
+                if (be[fname] === true) {
+                    be[fname] = false;
+                    changed = true;
+                }
+            } catch (eProp) {}
+        }
     }
 
-    var changed = false;
-    try {
-        if (be.ignoresPlayers === true) {
-            be.ignoresPlayers = false;
-            changed = true;
-        }
-        if (be.ignoresConditions === true) {
-            be.ignoresConditions = false;
-            changed = true;
-        }
-        /* Keep be.redstoneControl as-is so redstone toggling still works. */
-        if (be.ignoresLight === true) {
-            be.ignoresLight = false;
-            changed = true;
-        }
-        if (be.hasNoAI === true) {
-            be.hasNoAI = false;
-            changed = true;
-        }
-        if (be.silent === true) {
-            be.silent = false;
-            changed = true;
-        }
-        if (be.baby === true) {
-            be.baby = false;
-            changed = true;
-        }
-    } catch (eBool) {}
+    /* Never clear redstoneControl here; restore if somehow lost mid-edit. */
+    if (keepRedstone) {
+        writeTileRedstoneControl(be, true);
+    }
 
     try {
-        var logic = be.spawner;
+        var logic = null;
+        try {
+            logic = be.spawner;
+        } catch (eSp) {
+            try {
+                var sf = getDeclaredField(getApothJavaClass(be), "spawner");
+                if (sf != null) logic = sf.get(be);
+            } catch (eSf) {}
+        }
+        /* SpawnerBlockEntity uses private final BaseSpawner spawner in vanilla;
+         * Apotheosis replaces it - also try getSpawner() if present. */
+        try {
+            if (logic == null && typeof be.getSpawner === "function") {
+                logic = be.getSpawner();
+            }
+        } catch (eGs) {}
+
         if (logic != null) {
             if (Number(logic.minSpawnDelay) !== VANILLA_MIN_DELAY) {
                 logic.minSpawnDelay = VANILLA_MIN_DELAY;
@@ -328,18 +529,12 @@ function vanillaizeApothTileFields(be) {
         }
     } catch (eLogic) {}
 
+    if (keepRedstone) {
+        writeTileRedstoneControl(be, true);
+    }
+
     if (changed) {
-        try {
-            be.setChanged();
-        } catch (eSave) {}
-        try {
-            var level = be.getLevel();
-            var pos = be.getBlockPos();
-            if (level != null && pos != null) {
-                var state = level.getBlockState(pos);
-                level.sendBlockUpdated(pos, state, state, 3);
-            }
-        } catch (eSync) {}
+        syncSpawnerTile(be);
     }
     return changed;
 }
@@ -403,31 +598,46 @@ function vanillaizeSpawnerBlock(block) {
     var changed = false;
     var be = null;
     var keepRedstone = false;
+    var usedReflection = false;
 
-    /* Fast path: live Apotheosis tile fields. */
+    /* Fast path: live Apotheosis tile fields via reflection. */
     try {
-        be = block.entity;
-        if (be == null && typeof block.getEntity === "function") be = block.getEntity();
-        keepRedstone = readTileRedstoneControl(be);
-        if (vanillaizeApothTileFields(be)) changed = true;
-        /* Re-read after field clears; never lose an already-enabled flag. */
-        keepRedstone = keepRedstone || readTileRedstoneControl(be);
-    } catch (eTile) {}
-
-    /* NBT path: works even if field names are remapped oddly. */
-    try {
-        var tag = readBlockEntityNbt(block);
-        keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
-        if (tag != null && nbtNeedsVanillaReset(tag)) {
-            if (applyVanillaStatsToNbt(tag, keepRedstone)) {
-                if (writeBlockEntityNbt(block, tag)) changed = true;
+        be = resolveApothTile(block);
+        if (be == null) {
+            be = block.entity;
+            if (be == null && typeof block.getEntity === "function") {
+                be = block.getEntity();
             }
         }
-    } catch (eNbt) {}
+        keepRedstone = readTileRedstoneControl(be);
+        if (getApothJavaClass(be) != null) {
+            if (vanillaizeApothTileFields(be)) changed = true;
+            usedReflection = true;
+            keepRedstone = keepRedstone || readTileRedstoneControl(be);
+        }
+    } catch (eTile) {}
 
-    /* Always re-assert redstone on the live tile after any NBT write. */
+    /*
+     * NBT path only when we could not touch the live Apoth tile.
+     * Writing incomplete KubeJS entityData is what previously wiped
+     * redstone_control after a successful comparator apply.
+     */
+    if (!usedReflection) {
+        try {
+            var tag = readBlockEntityNbt(block);
+            keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
+            if (tag != null && nbtNeedsVanillaReset(tag)) {
+                if (applyVanillaStatsToNbt(tag, keepRedstone)) {
+                    if (writeBlockEntityNbt(block, tag)) changed = true;
+                }
+            }
+        } catch (eNbt) {}
+    }
+
+    /* Always re-assert redstone on the live tile after any edit. */
     if (keepRedstone) {
         writeTileRedstoneControl(be, true);
+        syncSpawnerTile(be);
     }
 
     if (changed && DEBUG_SPAWNER) {
@@ -448,49 +658,58 @@ function vanillaizeSpawnerBlock(block) {
 
 function vanillaizeSpawnerBlockEntity(be) {
     if (be == null) return false;
+    var tile = resolveApothTile(be) || be;
     var changed = false;
-    var keepRedstone = readTileRedstoneControl(be);
+    var keepRedstone = readTileRedstoneControl(tile);
+    var usedReflection = false;
+
     try {
-        if (vanillaizeApothTileFields(be)) changed = true;
-        keepRedstone = keepRedstone || readTileRedstoneControl(be);
+        if (getApothJavaClass(tile) != null) {
+            if (vanillaizeApothTileFields(tile)) changed = true;
+            usedReflection = true;
+            keepRedstone = keepRedstone || readTileRedstoneControl(tile);
+        }
     } catch (e1) {}
 
-    /* NBT round-trip for Java levels without KubeJS block wrappers. */
-    try {
-        var tag = null;
+    /* NBT round-trip only when reflection path unavailable. */
+    if (!usedReflection) {
         try {
-            if (typeof be.saveWithoutMetadata === "function") {
-                tag = be.saveWithoutMetadata();
-            }
-        } catch (eSave) {}
-        try {
-            if (tag == null && typeof be.serializeNBT === "function") {
-                tag = be.serializeNBT();
-            }
-        } catch (eSer) {}
-
-        keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
-
-        if (tag != null && nbtNeedsVanillaReset(tag)) {
-            if (applyVanillaStatsToNbt(tag, keepRedstone)) {
-                try {
-                    be.load(tag);
-                    changed = true;
-                } catch (eLoad) {
-                    try {
-                        be.deserializeNBT(tag);
-                        changed = true;
-                    } catch (eLoad2) {}
+            var tag = null;
+            try {
+                if (typeof tile.saveWithoutMetadata === "function") {
+                    tag = tile.saveWithoutMetadata();
                 }
-                try {
-                    be.setChanged();
-                } catch (eCh) {}
+            } catch (eSave) {}
+            try {
+                if (tag == null && typeof tile.serializeNBT === "function") {
+                    tag = tile.serializeNBT();
+                }
+            } catch (eSer) {}
+
+            keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
+
+            if (tag != null && nbtNeedsVanillaReset(tag)) {
+                if (applyVanillaStatsToNbt(tag, keepRedstone)) {
+                    try {
+                        tile.load(tag);
+                        changed = true;
+                    } catch (eLoad) {
+                        try {
+                            tile.deserializeNBT(tag);
+                            changed = true;
+                        } catch (eLoad2) {}
+                    }
+                    try {
+                        tile.setChanged();
+                    } catch (eCh) {}
+                }
             }
-        }
-    } catch (eNbt) {}
+        } catch (eNbt) {}
+    }
 
     if (keepRedstone) {
-        writeTileRedstoneControl(be, true);
+        writeTileRedstoneControl(tile, true);
+        syncSpawnerTile(tile);
     }
     return changed;
 }
@@ -809,29 +1028,14 @@ function purgeSpawnerItems(player) {
 
 ServerEvents.recipes(function (event) {
     var removed = 0;
-    var kept = 0;
-    var keptIds = [];
 
-    /*
-     * Keep only redstone_control (+ inverted) comparator modifiers.
-     * Everything else (ignore light, no AI, delays, spawn count, etc.) goes.
-     */
-    event.forEachRecipe({ type: "apotheosis:spawner_modifier" }, function (recipe) {
-        var rid = recipeIdString(recipe);
-        var keep = false;
-        try {
-            keep = isRedstoneControlModifierRecipe(recipe);
-        } catch (eParse) {
-            keep = rid.toLowerCase().indexOf("redstone_control") >= 0;
-        }
-
-        if (keep) {
-            kept++;
-            keptIds.push(rid);
-            console.info(
-                "[Apotheosis Spawner] Keeping redstone modifier: " + rid
-            );
-        } else {
+    /* Remove every Apotheosis spawner modifier, then re-add redstone only. */
+    try {
+        event.remove({ type: "apotheosis:spawner_modifier" });
+        removed = -1; /* unknown count when using type remove */
+    } catch (eTypeRem) {
+        event.forEachRecipe({ type: "apotheosis:spawner_modifier" }, function (recipe) {
+            var rid = recipeIdString(recipe);
             try {
                 event.remove({ id: rid });
                 removed++;
@@ -841,18 +1045,193 @@ ServerEvents.recipes(function (event) {
                     removed++;
                 } catch (eRem2) {}
             }
-        }
-    });
+        });
+    }
+
+    var added = 0;
+    try {
+        event
+            .custom({
+                type: "apotheosis:spawner_modifier",
+                conditions: [
+                    { type: "apotheosis:module", module: "spawner" }
+                ],
+                mainhand: { item: "minecraft:comparator" },
+                stat_changes: [{ id: "redstone_control", value: true }]
+            })
+            .id("kubejs:apoth_spawner_redstone_control");
+        added++;
+        console.info(
+            "[Apotheosis Spawner] Re-added recipe kubejs:apoth_spawner_redstone_control"
+        );
+    } catch (eAdd1) {
+        console.error(
+            "[Apotheosis Spawner] Failed to re-add redstone_control recipe: " +
+                eAdd1
+        );
+    }
+
+    try {
+        event
+            .custom({
+                type: "apotheosis:spawner_modifier",
+                conditions: [
+                    { type: "apotheosis:module", module: "spawner" }
+                ],
+                mainhand: { item: "minecraft:comparator" },
+                offhand: { item: "minecraft:quartz" },
+                consumes_offhand: false,
+                stat_changes: [{ id: "redstone_control", value: false }]
+            })
+            .id("kubejs:apoth_spawner_redstone_control_inverted");
+        added++;
+        console.info(
+            "[Apotheosis Spawner] Re-added recipe kubejs:apoth_spawner_redstone_control_inverted"
+        );
+    } catch (eAdd2) {
+        console.error(
+            "[Apotheosis Spawner] Failed to re-add redstone_control_inverted: " +
+                eAdd2
+        );
+    }
 
     console.info(
-        "[DBZ Legacy Reborn] Apotheosis spawner modifiers: removed " +
-            removed +
-            ", kept " +
-            kept +
-            " redstone_control" +
-            (keptIds.length > 0 ? " [" + keptIds.join(", ") + "]" : " (NONE - comparator upgrade broken)") +
-            "."
+        "[DBZ Legacy Reborn] Apotheosis spawner modifiers: cleared type, re-added " +
+            added +
+            " redstone_control recipe(s). Comparator right-click handler is also registered."
     );
+});
+
+/*
+ * Bulletproof redstone control: right-click spawner with comparator.
+ * Does not depend on Apotheosis recipe matching.
+ */
+BlockEvents.rightClicked("minecraft:spawner", function (event) {
+    try {
+        if (event.hand != null && String(event.hand) !== "MAIN_HAND") {
+            /* Allow OFF_HAND only when that hand holds the comparator. */
+        }
+
+        var player = event.player;
+        if (player == null) return;
+
+        var main = null;
+        var off = null;
+        try {
+            main = player.getMainHandItem();
+        } catch (eM) {
+            try {
+                main = player.mainHandItem;
+            } catch (eM2) {}
+        }
+        try {
+            off = player.getOffhandItem();
+        } catch (eO) {
+            try {
+                off = player.offHandItem;
+            } catch (eO2) {
+                try {
+                    off = player.getOffHandItem();
+                } catch (eO3) {}
+            }
+        }
+
+        function stackId(stack) {
+            if (stack == null) return "";
+            try {
+                if (stack.isEmpty && stack.isEmpty()) return "";
+            } catch (eE) {}
+            try {
+                return String(stack.id);
+            } catch (eI) {
+                try {
+                    return String(stack.getItem());
+                } catch (eI2) {
+                    return "";
+                }
+            }
+        }
+
+        var hand = null;
+        try {
+            hand = String(event.hand);
+        } catch (eH) {
+            hand = "MAIN_HAND";
+        }
+
+        var used = null;
+        if (hand.indexOf("OFF") >= 0) {
+            used = off;
+        } else {
+            used = main;
+        }
+
+        if (stackId(used) !== "minecraft:comparator") return;
+
+        var enable = true;
+        var other = hand.indexOf("OFF") >= 0 ? main : off;
+        if (stackId(other) === "minecraft:quartz") {
+            enable = false;
+        }
+
+        var be = resolveApothTile(event.block);
+        var before = readTileRedstoneControl(be);
+        if (before === enable) {
+            try {
+                player.tell(
+                    enable
+                        ? "\u00A77This spawner already has redstone control. Power it to spawn."
+                        : "\u00A77This spawner already has no redstone control."
+                );
+            } catch (eTell0) {}
+            try {
+                event.cancel();
+            } catch (eCancel0) {}
+            return;
+        }
+
+        var ok = applyComparatorRedstone(event.block, enable);
+        if (!ok && readTileRedstoneControl(resolveApothTile(event.block)) !== enable) {
+            console.info(
+                "[Apotheosis Spawner] Comparator right-click failed to set redstone_control"
+            );
+            return;
+        }
+
+        try {
+            if (!player.isCreative()) {
+                used.count = Number(used.count) - 1;
+            }
+        } catch (eCount) {
+            try {
+                used.shrink(1);
+            } catch (eSh) {}
+        }
+
+        try {
+            player.tell(
+                enable
+                    ? "\u00A7aSpawner redstone control enabled. Power it to spawn."
+                    : "\u00A77Spawner redstone control removed."
+            );
+        } catch (eTell) {}
+
+        try {
+            event.cancel();
+        } catch (eCancel) {}
+        try {
+            event.success();
+        } catch (eSuc) {}
+
+        console.info(
+            "[Apotheosis Spawner] Comparator set redstone_control=" +
+                enable +
+                " for " +
+                player.username
+        );
+    } catch (err) {
+        console.error("[Apotheosis Spawner] rightClicked error: " + err);
+    }
 });
 
 /*
@@ -1020,5 +1399,5 @@ EntityEvents.spawned("minecraft:item", function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled (redstone control kept); world spawners vanillaized via startup chunk queue + nearby scan."
+    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled; redstone control via comparator right-click + recipe; world spawners vanillaized via chunk queue + nearby scan."
 );
