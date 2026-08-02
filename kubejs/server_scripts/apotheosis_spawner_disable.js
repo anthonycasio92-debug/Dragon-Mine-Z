@@ -35,7 +35,7 @@ var APOTH_BOOL_KEYS = [
 ];
 
 var PLAYER_SCAN_INTERVAL = 100; /* 5s */
-var PLAYER_SCAN_CHUNK_RADIUS = 2; /* chunks around player */
+var PLAYER_SCAN_CHUNK_RADIUS = 3; /* chunks around player */
 var DEBUG_SPAWNER = false;
 
 var ApothSpawnerTileClass = null;
@@ -635,47 +635,106 @@ ServerEvents.recipes(function (event) {
     );
 });
 
-/* Convert spawners in a chunk as soon as it loads (covers existing world). */
-try {
-    LevelEvents.loadedChunk(function (event) {
+/*
+ * Chunk load via Forge event (LevelEvents.loadedChunk does not exist on
+ * this KubeJS 1.20.1 build). Falls back to player nearby scan below.
+ */
+function handleForgeChunkLoad(event) {
+    try {
+        var level = null;
+        var chunk = null;
         try {
-            var level = event.level;
-            var chunk = event.chunk;
-            var cx = 0;
-            var cz = 0;
+            level = event.getLevel();
+        } catch (e1) {
+            try {
+                level = event.level;
+            } catch (e2) {}
+        }
+        try {
+            chunk = event.getChunk();
+        } catch (e3) {
+            try {
+                chunk = event.chunk;
+            } catch (e4) {}
+        }
+        if (level == null || chunk == null) return;
+
+        /* Client / temporary levels: skip. */
+        try {
+            if (level.isClientSide && level.isClientSide()) return;
+        } catch (eClient) {
+            try {
+                if (level.clientSide) return;
+            } catch (eClient2) {}
+        }
+
+        var cx = 0;
+        var cz = 0;
+        try {
+            var pos = chunk.getPos();
+            cx = pos.x;
+            cz = pos.z;
+        } catch (ePos) {
             try {
                 cx = chunk.x;
                 cz = chunk.z;
-            } catch (ePos) {
-                try {
-                    var pos = chunk.getPos();
-                    cx = pos.x;
-                    cz = pos.z;
-                } catch (ePos2) {
-                    return;
-                }
-            }
-            var n = vanillaizeSpawnersInChunk(level, cx, cz);
-            if (n > 0) {
-                console.info(
-                    "[Apotheosis Spawner] Vanillaized " +
-                        n +
-                        " spawner(s) in chunk " +
-                        cx +
-                        "," +
-                        cz
-                );
-            }
-        } catch (err) {
-            if (DEBUG_SPAWNER) {
-                console.error("[Apotheosis Spawner] loadedChunk error: " + err);
+            } catch (ePos2) {
+                return;
             }
         }
-    });
-    console.info("[Apotheosis Spawner] LevelEvents.loadedChunk handler registered.");
-} catch (eChunkEvt) {
+
+        var n = vanillaizeSpawnersInChunk(level, cx, cz);
+        if (n > 0) {
+            console.info(
+                "[Apotheosis Spawner] Vanillaized " +
+                    n +
+                    " spawner(s) in chunk " +
+                    cx +
+                    "," +
+                    cz
+            );
+        }
+    } catch (err) {
+        if (DEBUG_SPAWNER) {
+            console.error("[Apotheosis Spawner] ChunkEvent.Load error: " + err);
+        }
+    }
+}
+
+var chunkLoadHooked = false;
+try {
+    if (typeof ForgeEvents !== "undefined" && ForgeEvents.onEvent) {
+        ForgeEvents.onEvent(
+            "net.minecraftforge.event.level.ChunkEvent$Load",
+            handleForgeChunkLoad
+        );
+        chunkLoadHooked = true;
+        console.info(
+            "[Apotheosis Spawner] Forge ChunkEvent$Load handler registered."
+        );
+    }
+} catch (eForge) {
     console.info(
-        "[Apotheosis Spawner] loadedChunk event unavailable; using player scan only."
+        "[Apotheosis Spawner] ForgeEvents ChunkEvent$Load unavailable: " + eForge
+    );
+}
+if (!chunkLoadHooked) {
+    try {
+        if (typeof NativeEvents !== "undefined" && NativeEvents.onEvent) {
+            NativeEvents.onEvent(
+                "net.minecraftforge.event.level.ChunkEvent$Load",
+                handleForgeChunkLoad
+            );
+            chunkLoadHooked = true;
+            console.info(
+                "[Apotheosis Spawner] NativeEvents ChunkEvent$Load handler registered."
+            );
+        }
+    } catch (eNative) {}
+}
+if (!chunkLoadHooked) {
+    console.info(
+        "[Apotheosis Spawner] No chunk-load event; using player nearby scan only."
     );
 }
 
