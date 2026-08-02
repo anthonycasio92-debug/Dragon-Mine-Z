@@ -166,11 +166,42 @@ function nbtNeedsVanillaReset(tag) {
     return false;
 }
 
-/* Mutate tag in place to vanilla stats. Keeps SpawnData + redstone_control. */
-function applyVanillaStatsToNbt(tag) {
+function readTileRedstoneControl(be) {
+    if (be == null) return false;
+    try {
+        if (be.redstoneControl === true) return true;
+    } catch (e1) {}
+    try {
+        if (be.redstone_control === true) return true;
+    } catch (e2) {}
+    return false;
+}
+
+function writeTileRedstoneControl(be, value) {
+    if (be == null) return false;
+    try {
+        be.redstoneControl = !!value;
+        return true;
+    } catch (e1) {
+        try {
+            be.redstone_control = !!value;
+            return true;
+        } catch (e2) {
+            return false;
+        }
+    }
+}
+
+/*
+ * Mutate tag in place to vanilla stats. Keeps SpawnData + redstone_control.
+ * forceKeepRedstone: when true, always write redstone_control=true even if the
+ * tag omitted it (KubeJS entityData can drop Apotheosis fields).
+ */
+function applyVanillaStatsToNbt(tag, forceKeepRedstone) {
     if (tag == null) return false;
     var changed = false;
-    var keepRedstone = nbtGetBool(tag, "redstone_control");
+    var keepRedstone =
+        !!forceKeepRedstone || nbtGetBool(tag, "redstone_control");
 
     for (var i = 0; i < APOTH_BOOL_KEYS_CLEAR.length; i++) {
         var key = APOTH_BOOL_KEYS_CLEAR[i];
@@ -178,11 +209,20 @@ function applyVanillaStatsToNbt(tag) {
             nbtPutBool(tag, key, false);
             changed = true;
         }
-        if (nbtRemove(tag, key)) changed = true;
+        /* Only remove when present so we do not mark unchanged tags dirty. */
+        try {
+            if (tag.contains && tag.contains(key)) {
+                tag.remove(key);
+                changed = true;
+            }
+        } catch (eRem) {
+            if (nbtRemove(tag, key)) changed = true;
+        }
     }
 
     /* Restore preserved redstone_control after cleanup. */
     if (keepRedstone) {
+        if (!nbtGetBool(tag, "redstone_control")) changed = true;
         nbtPutBool(tag, "redstone_control", true);
     }
 
@@ -361,23 +401,34 @@ function vanillaizeSpawnerBlock(block) {
     }
 
     var changed = false;
+    var be = null;
+    var keepRedstone = false;
 
     /* Fast path: live Apotheosis tile fields. */
     try {
-        var be = block.entity;
+        be = block.entity;
         if (be == null && typeof block.getEntity === "function") be = block.getEntity();
+        keepRedstone = readTileRedstoneControl(be);
         if (vanillaizeApothTileFields(be)) changed = true;
+        /* Re-read after field clears; never lose an already-enabled flag. */
+        keepRedstone = keepRedstone || readTileRedstoneControl(be);
     } catch (eTile) {}
 
     /* NBT path: works even if field names are remapped oddly. */
     try {
         var tag = readBlockEntityNbt(block);
+        keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
         if (tag != null && nbtNeedsVanillaReset(tag)) {
-            if (applyVanillaStatsToNbt(tag)) {
+            if (applyVanillaStatsToNbt(tag, keepRedstone)) {
                 if (writeBlockEntityNbt(block, tag)) changed = true;
             }
         }
     } catch (eNbt) {}
+
+    /* Always re-assert redstone on the live tile after any NBT write. */
+    if (keepRedstone) {
+        writeTileRedstoneControl(be, true);
+    }
 
     if (changed && DEBUG_SPAWNER) {
         try {
@@ -387,7 +438,8 @@ function vanillaizeSpawnerBlock(block) {
                     "," +
                     block.y +
                     "," +
-                    block.z
+                    block.z +
+                    (keepRedstone ? " (redstone kept)" : "")
             );
         } catch (eLog) {}
     }
@@ -397,8 +449,10 @@ function vanillaizeSpawnerBlock(block) {
 function vanillaizeSpawnerBlockEntity(be) {
     if (be == null) return false;
     var changed = false;
+    var keepRedstone = readTileRedstoneControl(be);
     try {
         if (vanillaizeApothTileFields(be)) changed = true;
+        keepRedstone = keepRedstone || readTileRedstoneControl(be);
     } catch (e1) {}
 
     /* NBT round-trip for Java levels without KubeJS block wrappers. */
@@ -415,10 +469,10 @@ function vanillaizeSpawnerBlockEntity(be) {
             }
         } catch (eSer) {}
 
+        keepRedstone = keepRedstone || nbtGetBool(tag, "redstone_control");
+
         if (tag != null && nbtNeedsVanillaReset(tag)) {
-            var keepRedstone = nbtGetBool(tag, "redstone_control");
-            if (applyVanillaStatsToNbt(tag)) {
-                if (keepRedstone) nbtPutBool(tag, "redstone_control", true);
+            if (applyVanillaStatsToNbt(tag, keepRedstone)) {
                 try {
                     be.load(tag);
                     changed = true;
@@ -432,13 +486,12 @@ function vanillaizeSpawnerBlockEntity(be) {
                     be.setChanged();
                 } catch (eCh) {}
             }
-        } else if (tag != null && nbtGetBool(tag, "redstone_control")) {
-            /* Ensure field stays true after other field clears. */
-            try {
-                be.redstoneControl = true;
-            } catch (eR) {}
         }
     } catch (eNbt) {}
+
+    if (keepRedstone) {
+        writeTileRedstoneControl(be, true);
+    }
     return changed;
 }
 
@@ -586,7 +639,8 @@ function stripSpawnerItemNbt(stack) {
 
     var changed = false;
     if (bet != null && nbtNeedsVanillaReset(bet)) {
-        changed = applyVanillaStatsToNbt(bet) || changed;
+        var keepItemRedstone = nbtGetBool(bet, "redstone_control");
+        changed = applyVanillaStatsToNbt(bet, keepItemRedstone) || changed;
         try {
             tag.put("BlockEntityTag", bet);
         } catch (ePut) {
@@ -598,9 +652,83 @@ function stripSpawnerItemNbt(stack) {
 
     /* Some stacks store stats on the root tag too. */
     if (nbtNeedsVanillaReset(tag)) {
-        changed = applyVanillaStatsToNbt(tag) || changed;
+        var keepRootRedstone = nbtGetBool(tag, "redstone_control");
+        changed = applyVanillaStatsToNbt(tag, keepRootRedstone) || changed;
     }
     return changed;
+}
+
+function recipeIdString(recipe) {
+    try {
+        return String(recipe.getId());
+    } catch (e1) {
+        try {
+            return String(recipe.id);
+        } catch (e2) {
+            return "";
+        }
+    }
+}
+
+/*
+ * Keep Apotheosis comparator recipes:
+ *   apotheosis:spawner/redstone_control
+ *   apotheosis:spawner/redstone_control_inverted
+ * ID match is authoritative; stat_changes parse is a secondary check.
+ */
+function isRedstoneControlModifierRecipe(recipe) {
+    var rid = recipeIdString(recipe).toLowerCase();
+    if (rid.indexOf("redstone_control") >= 0) return true;
+
+    try {
+        var json = recipe.json;
+        var changes = null;
+        try {
+            changes = json.get("stat_changes");
+        } catch (e1) {
+            try {
+                changes = json.stat_changes;
+            } catch (e2) {}
+        }
+        if (changes == null) return false;
+
+        var size = 0;
+        try {
+            size = changes.size();
+        } catch (eSize) {
+            try {
+                size = changes.length;
+            } catch (eLen) {
+                size = 0;
+            }
+        }
+        if (size <= 0) return false;
+
+        for (var i = 0; i < size; i++) {
+            var entry = null;
+            try {
+                entry = changes.get(i);
+            } catch (eGet) {
+                entry = changes[i];
+            }
+            var text = String(entry);
+            try {
+                if (entry != null && entry.get) {
+                    var id = entry.get("id");
+                    if (id != null) text = String(id);
+                }
+            } catch (eId) {}
+            try {
+                if (entry != null && entry.id != null) text = String(entry.id);
+            } catch (eId2) {}
+            if (String(text).toLowerCase().indexOf("redstone_control") < 0) {
+                return false;
+            }
+        }
+        return true;
+    } catch (eParse) {
+        return false;
+    }
 }
 
 function containerSize(container) {
@@ -682,81 +810,30 @@ function purgeSpawnerItems(player) {
 ServerEvents.recipes(function (event) {
     var removed = 0;
     var kept = 0;
+    var keptIds = [];
 
     /*
-     * Keep only modifiers whose stat_changes are exclusively redstone_control.
+     * Keep only redstone_control (+ inverted) comparator modifiers.
      * Everything else (ignore light, no AI, delays, spawn count, etc.) goes.
      */
     event.forEachRecipe({ type: "apotheosis:spawner_modifier" }, function (recipe) {
+        var rid = recipeIdString(recipe);
         var keep = false;
         try {
-            var json = recipe.json;
-            var changes = null;
-            try {
-                changes = json.get("stat_changes");
-            } catch (e1) {
-                try {
-                    changes = json.stat_changes;
-                } catch (e2) {}
-            }
-            if (changes != null) {
-                var size = 0;
-                try {
-                    size = changes.size();
-                } catch (eSize) {
-                    try {
-                        size = changes.length;
-                    } catch (eLen) {
-                        size = 0;
-                    }
-                }
-                if (size > 0) {
-                    keep = true;
-                    for (var i = 0; i < size; i++) {
-                        var entry = null;
-                        try {
-                            entry = changes.get(i);
-                        } catch (eGet) {
-                            entry = changes[i];
-                        }
-                        var text = String(entry);
-                        try {
-                            if (entry.get) {
-                                var id = entry.get("id") || entry.get("type") || entry.get("stat");
-                                if (id != null) text = String(id);
-                            }
-                        } catch (eId) {}
-                        text = text.toLowerCase();
-                        if (text.indexOf("redstone_control") < 0) {
-                            keep = false;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                /* Unknown shape - also keep if recipe id mentions redstone. */
-                try {
-                    var rid = String(recipe.getId());
-                    if (rid.toLowerCase().indexOf("redstone") >= 0) keep = true;
-                } catch (eRid) {}
-            }
+            keep = isRedstoneControlModifierRecipe(recipe);
         } catch (eParse) {
-            keep = false;
+            keep = rid.toLowerCase().indexOf("redstone_control") >= 0;
         }
 
         if (keep) {
             kept++;
-            if (DEBUG_SPAWNER) {
-                try {
-                    console.info(
-                        "[Apotheosis Spawner] Keeping redstone modifier: " +
-                            recipe.getId()
-                    );
-                } catch (eLog) {}
-            }
+            keptIds.push(rid);
+            console.info(
+                "[Apotheosis Spawner] Keeping redstone modifier: " + rid
+            );
         } else {
             try {
-                event.remove({ id: recipe.getId() });
+                event.remove({ id: rid });
                 removed++;
             } catch (eRem) {
                 try {
@@ -772,7 +849,9 @@ ServerEvents.recipes(function (event) {
             removed +
             ", kept " +
             kept +
-            " redstone_control."
+            " redstone_control" +
+            (keptIds.length > 0 ? " [" + keptIds.join(", ") + "]" : " (NONE - comparator upgrade broken)") +
+            "."
     );
 });
 
