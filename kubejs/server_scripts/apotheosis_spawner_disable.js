@@ -394,6 +394,54 @@ function vanillaizeSpawnerBlock(block) {
     return changed;
 }
 
+function vanillaizeSpawnerBlockEntity(be) {
+    if (be == null) return false;
+    var changed = false;
+    try {
+        if (vanillaizeApothTileFields(be)) changed = true;
+    } catch (e1) {}
+
+    /* NBT round-trip for Java levels without KubeJS block wrappers. */
+    try {
+        var tag = null;
+        try {
+            if (typeof be.saveWithoutMetadata === "function") {
+                tag = be.saveWithoutMetadata();
+            }
+        } catch (eSave) {}
+        try {
+            if (tag == null && typeof be.serializeNBT === "function") {
+                tag = be.serializeNBT();
+            }
+        } catch (eSer) {}
+
+        if (tag != null && nbtNeedsVanillaReset(tag)) {
+            var keepRedstone = nbtGetBool(tag, "redstone_control");
+            if (applyVanillaStatsToNbt(tag)) {
+                if (keepRedstone) nbtPutBool(tag, "redstone_control", true);
+                try {
+                    be.load(tag);
+                    changed = true;
+                } catch (eLoad) {
+                    try {
+                        be.deserializeNBT(tag);
+                        changed = true;
+                    } catch (eLoad2) {}
+                }
+                try {
+                    be.setChanged();
+                } catch (eCh) {}
+            }
+        } else if (tag != null && nbtGetBool(tag, "redstone_control")) {
+            /* Ensure field stays true after other field clears. */
+            try {
+                be.redstoneControl = true;
+            } catch (eR) {}
+        }
+    } catch (eNbt) {}
+    return changed;
+}
+
 function vanillaizeSpawnersInChunk(level, chunkX, chunkZ) {
     if (level == null) return 0;
     var count = 0;
@@ -434,11 +482,9 @@ function vanillaizeSpawnersInChunk(level, chunkX, chunkZ) {
             var be = null;
             var pos = null;
             try {
-                /* entrySet style */
                 be = next.getValue();
                 pos = next.getKey();
             } catch (eEntry) {
-                /* values() style */
                 be = next;
                 try {
                     pos = be.getBlockPos();
@@ -448,14 +494,14 @@ function vanillaizeSpawnersInChunk(level, chunkX, chunkZ) {
 
             var did = false;
             try {
-                if (pos != null) {
+                if (pos != null && typeof level.getBlock === "function") {
                     var block = level.getBlock(pos.x, pos.y, pos.z);
                     if (vanillaizeSpawnerBlock(block)) did = true;
                 }
             } catch (eBlock) {}
             if (!did) {
                 try {
-                    if (vanillaizeApothTileFields(be)) did = true;
+                    if (vanillaizeSpawnerBlockEntity(be)) did = true;
                 } catch (eTile) {}
             }
             if (did) count++;
@@ -731,107 +777,97 @@ ServerEvents.recipes(function (event) {
 });
 
 /*
- * Chunk load via Forge event (LevelEvents.loadedChunk does not exist on
- * this KubeJS 1.20.1 build). Falls back to player nearby scan below.
+ * Chunk load is queued by startup_scripts/apotheosis_spawner_chunk_hook.js
+ * (ForgeEvents only works from startup on this KubeJS build).
+ * Server tick drains that queue; player nearby scan is the fallback.
  */
-function handleForgeChunkLoad(event) {
+function drainQueuedChunks(server) {
+    if (server == null) return 0;
     try {
+        if (typeof global === "undefined" || global.apothSpawnerChunkQueue == null) {
+            return 0;
+        }
+    } catch (eG) {
+        return 0;
+    }
+
+    var queue = global.apothSpawnerChunkQueue;
+    if (queue.length <= 0) return 0;
+
+    var processed = 0;
+    var converted = 0;
+    var maxPerTick = 8;
+
+    while (queue.length > 0 && processed < maxPerTick) {
+        var item = queue.shift();
+        processed++;
+        if (item == null) continue;
+
         var level = null;
-        var chunk = null;
         try {
-            level = event.getLevel();
-        } catch (e1) {
-            try {
-                level = event.level;
-            } catch (e2) {}
-        }
-        try {
-            chunk = event.getChunk();
-        } catch (e3) {
-            try {
-                chunk = event.chunk;
-            } catch (e4) {}
-        }
-        if (level == null || chunk == null) return;
-
-        /* Client / temporary levels: skip. */
-        try {
-            if (level.isClientSide && level.isClientSide()) return;
-        } catch (eClient) {
-            try {
-                if (level.clientSide) return;
-            } catch (eClient2) {}
-        }
-
-        var cx = 0;
-        var cz = 0;
-        try {
-            var pos = chunk.getPos();
-            cx = pos.x;
-            cz = pos.z;
-        } catch (ePos) {
-            try {
-                cx = chunk.x;
-                cz = chunk.z;
-            } catch (ePos2) {
-                return;
+            var levels = server.getAllLevels();
+            var it = levels.iterator();
+            while (it.hasNext()) {
+                var lvl = it.next();
+                var dim = "";
+                try {
+                    dim = String(lvl.dimension);
+                } catch (e1) {
+                    try {
+                        dim = String(lvl.dimension.toString());
+                    } catch (e2) {
+                        try {
+                            dim = String(lvl.registryKey().location());
+                        } catch (e3) {}
+                    }
+                }
+                if (dim === String(item.dim) || dim.indexOf(String(item.dim)) >= 0) {
+                    level = lvl;
+                    break;
+                }
+                /* Overworld default match helpers */
+                if (
+                    String(item.dim).indexOf("overworld") >= 0 &&
+                    dim.indexOf("overworld") >= 0
+                ) {
+                    level = lvl;
+                    break;
+                }
             }
+        } catch (eLevels) {
+            try {
+                level = server.overworld();
+            } catch (eOw) {}
         }
 
-        var n = vanillaizeSpawnersInChunk(level, cx, cz);
+        /* Prefer KubeJS wrapped level when available. */
+        try {
+            if (level != null && server.getLevel) {
+                /* keep Java level; vanillaizeSpawnersInChunk uses getChunk/getBlock */
+            }
+        } catch (eWrap) {}
+
+        if (level == null) continue;
+        var n = vanillaizeSpawnersInChunk(level, item.x, item.z);
         if (n > 0) {
+            converted += n;
             console.info(
                 "[Apotheosis Spawner] Vanillaized " +
                     n +
                     " spawner(s) in chunk " +
-                    cx +
+                    item.x +
                     "," +
-                    cz
+                    item.z +
+                    " (" +
+                    item.dim +
+                    ")"
             );
         }
-    } catch (err) {
-        if (DEBUG_SPAWNER) {
-            console.error("[Apotheosis Spawner] ChunkEvent.Load error: " + err);
-        }
     }
+    return converted;
 }
 
-var chunkLoadHooked = false;
-try {
-    if (typeof ForgeEvents !== "undefined" && ForgeEvents.onEvent) {
-        ForgeEvents.onEvent(
-            "net.minecraftforge.event.level.ChunkEvent$Load",
-            handleForgeChunkLoad
-        );
-        chunkLoadHooked = true;
-        console.info(
-            "[Apotheosis Spawner] Forge ChunkEvent$Load handler registered."
-        );
-    }
-} catch (eForge) {
-    console.info(
-        "[Apotheosis Spawner] ForgeEvents ChunkEvent$Load unavailable: " + eForge
-    );
-}
-if (!chunkLoadHooked) {
-    try {
-        if (typeof NativeEvents !== "undefined" && NativeEvents.onEvent) {
-            NativeEvents.onEvent(
-                "net.minecraftforge.event.level.ChunkEvent$Load",
-                handleForgeChunkLoad
-            );
-            chunkLoadHooked = true;
-            console.info(
-                "[Apotheosis Spawner] NativeEvents ChunkEvent$Load handler registered."
-            );
-        }
-    } catch (eNative) {}
-}
-if (!chunkLoadHooked) {
-    console.info(
-        "[Apotheosis Spawner] No chunk-load event; using player nearby scan only."
-    );
-}
+/* Remove obsolete server-side ForgeEvents attempts (startup owns chunk load). */
 
 /* When an upgraded spawner is placed, immediately vanillaize it. */
 BlockEvents.placed("minecraft:spawner", function (event) {
@@ -853,6 +889,12 @@ PlayerEvents.loggedIn(function (event) {
                         " nearby spawner(s) to vanilla stats (mob type kept)."
                 );
             } catch (eTell) {}
+            console.info(
+                "[Apotheosis Spawner] Login scan vanillaized " +
+                    n +
+                    " spawner(s) for " +
+                    event.player.username
+            );
         }
     } catch (err) {
         console.error("[Apotheosis Spawner] loggedIn error: " + err);
@@ -864,8 +906,30 @@ PlayerEvents.tick(function (event) {
         var player = event.player;
         if (player == null) return;
         if (player.age % PLAYER_SCAN_INTERVAL !== 0) return;
-        vanillaizeNearPlayer(player);
+        var n = vanillaizeNearPlayer(player);
         purgeSpawnerItems(player);
+        if (n > 0) {
+            console.info(
+                "[Apotheosis Spawner] Nearby scan vanillaized " +
+                    n +
+                    " spawner(s) near " +
+                    player.username
+            );
+            try {
+                player.tell(
+                    "\u00A77Reset " +
+                        n +
+                        " nearby spawner(s) to vanilla stats (redstone control kept)."
+                );
+            } catch (eTell) {}
+        }
+    } catch (err) {}
+});
+
+ServerEvents.tick(function (event) {
+    try {
+        if (event.server.tickCount % 20 !== 0) return;
+        drainQueuedChunks(event.server);
     } catch (err) {}
 });
 
@@ -877,5 +941,5 @@ EntityEvents.spawned("minecraft:item", function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled (redstone control kept); world spawners vanillaized on chunk load / nearby scan."
+    "[DBZ Legacy Reborn] Apotheosis spawner upgrades disabled (redstone control kept); world spawners vanillaized via startup chunk queue + nearby scan."
 );
