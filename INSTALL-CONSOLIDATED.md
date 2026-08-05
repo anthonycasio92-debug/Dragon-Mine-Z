@@ -15,8 +15,8 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 ### server_scripts/ (then `/kubejs reload server_scripts` or `/reload`)
 | File | Purpose |
 |------|---------|
-| `kubejs/server_scripts/apotheosis_balance.js` | Gem/affix nerfs (life steal, healing received, overheal ~1-5%) |
-| `kubejs/server_scripts/lifesteal_cap.js` | Live hard caps: LS/OH 5%, Healing Received +5% |
+| `kubejs/server_scripts/apotheosis_balance.js` | Apotheosis balance; **life steal removed**; heal received/overheal ~1-5% |
+| `kubejs/server_scripts/lifesteal_cap.js` | Live hard caps: **Life Steal 0%**, OH 5%, Healing Received +5% |
 | `kubejs/server_scripts/apotheosis_spawner_disable.js` | Disable spawner upgrades; vanillaize; comparator redstone |
 | `kubejs/server_scripts/remove_silk_touch.js` | Strip Silk Touch (keep item) |
 | `kubejs/server_scripts/capsule_disable.js` | Capsule disable |

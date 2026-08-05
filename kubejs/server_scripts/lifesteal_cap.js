@@ -2,8 +2,8 @@
  * DBZ Legacy Reborn - Hard-cap healing attributes.
  *
  * Caps live AttributesLib values every second so old gear/gems cannot
- * exceed the nerfed band:
- *   attributeslib:life_steal        max 0.05  (5%)
+ * exceed the pack limits:
+ *   attributeslib:life_steal        max 0.00  (REMOVED / 0%)
  *   attributeslib:overheal          max 0.05  (5%)
  *   attributeslib:healing_received  max 1.05  (base 1.0 + 5%)
  *
@@ -19,7 +19,7 @@ var TICK_INTERVAL = 20;
 var CAPS = [
     {
         attr: "attributeslib:life_steal",
-        max: 0.05,
+        max: 0.0,
         name: "dbz_lifesteal_cap",
         uuid: "c4a1e8d2-5b73-4f0a-9d6e-2f8b1a0c7e55"
     },
@@ -44,7 +44,7 @@ var JavaReady = false;
 var UuidCache = {};
 
 console.info(
-    "[DBZ Legacy Reborn] Healing attribute hard caps loading (life steal / overheal / healing received)."
+    "[DBZ Legacy Reborn] Healing attribute hard caps loading (life steal REMOVED / overheal / healing received)."
 );
 
 function ensureJava() {
@@ -229,12 +229,12 @@ PlayerEvents.loggedIn(function (event) {
         );
         try {
             player.tell(
-                "\u00A77Healing caps: Received +" +
-                    formatHealReceived(hrAfter) +
-                    "% | Overheal " +
-                    formatPct(ohAfter) +
-                    "% | Life Steal " +
+                "\u00A77Healing caps: Life Steal " +
                     formatPct(lsAfter) +
+                    "% (disabled) | Overheal " +
+                    formatPct(ohAfter) +
+                    "% | Received +" +
+                    formatHealReceived(hrAfter) +
                     "%"
             );
         } catch (eTell) {}
@@ -253,5 +253,5 @@ PlayerEvents.tick(function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Healing attribute hard caps active (LS/OH <=5%, Healing Received <=+5%, MULTIPLY_TOTAL)."
+    "[DBZ Legacy Reborn] Healing attribute hard caps active (Life Steal=0%, OH<=5%, Healing Received <=+5%)."
 );

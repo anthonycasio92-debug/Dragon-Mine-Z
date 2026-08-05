@@ -9,12 +9,12 @@
  * Tyrannical Current HP Damage: removed
  * Giant Slaying Current HP Damage affix: disabled
  * Royal Family Current HP Damage: removed
- * Healing attrs nerfed to ~1-5%:
- *   - Life Steal: Blood Lord, Guardian, Vampiric affix
+ * Life Steal REMOVED from Apotheosis (Vampiric / Guardian / Blood Lord / Royalty).
+ * Other healing attrs nerfed to ~1-5%:
  *   - Healing Received: Blood Lord chest, Spiritual affix, Forest shield
  *   - Overheal: Guardian heavy weapon, Berserking affix
  *   - Blood Lord leech_block heal_factor: 1-5%
- *   - Runtime hard caps in lifesteal_cap.js (life steal / overheal / healing received)
+ *   - Runtime: lifesteal_cap.js forces life_steal to 0%; OH/+heal still capped
  *
  * Requires a full server restart or /reload after the script is loaded.
  *
@@ -28,7 +28,7 @@ console.info(
 
 ServerEvents.highPriorityData(function (event) {
     console.info(
-        "[Apotheosis Balance] highPriorityData running - applying healing attr nerfs..."
+        "[Apotheosis Balance] highPriorityData running - removing Apotheosis life steal..."
     );
 
     // Disable Giant Slaying percentage-current-health damage affix.
@@ -40,20 +40,13 @@ ServerEvents.highPriorityData(function (event) {
         types: []
     });
 
-    // Nerf Vampiric life steal affix to 1-5% (was ~15-40%).
+    // REMOVE Vampiric life steal affix entirely.
     event.addJson("apotheosis:affixes/sword/attribute/vampiric", {
         type: "apotheosis:attribute",
         attribute: "attributeslib:life_steal",
         operation: "ADDITION",
-        values: {
-            common: { min: 0.01, steps: 2, step: 0.005 },
-            uncommon: { min: 0.01, steps: 3, step: 0.005 },
-            rare: { min: 0.015, steps: 4, step: 0.005 },
-            epic: { min: 0.02, steps: 4, step: 0.005 },
-            mythic: { min: 0.025, steps: 5, step: 0.005 },
-            ancient: { min: 0.03, steps: 4, step: 0.005 }
-        },
-        types: ["sword", "trident"]
+        values: {},
+        types: []
     });
 
     // Nerf Spiritual healing received affix to +1-5% (was ~+10-50%).
@@ -86,7 +79,7 @@ ServerEvents.highPriorityData(function (event) {
         types: ["heavy_weapon"]
     });
 
-    // core/guardian - nerf life steal + overheal to 1-5%.
+    // core/guardian - life steal removed; overheal kept at 1-5%.
     event.addJson("apotheosis:gems/core/guardian", {
         variant: "guardian",
         weight: 10,
@@ -108,23 +101,6 @@ ServerEvents.highPriorityData(function (event) {
                     epic: 4,
                     mythic: 6,
                     ancient: 8
-                }
-            },
-            {
-                type: "apotheosis:attribute",
-                gem_class: {
-                    key: "light_weapon",
-                    types: ["sword", "trident"]
-                },
-                attribute: "attributeslib:life_steal",
-                operation: "ADDITION",
-                values: {
-                    common: 0.01,
-                    uncommon: 0.02,
-                    rare: 0.03,
-                    epic: 0.04,
-                    mythic: 0.045,
-                    ancient: 0.05
                 }
             },
             {
@@ -846,7 +822,6 @@ ServerEvents.highPriorityData(function (event) {
                     "attributeslib:fire_damage",
                     "attributeslib:ghost_health",
                     "attributeslib:healing_received",
-                    "attributeslib:life_steal",
                     "attributeslib:mining_speed",
                     "attributeslib:overheal",
                     "attributeslib:prot_pierce",
@@ -1013,21 +988,11 @@ ServerEvents.highPriorityData(function (event) {
                 "type": "apotheosis:attribute",
                 "gem_class": {
                     "key": "light_weapon",
-                    "types": [
-                        "sword",
-                        "trident"
-                    ]
+                    "types": []
                 },
                 "attribute": "attributeslib:life_steal",
                 "operation": "ADDITION",
-                "values": {
-                    "common": 0.01,
-                    "uncommon": 0.02,
-                    "rare": 0.03,
-                    "epic": 0.04,
-                    "mythic": 0.045,
-                    "ancient": 0.05
-                }
+                "values": {}
             },
             {
                 "type": "apotheosis:multi_attribute",
@@ -1471,9 +1436,9 @@ ServerEvents.highPriorityData(function (event) {
     });
 
     console.info(
-        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (life steal / healing received / overheal ~1-5%)."
+        "[DBZ Legacy Reborn] Applied Apotheosis balance: life steal REMOVED; healing received / overheal ~1-5%."
     );
     console.info(
-        "[DBZ Legacy Reborn] Note: existing gear keeps old rolls; lifesteal_cap.js hard-caps live healing attrs."
+        "[DBZ Legacy Reborn] Note: lifesteal_cap.js forces live life_steal to 0% for existing gear."
     );
 });

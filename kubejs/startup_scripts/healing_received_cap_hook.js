@@ -12,6 +12,7 @@
 
 var MAX_HEALING_RECEIVED = 1.05;
 var MAX_OVERHEAL = 0.05;
+var MAX_LIFE_STEAL = 0.0; /* Apotheosis life steal removed */
 
 console.info("[Heal Cap] startup heal/overheal event hooks evaluating...");
 
@@ -120,9 +121,6 @@ try {
                 }
                 if (!isPlayerEntity(attacker)) return;
 
-                var overheal = readAttr(attacker, "attributeslib:overheal", 0);
-                if (!(overheal > MAX_OVERHEAL)) return;
-
                 var dmg = 0;
                 try {
                     dmg = Number(event.getAmount());
@@ -132,38 +130,56 @@ try {
                 if (!(dmg > 0)) return;
 
                 /*
-                 * AttributesLib already did:
-                 *   absorption += dmg * overheal  (clamped to 50% max HP)
-                 * Remove the excess above dmg * MAX_OVERHEAL.
+                 * AttributesLib already applied life steal heal and overheal
+                 * absorption. Undo anything above pack caps.
                  */
-                var excess = dmg * (overheal - MAX_OVERHEAL);
-                if (!(excess > 0)) return;
-
-                var abs = 0;
-                try {
-                    abs = Number(attacker.getAbsorptionAmount());
-                } catch (eA) {
-                    try {
-                        abs = Number(attacker.absorptionAmount);
-                    } catch (eA2) {
-                        return;
+                var lifesteal = readAttr(
+                    attacker,
+                    "attributeslib:life_steal",
+                    0
+                );
+                if (lifesteal > MAX_LIFE_STEAL) {
+                    var undo = dmg * (lifesteal - MAX_LIFE_STEAL);
+                    if (undo > 0) {
+                        try {
+                            var hp = Number(attacker.getHealth());
+                            var nextHp = hp - undo;
+                            if (nextHp < 1) nextHp = 1;
+                            attacker.setHealth(nextHp);
+                        } catch (eHp) {}
                     }
                 }
 
-                var next = abs - excess;
-                if (next < 0) next = 0;
-                try {
-                    attacker.setAbsorptionAmount(next);
-                } catch (eSet) {
-                    try {
-                        attacker.absorptionAmount = next;
-                    } catch (eSet2) {}
+                var overheal = readAttr(attacker, "attributeslib:overheal", 0);
+                if (overheal > MAX_OVERHEAL) {
+                    var excess = dmg * (overheal - MAX_OVERHEAL);
+                    if (excess > 0) {
+                        var abs = 0;
+                        try {
+                            abs = Number(attacker.getAbsorptionAmount());
+                        } catch (eA) {
+                            try {
+                                abs = Number(attacker.absorptionAmount);
+                            } catch (eA2) {
+                                abs = 0;
+                            }
+                        }
+                        var nextAbs = abs - excess;
+                        if (nextAbs < 0) nextAbs = 0;
+                        try {
+                            attacker.setAbsorptionAmount(nextAbs);
+                        } catch (eSet) {
+                            try {
+                                attacker.absorptionAmount = nextAbs;
+                            } catch (eSet2) {}
+                        }
+                    }
                 }
             } catch (err) {}
         }
     );
     console.info(
-        "[Heal Cap] LivingHurtEvent backup registered (Overheal max 5%)."
+        "[Heal Cap] LivingHurtEvent backup registered (Life Steal=0%, Overheal max 5%)."
     );
 } catch (err) {
     console.error("[Heal Cap] LivingHurtEvent register failed: " + err);

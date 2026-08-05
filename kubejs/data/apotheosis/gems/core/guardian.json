@@ -24,23 +24,6 @@
     {
       "type": "apotheosis:attribute",
       "gem_class": {
-        "key": "light_weapon",
-        "types": ["sword", "trident"]
-      },
-      "attribute": "attributeslib:life_steal",
-      "operation": "ADDITION",
-      "values": {
-        "common": 0.01,
-        "uncommon": 0.02,
-        "rare": 0.03,
-        "epic": 0.04,
-        "mythic": 0.045,
-        "ancient": 0.05
-      }
-    },
-    {
-      "type": "apotheosis:attribute",
-      "gem_class": {
         "key": "heavy_weapon",
         "types": ["heavy_weapon"]
       },
