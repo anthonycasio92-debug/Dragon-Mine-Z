@@ -45,7 +45,7 @@ ServerEvents.highPriorityData(function (event) {
         types: ["sword", "trident"]
     });
 
-    // core/guardian — nerf light-weapon life steal to 1-5% (was 5-30%).
+    // core/guardian - nerf light-weapon life steal to 1-5% (was 5-30%).
     event.addJson("apotheosis:gems/core/guardian", {
         variant: "guardian",
         weight: 10,
