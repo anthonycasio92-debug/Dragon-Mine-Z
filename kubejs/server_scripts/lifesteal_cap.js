@@ -7,6 +7,10 @@
  *   attributeslib:overheal          max 0.05  (5%)
  *   attributeslib:healing_received  max 1.05  (base 1.0 + 5%)
  *
+ * IMPORTANT: Healing Received uses MULTIPLY_* modifiers. An ADDITION
+ * "delta" cap does not work on it. All caps use MULTIPLY_TOTAL:
+ *   final = value * (1 + (max/value - 1)) = max
+ *
  * Pure ASCII. Reload: /kubejs reload server_scripts
  */
 
@@ -57,7 +61,7 @@ function ensureJava() {
         for (var i = 0; i < CAPS.length; i++) {
             UuidCache[CAPS[i].name] = UUIDClass.fromString(CAPS[i].uuid);
         }
-        console.info("[Heal Cap] Java AttributeModifier ready.");
+        console.info("[Heal Cap] Java AttributeModifier ready (MULTIPLY_TOTAL caps).");
     } catch (err) {
         AttributeModifierClass = null;
         console.info(
@@ -76,6 +80,27 @@ function getAttrInstance(entity, attrId) {
     }
 }
 
+function readAttrValue(entity, attrId) {
+    try {
+        var inst = getAttrInstance(entity, attrId);
+        if (inst != null) return Number(inst.getValue());
+    } catch (e1) {}
+    try {
+        return Number(entity.getAttributeValue(attrId));
+    } catch (e2) {}
+    return 0;
+}
+
+/*
+ * Scale final attribute value down to max using MULTIPLY_TOTAL.
+ * Works for both ADDITION-heavy attrs (life steal) and MULTIPLY attrs
+ * (healing received).
+ */
+function multiplyCapAmount(value, max) {
+    if (!(value > max) || !(value > 0)) return 0;
+    return max / value - 1.0;
+}
+
 function clampOneJava(entity, cap) {
     var inst = getAttrInstance(entity, cap.attr);
     if (inst == null) return false;
@@ -90,14 +115,15 @@ function clampOneJava(entity, cap) {
     } catch (eVal) {
         return false;
     }
-    if (!(value > cap.max)) return false;
+    var amount = multiplyCapAmount(value, cap.max);
+    if (amount === 0) return false;
 
     try {
         var mod = new AttributeModifierClass(
             uuid,
             cap.name,
-            cap.max - value,
-            OperationClass.ADDITION
+            amount,
+            OperationClass.MULTIPLY_TOTAL
         );
         try {
             inst.addTransientModifier(mod);
@@ -106,6 +132,7 @@ function clampOneJava(entity, cap) {
         }
         return true;
     } catch (eAdd) {
+        console.error("[Heal Cap] multiply cap failed for " + cap.attr + ": " + eAdd);
         return false;
     }
 }
@@ -119,25 +146,30 @@ function clampOneKube(entity, cap) {
         } catch (e2) {}
     }
 
-    var value = 0;
-    try {
-        var inst = entity.getAttribute(cap.attr);
-        if (inst == null) return false;
-        value = Number(inst.getValue());
-    } catch (e3) {
-        try {
-            value = Number(entity.getAttributeValue(cap.attr));
-        } catch (e4) {
-            return false;
-        }
-    }
-    if (!(value > cap.max)) return false;
+    var value = readAttrValue(entity, cap.attr);
+    var amount = multiplyCapAmount(value, cap.max);
+    if (amount === 0) return false;
 
     try {
-        entity.modifyAttribute(cap.attr, cap.name, cap.max - value, "addition");
+        entity.modifyAttribute(
+            cap.attr,
+            cap.name,
+            amount,
+            "multiply_total"
+        );
         return true;
     } catch (e5) {
-        return false;
+        try {
+            entity.modifyAttribute(
+                cap.attr,
+                cap.name,
+                amount,
+                "MULTIPLY_TOTAL"
+            );
+            return true;
+        } catch (e6) {
+            return false;
+        }
     }
 }
 
@@ -154,18 +186,36 @@ function clampAll(entity) {
     return any;
 }
 
+function formatHealReceived(value) {
+    /* base 1.0 => +0%; 1.05 => +5% */
+    var pct = (Number(value) - 1.0) * 100.0;
+    if (pct < 0) pct = 0;
+    return (Math.round(pct * 10) / 10).toString();
+}
+
 PlayerEvents.loggedIn(function (event) {
     try {
-        if (clampAll(event.player)) {
-            console.info(
-                "[Heal Cap] Clamped healing attrs for " + event.player.username
+        var player = event.player;
+        var before = readAttrValue(player, "attributeslib:healing_received");
+        var clamped = clampAll(player);
+        var after = readAttrValue(player, "attributeslib:healing_received");
+        console.info(
+            "[Heal Cap] " +
+                player.username +
+                " healing_received before=" +
+                before +
+                " after=" +
+                after +
+                " clamped=" +
+                clamped
+        );
+        try {
+            player.tell(
+                "\u00A77Healing Received capped at +5% (now +" +
+                    formatHealReceived(after) +
+                    "%)."
             );
-            try {
-                event.player.tell(
-                    "\u00A77Healing attributes capped (Life Steal / Overheal / Healing Received)."
-                );
-            } catch (eTell) {}
-        }
+        } catch (eTell) {}
     } catch (err) {
         console.error("[Heal Cap] login error: " + err);
     }
@@ -181,5 +231,5 @@ PlayerEvents.tick(function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Healing attribute hard caps active (LS/OH <=5%, Healing Received <=+5%)."
+    "[DBZ Legacy Reborn] Healing attribute hard caps active (LS/OH <=5%, Healing Received <=+5%, MULTIPLY_TOTAL)."
 );
