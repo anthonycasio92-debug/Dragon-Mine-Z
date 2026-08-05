@@ -1,66 +1,74 @@
 /*
- * DBZ Legacy Reborn - LivingHealEvent backup cap for Healing Received.
+ * DBZ Legacy Reborn - Combat event backup caps for healing attrs.
  *
  * Pure ASCII. ForgeEvents only work from startup_scripts on this KubeJS build.
- * AttributesLib multiplies heals by healing_received at HIGH priority.
- * We correct the amount afterward if the attribute is still above +5%.
  *
+ * 1) LivingHealEvent: clamp Healing Received to +5% (max factor 1.05)
+ * 2) LivingHurtEvent: clamp Overheal absorption gain to 5% of damage
+ *
+ * AttributesLib applies these at HIGH priority; we correct afterward.
  * Requires a full restart (or /kubejs reload startup_scripts) once.
  */
 
 var MAX_HEALING_RECEIVED = 1.05;
+var MAX_OVERHEAL = 0.05;
 
-console.info("[Heal Cap] startup LivingHealEvent hook evaluating...");
+console.info("[Heal Cap] startup heal/overheal event hooks evaluating...");
+
+function eventEntity(event) {
+    try {
+        return event.getEntity();
+    } catch (e1) {
+        try {
+            return event.entity;
+        } catch (e2) {
+            return null;
+        }
+    }
+}
+
+function isPlayerEntity(entity) {
+    if (entity == null) return false;
+    try {
+        if (entity.isPlayer && entity.isPlayer()) return true;
+    } catch (e1) {}
+    try {
+        if (entity.player) return true;
+    } catch (e2) {}
+    try {
+        var cn = String(entity.getClass().getName());
+        if (cn.indexOf("ServerPlayer") >= 0 || cn.indexOf("Player") >= 0) {
+            return true;
+        }
+    } catch (e3) {}
+    return false;
+}
+
+function readAttr(entity, attrId, fallback) {
+    try {
+        return Number(entity.getAttributeValue(attrId));
+    } catch (e1) {
+        try {
+            var inst = entity.getAttribute(attrId);
+            if (inst != null) return Number(inst.getValue());
+        } catch (e2) {}
+    }
+    return fallback;
+}
 
 try {
     ForgeEvents.onEvent(
         "net.minecraftforge.event.entity.living.LivingHealEvent",
         function (event) {
             try {
-                var entity = null;
-                try {
-                    entity = event.getEntity();
-                } catch (e1) {
-                    entity = event.entity;
-                }
-                if (entity == null) return;
+                var entity = eventEntity(event);
+                if (!isPlayerEntity(entity)) return;
 
-                var isPlayer = false;
-                try {
-                    isPlayer = entity.isPlayer && entity.isPlayer();
-                } catch (e2) {
-                    try {
-                        isPlayer = !!entity.player;
-                    } catch (e3) {}
-                }
-                if (!isPlayer) {
-                    try {
-                        var cn = String(entity.getClass().getName());
-                        if (cn.indexOf("Player") < 0 && cn.indexOf("player") < 0) {
-                            return;
-                        }
-                        isPlayer = true;
-                    } catch (e4) {
-                        return;
-                    }
-                }
-
-                var factor = 1.0;
-                try {
-                    factor = Number(
-                        entity.getAttributeValue("attributeslib:healing_received")
-                    );
-                } catch (eAttr) {
-                    try {
-                        var inst = entity.getAttribute(
-                            "attributeslib:healing_received"
-                        );
-                        if (inst != null) factor = Number(inst.getValue());
-                    } catch (eAttr2) {
-                        return;
-                    }
-                }
-
+                var factor = readAttr(
+                    entity,
+                    "attributeslib:healing_received",
+                    1.0
+                );
                 if (!(factor > MAX_HEALING_RECEIVED)) return;
 
                 var amount = 0;
@@ -71,7 +79,6 @@ try {
                 }
                 if (!(amount > 0)) return;
 
-                /* amount is already original * factor; scale to original * max */
                 var scaled = amount * (MAX_HEALING_RECEIVED / factor);
                 try {
                     event.setAmount(scaled);
@@ -84,8 +91,80 @@ try {
         }
     );
     console.info(
-        "[Heal Cap] startup LivingHealEvent backup registered (Healing Received max +5%)."
+        "[Heal Cap] LivingHealEvent backup registered (Healing Received max +5%)."
     );
 } catch (err) {
-    console.error("[Heal Cap] startup ForgeEvents failed: " + err);
+    console.error("[Heal Cap] LivingHealEvent register failed: " + err);
+}
+
+try {
+    ForgeEvents.onEvent(
+        "net.minecraftforge.event.entity.living.LivingHurtEvent",
+        function (event) {
+            try {
+                var source = null;
+                try {
+                    source = event.getSource();
+                } catch (eS) {
+                    source = event.source;
+                }
+                if (source == null) return;
+
+                var attacker = null;
+                try {
+                    attacker = source.getEntity();
+                } catch (eE) {
+                    try {
+                        attacker = source.entity;
+                    } catch (eE2) {}
+                }
+                if (!isPlayerEntity(attacker)) return;
+
+                var overheal = readAttr(attacker, "attributeslib:overheal", 0);
+                if (!(overheal > MAX_OVERHEAL)) return;
+
+                var dmg = 0;
+                try {
+                    dmg = Number(event.getAmount());
+                } catch (eD) {
+                    dmg = Number(event.amount);
+                }
+                if (!(dmg > 0)) return;
+
+                /*
+                 * AttributesLib already did:
+                 *   absorption += dmg * overheal  (clamped to 50% max HP)
+                 * Remove the excess above dmg * MAX_OVERHEAL.
+                 */
+                var excess = dmg * (overheal - MAX_OVERHEAL);
+                if (!(excess > 0)) return;
+
+                var abs = 0;
+                try {
+                    abs = Number(attacker.getAbsorptionAmount());
+                } catch (eA) {
+                    try {
+                        abs = Number(attacker.absorptionAmount);
+                    } catch (eA2) {
+                        return;
+                    }
+                }
+
+                var next = abs - excess;
+                if (next < 0) next = 0;
+                try {
+                    attacker.setAbsorptionAmount(next);
+                } catch (eSet) {
+                    try {
+                        attacker.absorptionAmount = next;
+                    } catch (eSet2) {}
+                }
+            } catch (err) {}
+        }
+    );
+    console.info(
+        "[Heal Cap] LivingHurtEvent backup registered (Overheal max 5%)."
+    );
+} catch (err) {
+    console.error("[Heal Cap] LivingHurtEvent register failed: " + err);
 }

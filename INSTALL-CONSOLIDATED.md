@@ -54,7 +54,7 @@ Battle report shows once (no DM+broadcast double).
 - `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` — chunk-load queue for spawner vanillaize (**full restart** once)
 - `kubejs/server_scripts/apotheosis_balance.js` — gem/affix balance; life steal / healing received / overheal ~**1-5%**
 - `kubejs/server_scripts/lifesteal_cap.js` — **hard-caps** live attrs via MULTIPLY_TOTAL (LS/OH **5%**, healing received **+5%**)
-- `kubejs/startup_scripts/healing_received_cap_hook.js` — LivingHealEvent backup cap (**full restart** once)
+- `kubejs/startup_scripts/healing_received_cap_hook.js` — heal + overheal combat backups (**full restart** once)
 - `kubejs/data/apotheosis/...` — datapack overrides for Vampiric, Spiritual, Berserking, Guardian, Forest
 - Also present: `capsule_disable.js`
 

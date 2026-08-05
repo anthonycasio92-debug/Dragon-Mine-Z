@@ -193,27 +193,49 @@ function formatHealReceived(value) {
     return (Math.round(pct * 10) / 10).toString();
 }
 
+function formatPct(value) {
+    var pct = Number(value) * 100.0;
+    if (pct < 0) pct = 0;
+    return (Math.round(pct * 10) / 10).toString();
+}
+
 PlayerEvents.loggedIn(function (event) {
     try {
         var player = event.player;
-        var before = readAttrValue(player, "attributeslib:healing_received");
+        var hrBefore = readAttrValue(player, "attributeslib:healing_received");
+        var ohBefore = readAttrValue(player, "attributeslib:overheal");
+        var lsBefore = readAttrValue(player, "attributeslib:life_steal");
         var clamped = clampAll(player);
-        var after = readAttrValue(player, "attributeslib:healing_received");
+        var hrAfter = readAttrValue(player, "attributeslib:healing_received");
+        var ohAfter = readAttrValue(player, "attributeslib:overheal");
+        var lsAfter = readAttrValue(player, "attributeslib:life_steal");
         console.info(
             "[Heal Cap] " +
                 player.username +
-                " healing_received before=" +
-                before +
-                " after=" +
-                after +
+                " healing_received " +
+                hrBefore +
+                "->" +
+                hrAfter +
+                " overheal " +
+                ohBefore +
+                "->" +
+                ohAfter +
+                " life_steal " +
+                lsBefore +
+                "->" +
+                lsAfter +
                 " clamped=" +
                 clamped
         );
         try {
             player.tell(
-                "\u00A77Healing Received capped at +5% (now +" +
-                    formatHealReceived(after) +
-                    "%)."
+                "\u00A77Healing caps: Received +" +
+                    formatHealReceived(hrAfter) +
+                    "% | Overheal " +
+                    formatPct(ohAfter) +
+                    "% | Life Steal " +
+                    formatPct(lsAfter) +
+                    "%"
             );
         } catch (eTell) {}
     } catch (err) {
