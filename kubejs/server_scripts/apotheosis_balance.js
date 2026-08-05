@@ -17,9 +17,19 @@
  *   - Runtime hard caps in lifesteal_cap.js (life steal / overheal / healing received)
  *
  * Requires a full server restart or /reload after the script is loaded.
+ *
+ * NOTE: /kubejs reload server_scripts only registers this file.
+ * Datapack overrides (gems/affixes) apply on /reload or world restart.
  */
 
+console.info(
+    "[Apotheosis Balance] script registered. Run /reload (or restart) to apply gem/affix JSON nerfs."
+);
+
 ServerEvents.highPriorityData(function (event) {
+    console.info(
+        "[Apotheosis Balance] highPriorityData running - applying healing attr nerfs..."
+    );
 
     // Disable Giant Slaying percentage-current-health damage affix.
     event.addJson("apotheosis:affixes/heavy_weapon/attribute/giant_slaying", {
