@@ -1250,7 +1250,10 @@ ServerEvents.highPriorityData(function (event) {
         types: ["helmet", "chestplate", "leggings", "boots"]
     });
 
-    console.log(
-        "[DBZ Legacy Reborn] Applied Apotheosis gem + Blessed armor balance overrides."
+    console.info(
+        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (Blood Lord / Vampiric life steal 1-5%)."
+    );
+    console.info(
+        "[DBZ Legacy Reborn] Note: existing gear keeps old rolls; lifesteal_cap.js hard-caps live attribute at 5%."
     );
 });

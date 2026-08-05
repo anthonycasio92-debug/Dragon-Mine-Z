@@ -52,7 +52,10 @@ Battle report shows once (no DM+broadcast double).
 - `kubejs/server_scripts/remove_silk_touch.js` — strips **Silk Touch** from items/books (keeps the item)
 - `kubejs/server_scripts/apotheosis_spawner_disable.js` — disables Apotheosis spawner upgrades; vanillaizes world spawners; **comparator right-click** enables redstone control
 - `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` — chunk-load queue for spawner vanillaize (**full restart** once)
-- Also present: `apotheosis_balance.js`, `capsule_disable.js`
+- `kubejs/server_scripts/apotheosis_balance.js` — gem/affix balance; Blood Lord + Vampiric life steal rolls set to **1-5%**
+- `kubejs/server_scripts/lifesteal_cap.js` — **hard-caps** live `attributeslib:life_steal` at **5%** (existing gear included)
+- `kubejs/data/apotheosis/affixes/sword/attribute/vampiric.json` — datapack override for Vampiric
+- Also present: `capsule_disable.js`
 
 Reload server scripts with `/kubejs reload server_scripts` (or `/reload`). Startup script needs a server restart.
 
