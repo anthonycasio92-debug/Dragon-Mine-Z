@@ -1,0 +1,12 @@
+{
+  "type": "apotheosis:attribute",
+  "attribute": "attributeslib:healing_received",
+  "operation": "MULTIPLY_TOTAL",
+  "values": {
+    "rare": { "min": 0.01, "steps": 2, "step": 0.005 },
+    "epic": { "min": 0.015, "steps": 3, "step": 0.005 },
+    "mythic": { "min": 0.02, "steps": 4, "step": 0.005 },
+    "ancient": { "min": 0.03, "steps": 4, "step": 0.005 }
+  },
+  "types": ["chestplate", "leggings"]
+}

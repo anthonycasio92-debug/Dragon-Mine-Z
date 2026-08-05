@@ -1,76 +1,87 @@
 /*
- * DBZ Legacy Reborn - Hard-cap AttributesLib life steal at 5%.
+ * DBZ Legacy Reborn - Hard-cap healing attributes.
  *
- * Apotheosis datapack/gem overrides only change NEW rolls. Existing gear
- * keeps old life_steal values in NBT. This script clamps the live attribute
- * every second so total life steal cannot exceed 5% in combat.
+ * Caps live AttributesLib values every second so old gear/gems cannot
+ * exceed the nerfed band:
+ *   attributeslib:life_steal        max 0.05  (5%)
+ *   attributeslib:overheal          max 0.05  (5%)
+ *   attributeslib:healing_received  max 1.05  (base 1.0 + 5%)
  *
  * Pure ASCII. Reload: /kubejs reload server_scripts
  */
 
-var LIFE_STEAL_ATTR = "attributeslib:life_steal";
-var CAP_MODIFIER_NAME = "dbz_lifesteal_cap";
-var MAX_LIFE_STEAL = 0.05; /* 5% */
 var TICK_INTERVAL = 20;
 
-/* Stable UUID so the cap modifier is idempotent. */
-var CAP_UUID = null;
+var CAPS = [
+    {
+        attr: "attributeslib:life_steal",
+        max: 0.05,
+        name: "dbz_lifesteal_cap",
+        uuid: "c4a1e8d2-5b73-4f0a-9d6e-2f8b1a0c7e55"
+    },
+    {
+        attr: "attributeslib:overheal",
+        max: 0.05,
+        name: "dbz_overheal_cap",
+        uuid: "d5b2f9e3-6c84-501b-ae7f-309c2b1d8f66"
+    },
+    {
+        attr: "attributeslib:healing_received",
+        max: 1.05,
+        name: "dbz_healing_received_cap",
+        uuid: "e6c3a0f4-7d95-612c-bf80-41ad3c2e9077"
+    }
+];
+
 var AttributeModifierClass = null;
 var OperationClass = null;
+var UUIDClass = null;
 var JavaReady = false;
+var UuidCache = {};
 
 console.info(
-    "[DBZ Legacy Reborn] Life Steal hard cap loading (max " +
-        MAX_LIFE_STEAL * 100 +
-        "%)."
+    "[DBZ Legacy Reborn] Healing attribute hard caps loading (life steal / overheal / healing received)."
 );
 
 function ensureJava() {
     if (JavaReady) return AttributeModifierClass != null;
     JavaReady = true;
     try {
-        var UUID = Java.loadClass("java.util.UUID");
-        CAP_UUID = UUID.fromString("c4a1e8d2-5b73-4f0a-9d6e-2f8b1a0c7e55");
+        UUIDClass = Java.loadClass("java.util.UUID");
         AttributeModifierClass = Java.loadClass(
             "net.minecraft.world.entity.ai.attributes.AttributeModifier"
         );
         OperationClass = Java.loadClass(
             "net.minecraft.world.entity.ai.attributes.AttributeModifier$Operation"
         );
-        console.info("[Life Steal Cap] Java AttributeModifier ready.");
+        for (var i = 0; i < CAPS.length; i++) {
+            UuidCache[CAPS[i].name] = UUIDClass.fromString(CAPS[i].uuid);
+        }
+        console.info("[Heal Cap] Java AttributeModifier ready.");
     } catch (err) {
         AttributeModifierClass = null;
         console.info(
-            "[Life Steal Cap] Java AttributeModifier unavailable, using KubeJS API: " +
+            "[Heal Cap] Java AttributeModifier unavailable, using KubeJS API: " +
                 err
         );
     }
     return AttributeModifierClass != null;
 }
 
-function getAttrInstance(entity) {
+function getAttrInstance(entity, attrId) {
     try {
-        return entity.getAttribute(LIFE_STEAL_ATTR);
+        return entity.getAttribute(attrId);
     } catch (e1) {
-        try {
-            return entity.attributes.getInstance(
-                Java.loadClass(
-                    "net.minecraft.core.registries.BuiltInRegistries"
-                ).ATTRIBUTE.get(LIFE_STEAL_ATTR)
-            );
-        } catch (e2) {
-            return null;
-        }
+        return null;
     }
 }
 
-function clampWithJava(entity) {
-    if (!ensureJava()) return false;
-    var inst = getAttrInstance(entity);
+function clampOneJava(entity, cap) {
+    var inst = getAttrInstance(entity, cap.attr);
     if (inst == null) return false;
-
+    var uuid = UuidCache[cap.name];
     try {
-        inst.removeModifier(CAP_UUID);
+        inst.removeModifier(uuid);
     } catch (eRem) {}
 
     var value = 0;
@@ -79,14 +90,13 @@ function clampWithJava(entity) {
     } catch (eVal) {
         return false;
     }
-
-    if (!(value > MAX_LIFE_STEAL)) return false;
+    if (!(value > cap.max)) return false;
 
     try {
         var mod = new AttributeModifierClass(
-            CAP_UUID,
-            CAP_MODIFIER_NAME,
-            MAX_LIFE_STEAL - value,
+            uuid,
+            cap.name,
+            cap.max - value,
             OperationClass.ADDITION
         );
         try {
@@ -96,72 +106,68 @@ function clampWithJava(entity) {
         }
         return true;
     } catch (eAdd) {
-        console.error("[Life Steal Cap] addModifier failed: " + eAdd);
         return false;
     }
 }
 
-function clampWithKubeJs(entity) {
+function clampOneKube(entity, cap) {
     try {
-        entity.removeAttribute(LIFE_STEAL_ATTR, CAP_MODIFIER_NAME);
+        entity.removeAttribute(cap.attr, cap.name);
     } catch (e1) {
         try {
-            entity.removeAttributeModifier(LIFE_STEAL_ATTR, CAP_MODIFIER_NAME);
+            entity.removeAttributeModifier(cap.attr, cap.name);
         } catch (e2) {}
     }
 
     var value = 0;
     try {
-        var inst = entity.getAttribute(LIFE_STEAL_ATTR);
+        var inst = entity.getAttribute(cap.attr);
         if (inst == null) return false;
         value = Number(inst.getValue());
     } catch (e3) {
         try {
-            value = Number(entity.getAttributeValue(LIFE_STEAL_ATTR));
+            value = Number(entity.getAttributeValue(cap.attr));
         } catch (e4) {
             return false;
         }
     }
-
-    if (!(value > MAX_LIFE_STEAL)) return false;
+    if (!(value > cap.max)) return false;
 
     try {
-        entity.modifyAttribute(
-            LIFE_STEAL_ATTR,
-            CAP_MODIFIER_NAME,
-            MAX_LIFE_STEAL - value,
-            "addition"
-        );
+        entity.modifyAttribute(cap.attr, cap.name, cap.max - value, "addition");
         return true;
     } catch (e5) {
         return false;
     }
 }
 
-function clampLifeSteal(entity) {
+function clampAll(entity) {
     if (entity == null) return false;
-    if (clampWithJava(entity)) return true;
-    return clampWithKubeJs(entity);
+    var any = false;
+    var useJava = ensureJava();
+    for (var i = 0; i < CAPS.length; i++) {
+        var ok = false;
+        if (useJava) ok = clampOneJava(entity, CAPS[i]);
+        if (!ok) ok = clampOneKube(entity, CAPS[i]);
+        if (ok) any = true;
+    }
+    return any;
 }
 
 PlayerEvents.loggedIn(function (event) {
     try {
-        if (clampLifeSteal(event.player)) {
+        if (clampAll(event.player)) {
             console.info(
-                "[Life Steal Cap] Clamped " +
-                    event.player.username +
-                    " to " +
-                    MAX_LIFE_STEAL * 100 +
-                    "% on login."
+                "[Heal Cap] Clamped healing attrs for " + event.player.username
             );
             try {
                 event.player.tell(
-                    "\u00A77Life Steal capped at 5% on this server."
+                    "\u00A77Healing attributes capped (Life Steal / Overheal / Healing Received)."
                 );
             } catch (eTell) {}
         }
     } catch (err) {
-        console.error("[Life Steal Cap] login error: " + err);
+        console.error("[Heal Cap] login error: " + err);
     }
 });
 
@@ -170,12 +176,10 @@ PlayerEvents.tick(function (event) {
         var player = event.player;
         if (player == null) return;
         if (player.age % TICK_INTERVAL !== 0) return;
-        clampLifeSteal(player);
+        clampAll(player);
     } catch (err) {}
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Life Steal hard-capped at " +
-        MAX_LIFE_STEAL * 100 +
-        "% (runtime clamp)."
+    "[DBZ Legacy Reborn] Healing attribute hard caps active (LS/OH <=5%, Healing Received <=+5%)."
 );

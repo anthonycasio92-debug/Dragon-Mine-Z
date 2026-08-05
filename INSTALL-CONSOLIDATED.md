@@ -52,10 +52,9 @@ Battle report shows once (no DM+broadcast double).
 - `kubejs/server_scripts/remove_silk_touch.js` — strips **Silk Touch** from items/books (keeps the item)
 - `kubejs/server_scripts/apotheosis_spawner_disable.js` — disables Apotheosis spawner upgrades; vanillaizes world spawners; **comparator right-click** enables redstone control
 - `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` — chunk-load queue for spawner vanillaize (**full restart** once)
-- `kubejs/server_scripts/apotheosis_balance.js` — gem/affix balance; Guardian + Blood Lord + Vampiric life steal set to **1-5%**
-- `kubejs/server_scripts/lifesteal_cap.js` — **hard-caps** live `attributeslib:life_steal` at **5%** (existing gear included)
-- `kubejs/data/apotheosis/affixes/sword/attribute/vampiric.json` — datapack override for Vampiric
-- `kubejs/data/apotheosis/gems/core/guardian.json` — datapack override for Guardian gem life steal
+- `kubejs/server_scripts/apotheosis_balance.js` — gem/affix balance; life steal / healing received / overheal ~**1-5%**
+- `kubejs/server_scripts/lifesteal_cap.js` — **hard-caps** live attrs: life steal & overheal **5%**, healing received **+5%**
+- `kubejs/data/apotheosis/...` — datapack overrides for Vampiric, Spiritual, Berserking, Guardian, Forest
 - Also present: `capsule_disable.js`
 
 Reload server scripts with `/kubejs reload server_scripts` (or `/reload`). Startup script needs a server restart.

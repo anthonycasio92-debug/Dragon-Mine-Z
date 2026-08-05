@@ -47,12 +47,12 @@
       "attribute": "attributeslib:overheal",
       "operation": "ADDITION",
       "values": {
-        "common": 0.05,
-        "uncommon": 0.1,
-        "rare": 0.15,
-        "epic": 0.2,
-        "mythic": 0.25,
-        "ancient": 0.3
+        "common": 0.01,
+        "uncommon": 0.02,
+        "rare": 0.03,
+        "epic": 0.04,
+        "mythic": 0.045,
+        "ancient": 0.05
       }
     },
     {

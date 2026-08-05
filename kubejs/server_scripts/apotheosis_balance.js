@@ -9,11 +9,12 @@
  * Tyrannical Current HP Damage: removed
  * Giant Slaying Current HP Damage affix: disabled
  * Royal Family Current HP Damage: removed
- * Life Steal nerfed to 1-5%:
- *   - Blood Lord gem (light weapon): 1% / 2% / 3% / 4% / 4.5% / 5%
- *   - Guardian gem (light weapon): 1% / 2% / 3% / 4% / 4.5% / 5%
- *   - Vampiric sword/trident affix: rolls within 1-5% by rarity
- *   - Runtime hard cap: lifesteal_cap.js clamps live attribute to 5%
+ * Healing attrs nerfed to ~1-5%:
+ *   - Life Steal: Blood Lord, Guardian, Vampiric affix
+ *   - Healing Received: Blood Lord chest, Spiritual affix, Forest shield
+ *   - Overheal: Guardian heavy weapon, Berserking affix
+ *   - Blood Lord leech_block heal_factor: 1-5%
+ *   - Runtime hard caps in lifesteal_cap.js (life steal / overheal / healing received)
  *
  * Requires a full server restart or /reload after the script is loaded.
  */
@@ -45,7 +46,37 @@ ServerEvents.highPriorityData(function (event) {
         types: ["sword", "trident"]
     });
 
-    // core/guardian - nerf light-weapon life steal to 1-5% (was 5-30%).
+    // Nerf Spiritual healing received affix to +1-5% (was ~+10-50%).
+    event.addJson("apotheosis:affixes/armor/attribute/spiritual", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:healing_received",
+        operation: "MULTIPLY_TOTAL",
+        values: {
+            rare: { min: 0.01, steps: 2, step: 0.005 },
+            epic: { min: 0.015, steps: 3, step: 0.005 },
+            mythic: { min: 0.02, steps: 4, step: 0.005 },
+            ancient: { min: 0.03, steps: 4, step: 0.005 }
+        },
+        types: ["chestplate", "leggings"]
+    });
+
+    // Nerf Berserking overheal affix to 1-5% (was ~10-40%).
+    event.addJson("apotheosis:affixes/heavy_weapon/attribute/berserking", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:overheal",
+        operation: "ADDITION",
+        values: {
+            common: { min: 0.01, steps: 2, step: 0.005 },
+            uncommon: { min: 0.01, steps: 3, step: 0.005 },
+            rare: { min: 0.015, steps: 4, step: 0.005 },
+            epic: { min: 0.02, steps: 4, step: 0.005 },
+            mythic: { min: 0.025, steps: 5, step: 0.005 },
+            ancient: { min: 0.03, steps: 4, step: 0.005 }
+        },
+        types: ["heavy_weapon"]
+    });
+
+    // core/guardian - nerf life steal + overheal to 1-5%.
     event.addJson("apotheosis:gems/core/guardian", {
         variant: "guardian",
         weight: 10,
@@ -95,12 +126,12 @@ ServerEvents.highPriorityData(function (event) {
                 attribute: "attributeslib:overheal",
                 operation: "ADDITION",
                 values: {
-                    common: 0.05,
-                    uncommon: 0.1,
-                    rare: 0.15,
-                    epic: 0.2,
-                    mythic: 0.25,
-                    ancient: 0.3
+                    common: 0.01,
+                    uncommon: 0.02,
+                    rare: 0.03,
+                    epic: 0.04,
+                    mythic: 0.045,
+                    ancient: 0.05
                 }
             },
             {
@@ -1033,11 +1064,11 @@ ServerEvents.highPriorityData(function (event) {
                 "attribute": "attributeslib:healing_received",
                 "operation": "ADDITION",
                 "values": {
-                    "uncommon": 0.15,
-                    "rare": 0.2,
-                    "epic": 0.3,
-                    "mythic": 0.4,
-                    "ancient": 0.5
+                    "uncommon": 0.01,
+                    "rare": 0.02,
+                    "epic": 0.03,
+                    "mythic": 0.04,
+                    "ancient": 0.05
                 }
             },
             {
@@ -1074,26 +1105,125 @@ ServerEvents.highPriorityData(function (event) {
                 "type": "apotheosis:leech_block",
                 "values": {
                     "uncommon": {
-                        "heal_factor": 0.15,
+                        "heal_factor": 0.01,
                         "cooldown": 400
                     },
                     "rare": {
-                        "heal_factor": 0.25,
+                        "heal_factor": 0.02,
                         "cooldown": 650
                     },
                     "epic": {
-                        "heal_factor": 0.4,
+                        "heal_factor": 0.03,
                         "cooldown": 800
                     },
                     "mythic": {
-                        "heal_factor": 0.55,
+                        "heal_factor": 0.04,
                         "cooldown": 850
                     },
                     "ancient": {
-                        "heal_factor": 0.65,
+                        "heal_factor": 0.05,
                         "cooldown": 1000
                     }
                 }
+            }
+        ]
+    });
+
+    // twilight/forest - nerf shield healing received to +1-5% (was +10-40%).
+    event.addJson("apotheosis:gems/twilight/forest", {
+        conditions: [{ type: "forge:mod_loaded", modid: "twilightforest" }],
+        weight: 5,
+        quality: 1.5,
+        dimensions: ["twilightforest:twilight_forest"],
+        unique: true,
+        min_rarity: "rare",
+        bonuses: [
+            {
+                type: "apotheosis:twilight_treasure_goblin",
+                gem_class: {
+                    key: "weapon",
+                    types: ["heavy_weapon", "sword", "trident", "bow", "crossbow"]
+                },
+                values: {
+                    rare: { chance: 0.005, cooldown: 4800 },
+                    epic: { chance: 0.0075, cooldown: 4800 },
+                    mythic: { chance: 0.01, cooldown: 4800 },
+                    ancient: { chance: 0.015, cooldown: 4800 }
+                }
+            },
+            {
+                type: "apotheosis:multi_attribute",
+                desc: "bonus.apotheosis:multi_attr.desc.and",
+                gem_class: { key: "shield", types: ["shield"] },
+                modifiers: [
+                    {
+                        attribute: "attributeslib:healing_received",
+                        operation: "MULTIPLY_BASE",
+                        values: {
+                            rare: 0.01,
+                            epic: 0.02,
+                            mythic: 0.035,
+                            ancient: 0.05
+                        }
+                    },
+                    {
+                        attribute: "minecraft:generic.attack_speed",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.05,
+                            epic: -0.1,
+                            mythic: -0.15,
+                            ancient: -0.2
+                        }
+                    }
+                ]
+            },
+            {
+                type: "apotheosis:twilight_ore_magnet",
+                gem_class: { key: "pickaxe", types: ["pickaxe"] },
+                values: {
+                    rare: 24,
+                    epic: 20,
+                    mythic: 16,
+                    ancient: 12
+                }
+            },
+            {
+                type: "apotheosis:multi_attribute",
+                desc: "bonus.apotheosis:multi_attr.desc.but_and",
+                gem_class: { key: "chestplate", types: ["chestplate"] },
+                modifiers: [
+                    {
+                        attribute: "attributeslib:armor_shred",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: 0.35,
+                            epic: 0.5,
+                            mythic: 0.75,
+                            ancient: 1
+                        }
+                    },
+                    {
+                        attribute: "attributeslib:prot_shred",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.25,
+                            epic: -0.4,
+                            mythic: -0.6,
+                            ancient: -0.8
+                        }
+                    },
+                    {
+                        attribute: "attributeslib:prot_pierce",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.25,
+                            epic: -0.4,
+                            mythic: -0.6,
+                            ancient: -0.8
+                        }
+                    }
+                ]
             }
         ]
     });
@@ -1331,9 +1461,9 @@ ServerEvents.highPriorityData(function (event) {
     });
 
     console.info(
-        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (Guardian / Blood Lord / Vampiric life steal 1-5%)."
+        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (life steal / healing received / overheal ~1-5%)."
     );
     console.info(
-        "[DBZ Legacy Reborn] Note: existing gear keeps old rolls; lifesteal_cap.js hard-caps live attribute at 5%."
+        "[DBZ Legacy Reborn] Note: existing gear keeps old rolls; lifesteal_cap.js hard-caps live healing attrs."
     );
 });
