@@ -1,0 +1,21 @@
+{
+  "default": [],
+  "perStat": {
+    "tconstruct:armor": [
+      {
+        "level": 1,
+        "name": "tconstruct:restore"
+      }
+    ],
+    "tconstruct:skull": [
+      {
+        "level": 1,
+        "name": "tconstruct:rebuff"
+      },
+      {
+        "level": 1,
+        "name": "tconstruct:wither_skeleton_disguise"
+      }
+    ]
+  }
+}

@@ -20,6 +20,7 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 | `kubejs/server_scripts/apotheosis_spawner_disable.js` | Disable spawner upgrades; vanillaize; comparator redstone |
 | `kubejs/server_scripts/remove_silk_touch.js` | Strip Silk Touch (keep item) |
 | `kubejs/server_scripts/capsule_disable.js` | Capsule disable |
+| `kubejs/server_scripts/tinkers_necrotic_disable.js` | Removes Tinkers **Necrotic** life-steal modifier |
 
 ### startup_scripts/ (**full server restart** required)
 | File | Purpose |
@@ -33,6 +34,8 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 - `kubejs/data/apotheosis/affixes/heavy_weapon/attribute/berserking.json`
 - `kubejs/data/apotheosis/gems/core/guardian.json`
 - `kubejs/data/apotheosis/gems/twilight/forest.json`
+- `kubejs/data/tconstruct/tinkering/modifiers/necrotic.json` — empty Necrotic (no life steal)
+- `kubejs/data/tconstruct/tinkering/materials/traits/necrotic_bone.json` — no Necrotic trait on bone
 
 ### Apply order
 1. Copy all `kubejs/` files above  
