@@ -11,7 +11,9 @@
  * Royal Family Current HP Damage: removed
  * Life Steal nerfed to 1-5%:
  *   - Blood Lord gem (light weapon): 1% / 2% / 3% / 4% / 4.5% / 5%
+ *   - Guardian gem (light weapon): 1% / 2% / 3% / 4% / 4.5% / 5%
  *   - Vampiric sword/trident affix: rolls within 1-5% by rarity
+ *   - Runtime hard cap: lifesteal_cap.js clamps live attribute to 5%
  *
  * Requires a full server restart or /reload after the script is loaded.
  */
@@ -41,6 +43,84 @@ ServerEvents.highPriorityData(function (event) {
             ancient: { min: 0.03, steps: 4, step: 0.005 }
         },
         types: ["sword", "trident"]
+    });
+
+    // core/guardian — nerf light-weapon life steal to 1-5% (was 5-30%).
+    event.addJson("apotheosis:gems/core/guardian", {
+        variant: "guardian",
+        weight: 10,
+        quality: 0,
+        dimensions: [],
+        bonuses: [
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "core_armor",
+                    types: ["chestplate", "leggings"]
+                },
+                attribute: "minecraft:generic.armor",
+                operation: "ADDITION",
+                values: {
+                    common: 0.5,
+                    uncommon: 1,
+                    rare: 2.5,
+                    epic: 4,
+                    mythic: 6,
+                    ancient: 8
+                }
+            },
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "light_weapon",
+                    types: ["sword", "trident"]
+                },
+                attribute: "attributeslib:life_steal",
+                operation: "ADDITION",
+                values: {
+                    common: 0.01,
+                    uncommon: 0.02,
+                    rare: 0.03,
+                    epic: 0.04,
+                    mythic: 0.045,
+                    ancient: 0.05
+                }
+            },
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "heavy_weapon",
+                    types: ["heavy_weapon"]
+                },
+                attribute: "attributeslib:overheal",
+                operation: "ADDITION",
+                values: {
+                    common: 0.05,
+                    uncommon: 0.1,
+                    rare: 0.15,
+                    epic: 0.2,
+                    mythic: 0.25,
+                    ancient: 0.3
+                }
+            },
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "shield",
+                    types: ["shield"]
+                },
+                attribute: "minecraft:generic.armor",
+                operation: "MULTIPLY_TOTAL",
+                values: {
+                    common: 0.05,
+                    uncommon: 0.1,
+                    rare: 0.2,
+                    epic: 0.25,
+                    mythic: 0.3,
+                    ancient: 0.45
+                }
+            }
+        ]
     });
 
     // core/ballast
@@ -1251,7 +1331,7 @@ ServerEvents.highPriorityData(function (event) {
     });
 
     console.info(
-        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (Blood Lord / Vampiric life steal 1-5%)."
+        "[DBZ Legacy Reborn] Applied Apotheosis balance overrides (Guardian / Blood Lord / Vampiric life steal 1-5%)."
     );
     console.info(
         "[DBZ Legacy Reborn] Note: existing gear keeps old rolls; lifesteal_cap.js hard-caps live attribute at 5%."
