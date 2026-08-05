@@ -9,6 +9,9 @@
  * Tyrannical Current HP Damage: removed
  * Giant Slaying Current HP Damage affix: disabled
  * Royal Family Current HP Damage: removed
+ * Life Steal nerfed to 1-5%:
+ *   - Blood Lord gem (light weapon): 1% / 2% / 3% / 4% / 4.5% / 5%
+ *   - Vampiric sword/trident affix: rolls within 1-5% by rarity
  *
  * Requires a full server restart or /reload after the script is loaded.
  */
@@ -22,6 +25,22 @@ ServerEvents.highPriorityData(function (event) {
         operation: "ADDITION",
         values: {},
         types: []
+    });
+
+    // Nerf Vampiric life steal affix to 1-5% (was ~15-40%).
+    event.addJson("apotheosis:affixes/sword/attribute/vampiric", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:life_steal",
+        operation: "ADDITION",
+        values: {
+            common: { min: 0.01, steps: 2, step: 0.005 },
+            uncommon: { min: 0.01, steps: 3, step: 0.005 },
+            rare: { min: 0.015, steps: 4, step: 0.005 },
+            epic: { min: 0.02, steps: 4, step: 0.005 },
+            mythic: { min: 0.025, steps: 5, step: 0.005 },
+            ancient: { min: 0.03, steps: 4, step: 0.005 }
+        },
+        types: ["sword", "trident"]
     });
 
     // core/ballast
@@ -881,12 +900,12 @@ ServerEvents.highPriorityData(function (event) {
                 "attribute": "attributeslib:life_steal",
                 "operation": "ADDITION",
                 "values": {
-                    "common": 0.05,
-                    "uncommon": 0.25,
-                    "rare": 0.4,
-                    "epic": 0.525,
-                    "mythic": 0.65,
-                    "ancient": 0.75
+                    "common": 0.01,
+                    "uncommon": 0.02,
+                    "rare": 0.03,
+                    "epic": 0.04,
+                    "mythic": 0.045,
+                    "ancient": 0.05
                 }
             },
             {
