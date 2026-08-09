@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * Shurui's DMZ Dungeons - Cloned NPC Full Spawner Fix (CNPC Forge)
- * Version: 1.1.1 (fixed)
+ * Version: 1.2.0 (fixed)
  * ============================================================
  *
  * Intended versions:
@@ -12,22 +12,26 @@
  *
  * Install:
  *   CustomNPCs -> Global -> Forge Scripts (own tab)
- *   Enable events:
+ *   Enable ONLY these events:
  *     - init
  *     - entityJoinLevelEvent
- *     - livingTickEvent
+ *
+ * CRITICAL - leave these DISABLED (CNPC NPEs during entity construction):
+ *     - entityConstructing
+ *     - size
+ *     - livingTickEvent (not needed; retries are scheduled)
  *
  * Do NOT run older player-tick or ki-damage-only versions with this.
  *
- * Fixes vs 1.0:
+ * Fixes vs 1.0 / 1.1:
  * - Find applySuSpawnNbt BEFORE clearing the skill pool
  * - Correct Method.invoke arg packing (pass CompoundTag directly)
  * - Server-side only
  * - Safer BlockPos long unpack (avoid JS number precision loss)
  * - Robust entity unwrap (event.entity / event.event.getEntity)
  * - Persist FIXED_* keys onto MC persistent data
- * - livingTickEvent retry if join raced before sdd_spawner was written
- * - Mark FIXED_SETTINGS only AFTER successful apply (failed apply can retry)
+ * - Join-race retries via server TickTask (no livingTickEvent)
+ * - Mark FIXED_SETTINGS only AFTER successful apply
  * ============================================================
  */
 
@@ -41,14 +45,22 @@ var FIXED_AI_TIER_KEY = "sdd_clone_ai_tier_fix";
 var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
-/* Retry window for join race (entity age in ticks). */
-var RETRY_MAX_AGE = 100;
-var RETRY_TICK_MOD = 10;
+/* Join-race retries (server TickTask delays, in ticks). */
+var RETRY_DELAYS = [5, 15, 30, 60, 100];
 
-var LongClass = Java.type("java.lang.Long");
-var BigInteger = Java.type("java.math.BigInteger");
-var CompoundTag = Java.type("net.minecraft.nbt.CompoundTag");
-var NpcAPIClass = Java.type("noppes.npcs.api.NpcAPI");
+var LongClass = null;
+var BigInteger = null;
+var CompoundTag = null;
+var NpcAPIClass = null;
+var TickTaskClass = null;
+var RunnableClass = null;
+
+try { LongClass = Java.type("java.lang.Long"); } catch (e0) {}
+try { BigInteger = Java.type("java.math.BigInteger"); } catch (e1) {}
+try { CompoundTag = Java.type("net.minecraft.nbt.CompoundTag"); } catch (e2) {}
+try { NpcAPIClass = Java.type("noppes.npcs.api.NpcAPI"); } catch (e3) {}
+try { TickTaskClass = Java.type("net.minecraft.server.TickTask"); } catch (e4) {}
+try { RunnableClass = Java.type("java.lang.Runnable"); } catch (e5) {}
 
 var KiMoveEntry = null;
 try {
@@ -77,18 +89,18 @@ try {
     AdvancedSpawnerBEClass = null;
 }
 
-var TWO_64 = new BigInteger("18446744073709551616");
-var MASK_26 = new BigInteger("67108863");
-var MASK_12 = new BigInteger("4095");
+var TWO_64 = BigInteger != null ? new BigInteger("18446744073709551616") : null;
+var MASK_26 = BigInteger != null ? new BigInteger("67108863") : null;
+var MASK_12 = BigInteger != null ? new BigInteger("4095") : null;
 
 var APPLY_METHOD_NAME = "applySuSpawnNbt";
 
 function init(event) {
-    if (DEBUG) {
-        print("[Dungeon Clone Fix] Forge script v1.1.1 initialized.");
-    } else {
-        print("[Dungeon Clone Fix] v1.1.1 loaded (CNPC Forge).");
-    }
+    try {
+        print(
+            "[Dungeon Clone Fix] v1.2.0 loaded (CNPC Forge). Enable ONLY init + entityJoinLevelEvent."
+        );
+    } catch (e) {}
 }
 
 function dbg(msg) {
@@ -369,6 +381,7 @@ function readPackedSpawnerLongString(nbt, mcEntity) {
 }
 
 function unpackBlockPos(packedText) {
+    if (BigInteger == null || TWO_64 == null) return null;
     var packed = new BigInteger("" + packedText);
     if (packed.signum() < 0) {
         packed = packed.add(TWO_64);
@@ -383,6 +396,114 @@ function unpackBlockPos(packedText) {
     if (blockY >= 2048) blockY = blockY - 4096;
 
     return { x: blockX, y: blockY, z: blockZ };
+}
+
+function getServerFromEntity(mcEntity) {
+    if (mcEntity == null) return null;
+    try {
+        var s = mcEntity.getServer();
+        if (s != null) return s;
+    } catch (e1) {}
+    try {
+        var level = null;
+        try {
+            level = mcEntity.level();
+        } catch (e2) {
+            try {
+                level = mcEntity.getLevel();
+            } catch (e3) {
+                try {
+                    level = mcEntity.m_9236_();
+                } catch (e4) {}
+            }
+        }
+        if (level != null) {
+            try {
+                return level.getServer();
+            } catch (e5) {
+                try {
+                    return level.m_7654_();
+                } catch (e6) {}
+            }
+        }
+    } catch (e7) {}
+    return null;
+}
+
+/*
+ * Schedule a server-thread retry without livingTickEvent / EntityEvent.Size.
+ * Those CNPC forge events NPE while entities are still constructing.
+ */
+function scheduleCloneRetry(mcEntity, delayTicks) {
+    if (mcEntity == null || TickTaskClass == null || RunnableClass == null) {
+        return false;
+    }
+    try {
+        var server = getServerFromEntity(mcEntity);
+        if (server == null) return false;
+
+        var tickNow = 0;
+        try {
+            tickNow = server.getTickCount();
+        } catch (eT) {
+            try {
+                tickNow = server.m_129791_();
+            } catch (eT2) {
+                return false;
+            }
+        }
+
+        var runAt = tickNow + Math.max(1, delayTicks | 0);
+        var entityRef = mcEntity;
+
+        var runner = new (Java.extend(RunnableClass, {
+            run: function () {
+                try {
+                    if (entityRef == null || !entityRef.isAlive()) return;
+                    if (!isSduDmzFighter(entityRef)) return;
+                    if (!isServerMcEntity(entityRef)) return;
+
+                    var iEntity = null;
+                    try {
+                        if (NpcAPIClass != null) {
+                            iEntity = NpcAPIClass.Instance().getIEntity(
+                                entityRef
+                            );
+                        }
+                    } catch (eI) {
+                        iEntity = null;
+                    }
+
+                    var nbt = getINbt(iEntity, entityRef);
+                    if (nbt == null) return;
+                    if (!nbtHas(nbt, entityRef, "sdd_spawner")) return;
+                    if (!nbtHas(nbt, entityRef, "sdu_clone_ref")) return;
+                    if (
+                        nbtHas(nbt, entityRef, FIXED_SETTINGS_KEY) &&
+                        nbtGetBoolean(nbt, entityRef, FIXED_SETTINGS_KEY)
+                    ) {
+                        return;
+                    }
+
+                    applyCloneFix(iEntity, entityRef, false);
+                } catch (err) {
+                    dbg("scheduled retry error: " + err);
+                }
+            }
+        }))();
+
+        server.tell(new TickTaskClass(runAt, runner));
+        return true;
+    } catch (err) {
+        dbg("scheduleCloneRetry failed: " + err);
+        return false;
+    }
+}
+
+function scheduleAllCloneRetries(mcEntity) {
+    for (var i = 0; i < RETRY_DELAYS.length; i++) {
+        scheduleCloneRetry(mcEntity, RETRY_DELAYS[i]);
+    }
 }
 
 function findApplySuSpawnNbt(mcEntity) {
@@ -546,13 +667,17 @@ function applyCloneFix(iEntity, mcEntity, allowRetryLater) {
         }
 
         var pos = unpackBlockPos(packedText);
+        if (pos == null) {
+            dbg("Failed to unpack sdd_spawner BlockPos.");
+            return false;
+        }
         var world = null;
         try {
             if (iEntity != null) world = iEntity.getWorld();
         } catch (eW) {}
         if (world == null) {
             dbg("No IWorld on entity.");
-            return allowRetryLater ? false : false;
+            return false;
         }
 
         var spawnerBlock = null;
@@ -776,44 +901,26 @@ function entityJoinLevelEvent(event) {
     try {
         var mcEntity = unwrapMcEntity(event);
         var iEntity = unwrapIEntity(event);
+        if (mcEntity == null) return;
         if (!isSduDmzFighter(mcEntity)) return;
         if (!isServerMcEntity(mcEntity)) return;
 
-        applyCloneFix(iEntity, mcEntity, true);
-    } catch (error) {
-        dbg("entityJoinLevelEvent error: " + error);
-    }
-}
-
-/*
- * Retry path: clone tags sometimes appear a few ticks after join.
- * Only touches unconfigured clone fighters within RETRY_MAX_AGE.
- */
-function livingTickEvent(event) {
-    try {
-        var mcEntity = unwrapMcEntity(event);
-        if (!isSduDmzFighter(mcEntity)) return;
-        if (!isServerMcEntity(mcEntity)) return;
-
-        var age = entityAge(mcEntity);
-        if (age > RETRY_MAX_AGE) return;
-        if (age % RETRY_TICK_MOD !== 0) return;
-
-        var iEntity = unwrapIEntity(event);
-        var nbt = getINbt(iEntity, mcEntity);
-        if (nbt == null) return;
-
-        if (!nbtHas(nbt, mcEntity, "sdd_spawner")) return;
-        if (!nbtHas(nbt, mcEntity, "sdu_clone_ref")) return;
-        if (
-            nbtHas(nbt, mcEntity, FIXED_SETTINGS_KEY) &&
-            nbtGetBoolean(nbt, mcEntity, FIXED_SETTINGS_KEY)
-        ) {
-            return;
+        var ok = false;
+        try {
+            ok = !!applyCloneFix(iEntity, mcEntity, true);
+        } catch (eApply) {
+            ok = false;
+            dbg("join apply error: " + eApply);
         }
 
-        applyCloneFix(iEntity, mcEntity, false);
+        /* Always schedule light retries for join-race (tags/spawner TE). */
+        if (!ok) {
+            scheduleAllCloneRetries(mcEntity);
+        } else {
+            /* Still schedule one late pass in case pool was overwritten. */
+            scheduleCloneRetry(mcEntity, 20);
+        }
     } catch (error) {
-        dbg("livingTickEvent error: " + error);
+        dbg("entityJoinLevelEvent error: " + error);
     }
 }

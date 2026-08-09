@@ -88,9 +88,10 @@ Battle report shows once (no DM+broadcast double).
 - `EndDragon-Alias.yml` → CMI
 
 ## Dungeons (CNPC Forge)
-- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.1.1** → Global Forge Scripts (own tab)
+- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.2.0** → Global Forge Scripts (own tab)
   - Fixes Advanced Spawner clones (`sdu:dmz_fighter`) missing full ki damage / moves
-  - Enable: `init`, `entityJoinLevelEvent`, `livingTickEvent`
+  - Enable **ONLY**: `init`, `entityJoinLevelEvent`
+  - Leave **DISABLED**: `entityConstructing`, `size`, `livingTickEvent` (CNPC NPEs on construct/size)
   - Do **not** also run older player-tick / ki-damage-only dungeon clone scripts
 
 ## Other systems in this pack
