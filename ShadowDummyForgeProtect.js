@@ -1,12 +1,14 @@
 /*
  * ============================================================
- * Shadow Dummy Forge Protect
+ * Shadow Dummy Forge Protect — DEPRECATED (use KubeJS)
  * ============================================================
  *
- * Same-tick spawn protection for player shadow dummies.
- * Install as a CustomNPCs GLOBAL FORGE script (own tab).
+ * PREFERRED: kubejs/startup_scripts/shadow_dummy_protect_hook.js
+ * and DISABLE CustomNPCs Global Forge Scripts (stops CNPC
+ * EntityConstructing/Size NPE spam).
  *
- * Enable:
+ * Same-tick spawn protection for player shadow dummies.
+ * Fallback: CustomNPCs GLOBAL FORGE script (own tab) with:
  *   - entityJoinLevelEvent
  *   - livingHurtEvent
  *   - livingDamageEvent

@@ -1,8 +1,16 @@
 /*
  * ============================================================
  * Shurui's DMZ Dungeons - Cloned NPC Full Spawner Fix (CNPC Forge)
- * Version: 1.2.1
+ * Version: 1.2.1 — DEPRECATED for installs that want no CNPC spam
  * ============================================================
+ *
+ * PREFERRED INSTALL (no CNPC forge NPE spam):
+ *   Use kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js
+ *   and DISABLE CustomNPCs -> Global -> Forge Scripts entirely.
+ *
+ * This CNPC Forge file is kept only as a fallback. Enabling ANY
+ * CNPC Global Forge Scripts causes EntityConstructing/Size NPE spam
+ * inside CustomNPCs GBPort (not fixable from script code).
  *
  * Intended versions:
  * - Shurui's DMZ Dungeons 2.0.5
@@ -10,11 +18,9 @@
  * - Dragon Mine Z 2.1.3
  * - CustomNPCs GBPort 1.20.1
  *
- * Install:
+ * Fallback install (will spam CNPC SEVERE logs):
  *   CustomNPCs -> Global -> Forge Scripts (own tab)
- *   Enable ONLY these events:
- *     - init
- *     - entityJoinLevelEvent
+ *   Enable ONLY: init, entityJoinLevelEvent
  *
  * Do NOT run older player-tick or ki-damage-only versions with this.
  *
@@ -102,7 +108,7 @@ var APPLY_METHOD_NAME = "applySuSpawnNbt";
 function init(event) {
     try {
         print(
-            "[Dungeon Clone Fix] v1.2.0 loaded (CNPC Forge). Enable ONLY init + entityJoinLevelEvent."
+            "[Dungeon Clone Fix] v1.2.1 loaded (CNPC Forge). Enable ONLY init + entityJoinLevelEvent."
         );
     } catch (e) {}
 }

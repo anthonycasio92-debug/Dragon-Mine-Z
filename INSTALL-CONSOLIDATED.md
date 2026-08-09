@@ -27,6 +27,8 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 |------|---------|
 | `kubejs/startup_scripts/healing_received_cap_hook.js` | Heal + Overheal combat backups |
 | `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` | Spawner chunk-load vanillaize queue |
+| `kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js` | Dungeon clone full ki/moves (replaces CNPC forge script) |
+| `kubejs/startup_scripts/shadow_dummy_protect_hook.js` | Shadow dummy spawn protect (replaces CNPC forge script) |
 
 ### data/ (apply with `/reload` or restart)
 - `kubejs/data/apotheosis/affixes/sword/attribute/vampiric.json`
@@ -46,6 +48,8 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 ### Log lines that mean it worked
 - `[Heal Cap] LivingHealEvent backup registered`
 - `[Heal Cap] LivingHurtEvent backup registered`
+- `[Dungeon Clone Fix] EntityJoinLevelEvent registered`
+- `[ShadowDummy Protect] LivingHurt/Damage registered`
 - `[Apotheosis Balance] highPriorityData running...`
 - `[Heal Cap] Java AttributeModifier ready`
 
@@ -84,24 +88,29 @@ Battle report shows once (no DM+broadcast double).
 ## End
 - `End Dimension Strength.js` **v2.11.0** → Global Player (own tab)
   - Ender Dragon spawn + scaling only (End mob scaling disabled)
-- `EndDragon-Forge-Trigger.js` → Global Forge Scripts
-- `EndDragon-Alias.yml` → CMI
+- `EndDragon-Alias.yml` → CMI (`asOp!` — do **not** need CNPC Forge for this)
 
-## Dungeons (CNPC Forge)
-- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.2.1** → Global Forge Scripts (own tab)
-  - Fixes Advanced Spawner clones (`sdu:dmz_fighter`) missing full ki damage / moves
-  - Enable **ONLY**: `init`, `entityJoinLevelEvent`
-  - Do **not** also run older player-tick / ki-damage-only dungeon clone scripts
-  - **CNPC log spam:** `Error in EntityEvent$Size` / `EntityConstructing` NPEs are a
-    CustomNPCs GBPort bug whenever Global Forge Scripts are enabled (CNPC wraps every
-    entity construct/size before script handlers run). Harmless (caught). Same with
-    ShadowDummy / EndDragon forge tabs alone. Not caused by this script's logic.
+## Stop CNPC forge NPE spam (required)
+CustomNPCs GBPort spam `EntityEvent$Size` / `EntityConstructing` NPEs whenever
+**Global Forge Scripts** are enabled. Fix: **turn Forge Scripts OFF**.
+
+1. CustomNPCs → Global → **Forge Scripts** → disable / uncheck Script Enabled  
+2. Remove forge tabs for: `Dungeon-Clone-Ki-Fix-Forge.js`, `ShadowDummyForgeProtect.js`,
+   `EndDragon-Forge-Trigger.js` (all replaced or unused)  
+3. Install the two new **KubeJS startup** hooks above + full restart  
+4. Keep `ShadowDummyLimiter.js` as Global **Player** (unchanged)  
+5. Keep End aliases on `asOp!` (already in `EndDragon-Alias.yml`)
+
+## Dungeons / Shadow dummy (KubeJS — not CNPC forge)
+- `dungeon_clone_ki_fix_hook.js` — Advanced Spawner clone ki damage / moves  
+- `shadow_dummy_protect_hook.js` — same-tick player shadow dummy protect  
+- Legacy CNPC forge `.js` files remain in the repo as deprecated fallbacks only
 
 ## Other systems in this pack
 - `SprintJump.js`, `flight suppression.js`
 - `DMZ RACE LOCK.js`, `Prestige NPC.js`, `DMZ Class Permission.js`
 - `AndrioidConversion.js`, `bioevolution.json`, `character.json`
-- `ShadowDummyLimiter.js`, `ShadowDummyForgeProtect.js`
+- `ShadowDummyLimiter.js` (Player tab; protect is KubeJS now)
 - `Fabled Sync.js` (combined Prestige Sync + Faction Sync + Value Cleaner — do **not** also load `Prestige Sync Fabled.js`)
 - Fabled bonus persist fixes, Disable End Portals
 - `Aliases-Kill-TP-Chat.yml` (optional; also covered by Aliases-Rival `tpmsg`)

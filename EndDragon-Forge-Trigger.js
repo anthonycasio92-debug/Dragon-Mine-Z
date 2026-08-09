@@ -1,33 +1,19 @@
 /*
 ============================================================
- End Dragon Forge Trigger Bridge
+ End Dragon Forge Trigger Bridge — DEPRECATED
  Version: 1.1.0
 
- WHY THIS EXISTS:
- CustomNPCs only runs Global PLAYER script `trigger` when the
- command source entity is a real player (not null, not FakePlayer).
+ PREFERRED: Do NOT use this. Keep CNPC Global Forge Scripts OFF
+ (avoids EntityConstructing/Size NPE spam). Use EndDragon-Alias.yml
+ with asOp! so Global Player End Dimension Strength.js gets trigger
+ 50/51 directly.
 
- So these do NOTHING for End Dimension Strength.js alone:
-   - console:  noppes script trigger 50 <name>
-   - CMI asFakeOp! noppes script trigger 50 [playerName]
-   - command blocks / non-player sources
+ Legacy only: if you must support FakeOp/console triggers, this
+ Forge tab can forward them — but enabling CNPC forge spam-logs.
 
- This Forge script ALWAYS receives trigger events, then forwards
- trigger 50/51 to the target player's PlayerScriptData so
- End Dimension Strength.js function trigger() actually runs.
-
- INSTALL:
-   CustomNPCs → Global → Forge Scripts
-   - Own tab with ONLY this file
-   - Enable Forge scripts
-   - Event: trigger (SCRIPT_TRIGGER)
-
- ALSO REQUIRED:
+ ALSO REQUIRED when used:
    End Dimension Strength.js in Global Player (own tab)
    with events: tick, kill, trigger, damagedEntity
-
- CMI: prefer asOp! (see EndDragon-Alias.yml). asFakeOp works only
- because this Forge bridge forwards the event.
 ============================================================
 */
 
