@@ -87,6 +87,12 @@ Battle report shows once (no DM+broadcast double).
 - `EndDragon-Forge-Trigger.js` → Global Forge Scripts
 - `EndDragon-Alias.yml` → CMI
 
+## Dungeons (CNPC Forge)
+- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.1.1** → Global Forge Scripts (own tab)
+  - Fixes Advanced Spawner clones (`sdu:dmz_fighter`) missing full ki damage / moves
+  - Enable: `init`, `entityJoinLevelEvent`, `livingTickEvent`
+  - Do **not** also run older player-tick / ki-damage-only dungeon clone scripts
+
 ## Other systems in this pack
 - `SprintJump.js`, `flight suppression.js`
 - `DMZ RACE LOCK.js`, `Prestige NPC.js`, `DMZ Class Permission.js`
