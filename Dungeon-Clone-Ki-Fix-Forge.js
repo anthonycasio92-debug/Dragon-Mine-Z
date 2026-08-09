@@ -1,7 +1,7 @@
 /*
  * ============================================================
  * Shurui's DMZ Dungeons - Cloned NPC Full Spawner Fix (CNPC Forge)
- * Version: 1.2.0 (fixed)
+ * Version: 1.2.1
  * ============================================================
  *
  * Intended versions:
@@ -16,21 +16,25 @@
  *     - init
  *     - entityJoinLevelEvent
  *
- * CRITICAL - leave these DISABLED (CNPC NPEs during entity construction):
- *     - entityConstructing
- *     - size
- *     - livingTickEvent (not needed; retries are scheduled)
- *
  * Do NOT run older player-tick or ki-damage-only versions with this.
  *
- * Fixes vs 1.0 / 1.1:
+ * ABOUT CNPC "Error in EntityEvent$Size / EntityConstructing" NPEs:
+ * Those are thrown INSIDE CustomNPCs (ForgeEventHandler.forgeEntity ->
+ * EventHooks.onForgeEntityEvent -> NpcAPI.getIEntity) whenever Global
+ * Forge Scripts are enabled. CNPC wraps EVERY server EntityEvent before
+ * checking which script handlers exist. Our script cannot stop that spam.
+ * It is caught by CNPC (no crash). Same spam appears with only
+ * ShadowDummyForgeProtect / EndDragon-Forge-Trigger enabled.
+ * Shulker "Unable to get EntityData" warnings are the same CNPC path.
+ *
+ * Fixes vs 1.0:
  * - Find applySuSpawnNbt BEFORE clearing the skill pool
  * - Correct Method.invoke arg packing (pass CompoundTag directly)
  * - Server-side only
  * - Safer BlockPos long unpack (avoid JS number precision loss)
  * - Robust entity unwrap (event.entity / event.event.getEntity)
  * - Persist FIXED_* keys onto MC persistent data
- * - Join-race retries via server TickTask (no livingTickEvent)
+ * - Join-race retries via server TickTask (no living tick event)
  * - Mark FIXED_SETTINGS only AFTER successful apply
  * ============================================================
  */

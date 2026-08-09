@@ -88,11 +88,14 @@ Battle report shows once (no DM+broadcast double).
 - `EndDragon-Alias.yml` → CMI
 
 ## Dungeons (CNPC Forge)
-- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.2.0** → Global Forge Scripts (own tab)
+- `Dungeon-Clone-Ki-Fix-Forge.js` **v1.2.1** → Global Forge Scripts (own tab)
   - Fixes Advanced Spawner clones (`sdu:dmz_fighter`) missing full ki damage / moves
   - Enable **ONLY**: `init`, `entityJoinLevelEvent`
-  - Leave **DISABLED**: `entityConstructing`, `size`, `livingTickEvent` (CNPC NPEs on construct/size)
   - Do **not** also run older player-tick / ki-damage-only dungeon clone scripts
+  - **CNPC log spam:** `Error in EntityEvent$Size` / `EntityConstructing` NPEs are a
+    CustomNPCs GBPort bug whenever Global Forge Scripts are enabled (CNPC wraps every
+    entity construct/size before script handlers run). Harmless (caught). Same with
+    ShadowDummy / EndDragon forge tabs alone. Not caused by this script's logic.
 
 ## Other systems in this pack
 - `SprintJump.js`, `flight suppression.js`
