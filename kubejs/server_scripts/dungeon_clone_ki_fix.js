@@ -28,12 +28,17 @@ var FIXED_AI_TIER_KEY = "sdd_clone_ai_tier_fix";
 var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
-/* Same delays as Dungeon-Clone-Ki-Fix-Forge.js scheduleAllCloneRetries. */
-var RETRY_DELAYS = [5, 15, 30, 60, 100];
+/*
+ * Fast early retries (tags/TE/pool overwrite race). Dense in the first second
+ * so new dungeon clones start working quickly. Nearby scan must NOT reset this.
+ */
+var RETRY_DELAYS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 30];
+/* Re-assert after a successful apply (SDU may clear the pool shortly after spawn). */
+var REASSERT_DELAYS = [1, 2, 4, 8, 16];
 var RETRY_EVERY_TICKS = 1;
-var NEARBY_SCAN_EVERY = 40;
+var NEARBY_SCAN_EVERY = 10; /* 0.5s backup; only applies if not already fixed */
 var NEARBY_RANGE = 48.0;
-var NEAREST_SPAWNER_RANGE = 24;
+var NEAREST_SPAWNER_RANGE = 32;
 /* Runtime logs only when DEBUG=true (avoids console flood in dungeons). */
 var LOG_OK_LEFT = DEBUG ? 16 : 0;
 var LOG_FAIL_LEFT = DEBUG ? 24 : 0;
@@ -827,44 +832,69 @@ function entityUuid(mc) {
     }
 }
 
-function queueForgeStyleRetries(mc) {
+function getServerTick(mc) {
+    try {
+        return getLevel(mc).getServer().getTickCount();
+    } catch (e1) {
+        try {
+            return getLevel(mc).getServer().tickCount;
+        } catch (e2) {
+            return 0;
+        }
+    }
+}
+
+function hasPendingForUuid(id) {
+    if (!id) return false;
+    var q = global.dungeonCloneKiRetry;
+    for (var i = 0; i < q.length; i++) {
+        if (q[i].uuid === id) return true;
+    }
+    return false;
+}
+
+function enqueueDelays(mc, delays, reason, replaceExisting) {
     if (mc == null) return;
     var id = entityUuid(mc);
     if (!id) return;
     var q = global.dungeonCloneKiRetry;
-    var serverTick = 0;
-    try {
-        var level = getLevel(mc);
-        var server = level.getServer();
-        serverTick = server.getTickCount();
-    } catch (eT) {
-        try {
-            serverTick = getLevel(mc).getServer().tickCount;
-        } catch (eT2) {
-            serverTick = 0;
+
+    /* Do not let nearby scans keep pushing the schedule later. */
+    if (!replaceExisting && hasPendingForUuid(id)) {
+        /* Refresh entity ref on existing entries. */
+        for (var i = 0; i < q.length; i++) {
+            if (q[i].uuid === id) q[i].mc = mc;
         }
+        return;
     }
 
-    /* Replace existing schedule for this uuid. */
     var kept = [];
-    for (var i = 0; i < q.length; i++) {
-        if (q[i].uuid !== id) kept.push(q[i]);
+    for (var j = 0; j < q.length; j++) {
+        if (q[j].uuid !== id) kept.push(q[j]);
     }
 
-    for (var d = 0; d < RETRY_DELAYS.length; d++) {
+    var serverTick = getServerTick(mc);
+    for (var d = 0; d < delays.length; d++) {
         kept.push({
             uuid: id,
             mc: mc,
-            runAt: serverTick + RETRY_DELAYS[d],
+            runAt: serverTick + delays[d],
             attempts: 0,
-            reason: "forge_retry"
+            reason: reason
         });
     }
-    /* Cap */
     if (kept.length > 512) {
         kept.splice(0, kept.length - 512);
     }
     global.dungeonCloneKiRetry = kept;
+}
+
+function queueFastRetries(mc) {
+    enqueueDelays(mc, RETRY_DELAYS, "fast_retry", false);
+}
+
+function queueReassertPasses(mc) {
+    enqueueDelays(mc, REASSERT_DELAYS, "reassert", false);
 }
 
 function rollFromSpawnerConfig(blockEntity, isBoss, iNbt, mc) {
@@ -1195,25 +1225,20 @@ function handleCandidate(entity, source) {
 
     var result = applyCloneFix(mc, true);
     if (result.ok) {
-        /* Forge schedules one late pass even on success. */
+        /* Re-assert quickly - SDU often overwrites the pool shortly after join. */
         if (result.reason === "applied") {
-            var q = global.dungeonCloneKiRetry;
-            var tick = 0;
-            try {
-                tick = getLevel(mc).getServer().getTickCount();
-            } catch (eT) {}
-            q.push({
-                uuid: entityUuid(mc),
-                mc: mc,
-                runAt: tick + 20,
-                attempts: 0,
-                reason: "late_pass"
-            });
+            queueReassertPasses(mc);
         }
         return;
     }
     if (result.retry) {
-        queueForgeStyleRetries(mc);
+        /* Spawn path may replace; nearby must not reset an in-flight schedule. */
+        enqueueDelays(
+            mc,
+            RETRY_DELAYS,
+            "fast_retry",
+            source === "spawned"
+        );
         dbg("source=" + source + " retry=" + result.reason);
     } else {
         logFail("source=" + source + " fail=" + result.reason);
@@ -1329,21 +1354,21 @@ ServerEvents.tick(function (event) {
             } catch (eDead) {
                 continue;
             }
-            var result = applyCloneFix(mc, false);
-            if (result.ok) continue;
-            /* One-shot delayed tasks like forge TickTask - do not loop forever. */
-            if (result.retry && item.reason === "forge_retry" && item.attempts < 1) {
-                next.push(item);
-            } else if (!result.ok && item.reason !== "late_pass") {
-                /* Only log once per schedule wave end. */
-                if (item.attempts >= 1) {
-                    logFail(
-                        "retry done uuid=" +
-                            item.uuid +
-                            " reason=" +
-                            result.reason
-                    );
+            var result = applyCloneFix(mc, item.reason === "fast_retry");
+            if (result.ok) {
+                if (result.reason === "applied") {
+                    queueReassertPasses(mc);
                 }
+                continue;
+            }
+            /* Each delayed entry is one-shot (like forge TickTask). */
+            if (!result.ok && item.reason === "fast_retry" && DEBUG) {
+                logFail(
+                    "retry done uuid=" +
+                        item.uuid +
+                        " reason=" +
+                        result.reason
+                );
             }
         }
         global.dungeonCloneKiRetry = next;
