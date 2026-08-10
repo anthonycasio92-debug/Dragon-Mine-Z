@@ -93,14 +93,25 @@ Battle report shows once (no DM+broadcast double).
 
 ## Stop CNPC forge NPE spam (required)
 CustomNPCs GBPort spam `EntityEvent$Size` / `EntityConstructing` NPEs whenever
-**Global Forge Scripts** are enabled. Fix: **turn Forge Scripts OFF**.
+**Global Forge Scripts** are enabled. This is **not** the KubeJS dungeon script.
 
-1. CustomNPCs → Global → **Forge Scripts** → disable / uncheck Script Enabled  
-2. Remove forge tabs for: `Dungeon-Clone-Ki-Fix-Forge.js`, `ShadowDummyForgeProtect.js`,
-   `EndDragon-Forge-Trigger.js` (all replaced or unused)  
-3. Install the two new **KubeJS startup** hooks above + full restart  
-4. Keep `ShadowDummyLimiter.js` as Global **Player** (unchanged)  
-5. Keep End aliases on `asOp!` (already in `EndDragon-Alias.yml`)
+Proof from your logs: stack hits `noppes.npcs.ForgeEventHandler` while Create builds
+`DeployerFakePlayer` (null GameProfile). That only runs if CNPC forge scripts are ON.
+
+### Disable forge scripts (do all of these)
+1. In-game: CustomNPCs → Global → **Forge Scripts**
+   - Uncheck / disable **Script Enabled**
+   - Delete every forge tab (dungeon / shadow / enddragon / empty tabs)
+   - Save
+2. On disk (server stopped): replace the world forge script file with this pack’s
+   `forge_scripts.json` (`ScriptEnabled: 0b`, empty scripts).
+   Typical path (name may vary):
+   - `<world>/customnpcs/forge_scripts.json`
+   - or `<world>/customnpcs/scripts/forge_scripts.json`
+3. Restart the server
+4. Keep `ShadowDummyLimiter.js` as Global **Player** (unchanged)
+5. Keep End aliases on `asOp!` (`EndDragon-Alias.yml`)
+6. Dungeon fix = KubeJS **server_scripts only** (below) — no CNPC forge
 
 ## Dungeons / Shadow dummy (KubeJS — not CNPC forge)
 - `server_scripts/dungeon_clone_ki_fix.js` — **server script only** (EntityEvents.spawned + tick retries)  
