@@ -21,14 +21,13 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 | `kubejs/server_scripts/remove_silk_touch.js` | Strip Silk Touch (keep item) |
 | `kubejs/server_scripts/capsule_disable.js` | Capsule disable |
 | `kubejs/server_scripts/tinkers_necrotic_disable.js` | Removes Tinkers **Necrotic** life-steal modifier |
-| `kubejs/server_scripts/dungeon_clone_ki_fix.js` | Dungeon clone full ki/moves (main fix; `/kubejs reload server_scripts`) |
+| `kubejs/server_scripts/dungeon_clone_ki_fix.js` | Dungeon clone ki/moves (**server only**; continuous spawns) |
 
 ### startup_scripts/ (**full server restart** required)
 | File | Purpose |
 |------|---------|
 | `kubejs/startup_scripts/healing_received_cap_hook.js` | Heal + Overheal combat backups |
 | `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` | Spawner chunk-load vanillaize queue |
-| `kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js` | Queues clone joins for the server script |
 | `kubejs/startup_scripts/shadow_dummy_protect_hook.js` | Shadow dummy spawn protect (replaces CNPC forge script) |
 
 ### data/ (apply with `/reload` or restart)
@@ -49,7 +48,8 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 ### Log lines that mean it worked
 - `[Heal Cap] LivingHealEvent backup registered`
 - `[Heal Cap] LivingHurtEvent backup registered`
-- `[Dungeon Clone Fix] EntityJoinLevelEvent registered`
+- `[Dungeon Clone Fix] server-only script loaded`
+- `[Dungeon Clone Fix] OK ki=...` (first few fixed clones)
 - `[ShadowDummy Protect] LivingHurt/Damage registered`
 - `[Apotheosis Balance] highPriorityData running...`
 - `[Heal Cap] Java AttributeModifier ready`
@@ -103,9 +103,10 @@ CustomNPCs GBPort spam `EntityEvent$Size` / `EntityConstructing` NPEs whenever
 5. Keep End aliases on `asOp!` (already in `EndDragon-Alias.yml`)
 
 ## Dungeons / Shadow dummy (KubeJS — not CNPC forge)
-- `dungeon_clone_ki_fix_hook.js` — Advanced Spawner clone ki damage / moves  
-- `shadow_dummy_protect_hook.js` — same-tick player shadow dummy protect  
-- Legacy CNPC forge `.js` files remain in the repo as deprecated fallbacks only
+- `server_scripts/dungeon_clone_ki_fix.js` — **server script only** (EntityEvents.spawned + tick retries)  
+- `startup_scripts/shadow_dummy_protect_hook.js` — shadow dummy protect (restart once)  
+- Dungeon fix apply: copy file → `/kubejs reload server_scripts` (no restart)  
+- Legacy CNPC forge `.js` files are deprecated fallbacks only
 
 ## Other systems in this pack
 - `SprintJump.js`, `flight suppression.js`

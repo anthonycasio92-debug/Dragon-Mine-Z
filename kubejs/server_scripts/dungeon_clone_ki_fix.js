@@ -1,16 +1,19 @@
 /*
- * DBZ Legacy Reborn - Dungeon Clone Ki Fix (KubeJS server)
+ * DBZ Legacy Reborn - Dungeon Clone Ki Fix (KubeJS SERVER SCRIPT ONLY)
  *
- * Pure ASCII. Applies Advanced Spawner ki damage/moves to sdu:dmz_fighter
- * clones via SduDmzFighter.applySuSpawnNbt.
+ * Pure ASCII. No startup script required.
  *
- * Prefer this over the CNPC Forge script (keeps CNPC forge OFF = no spam).
+ * On every spawn of sdu:dmz_fighter clones from Advanced Spawners, restores
+ * full ki damage / moves via SduDmzFighter.applySuSpawnNbt.
  *
- * Reload: /kubejs reload server_scripts
- * Startup companion (optional): dungeon_clone_ki_fix_hook.js queues joins.
+ * Continuous spawns: EntityEvents.spawned + short tick retries for tag race.
+ *
+ * Install: copy to kubejs/server_scripts/
+ * Apply:   /kubejs reload server_scripts
+ * Keep CustomNPCs Global Forge Scripts OFF.
  */
 
-var DEBUG = true;
+var DEBUG = false;
 var FIXED_SETTINGS_KEY = "sdd_clone_ki_fix_configured";
 var FIXED_DAMAGE_KEY = "sdd_clone_ki_damage_fix_value";
 var FIXED_MOVES_KEY = "sdd_clone_ki_moves_fix_csv";
@@ -19,14 +22,16 @@ var FIXED_AI_TIER_KEY = "sdd_clone_ai_tier_fix";
 var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
-var RETRY_MAX_ATTEMPTS = 25;
-var RETRY_EVERY_TICKS = 5;
-var LOG_FAIL_LIMIT = 12;
-var failLogsLeft = LOG_FAIL_LIMIT;
+var RETRY_MAX_ATTEMPTS = 30;
+var RETRY_EVERY_TICKS = 4;
+var LOG_OK_LEFT = 8;
+var LOG_FAIL_LEFT = 16;
 
 global.dungeonCloneKiRetry = global.dungeonCloneKiRetry || [];
 
-console.info("[Dungeon Clone Fix] server script loaded.");
+console.info(
+    "[Dungeon Clone Fix] server-only script loaded (EntityEvents.spawned + tick retries)."
+);
 
 function dbg(msg) {
     if (!DEBUG) return;
@@ -35,9 +40,17 @@ function dbg(msg) {
     } catch (e) {}
 }
 
+function logOk(msg) {
+    if (LOG_OK_LEFT <= 0) return;
+    LOG_OK_LEFT--;
+    try {
+        console.info("[Dungeon Clone Fix] " + msg);
+    } catch (e) {}
+}
+
 function logFail(msg) {
-    if (failLogsLeft <= 0) return;
-    failLogsLeft--;
+    if (LOG_FAIL_LEFT <= 0) return;
+    LOG_FAIL_LEFT--;
     try {
         console.warn("[Dungeon Clone Fix] " + msg);
     } catch (e) {}
@@ -77,10 +90,25 @@ function className(obj) {
     }
 }
 
+function typeIdOf(entity) {
+    try {
+        if (entity.type != null) return String(entity.type);
+    } catch (e1) {}
+    try {
+        if (entity.getType) return String(entity.getType());
+    } catch (e2) {}
+    try {
+        var mc = unwrapMc(entity);
+        if (mc != null && mc.getType) {
+            return String(mc.getType().toString());
+        }
+    } catch (e3) {}
+    return "";
+}
+
 function isSduDmzFighter(mc) {
     if (mc == null) return false;
     var cn = className(mc);
-    if (cn === "net.shurui.dev.sdu.entity.SduDmzFighter") return true;
     if (cn.indexOf("SduDmzFighter") >= 0) return true;
     try {
         var cls = loadClass("net.shurui.dev.sdu.entity.SduDmzFighter");
@@ -97,15 +125,16 @@ function isSduDmzFighter(mc) {
     return false;
 }
 
+function isCloneCandidate(entity) {
+    var tid = typeIdOf(entity);
+    if (tid.indexOf("dmz_fighter") >= 0) return true;
+    if (tid.indexOf("sdu:dmz") >= 0) return true;
+    return isSduDmzFighter(unwrapMc(entity));
+}
+
 function isAdvancedSpawner(be) {
     if (be == null) return false;
     var cn = className(be);
-    if (
-        cn ===
-        "net.shurui.dev.shuruis_dmz_dungeons.block.AdvancedSpawnerBlockEntity"
-    ) {
-        return true;
-    }
     if (cn.indexOf("AdvancedSpawnerBlockEntity") >= 0) return true;
     try {
         var cls = loadClass(
@@ -244,10 +273,9 @@ function findApplyMethod(mc) {
         while (cls != null) {
             var methods = cls.getDeclaredMethods();
             for (var i = 0; i < methods.length; i++) {
-                var m = methods[i];
-                if (String(m.getName()) === "applySuSpawnNbt") {
-                    m.setAccessible(true);
-                    return m;
+                if (String(methods[i].getName()) === "applySuSpawnNbt") {
+                    methods[i].setAccessible(true);
+                    return methods[i];
                 }
             }
             cls = cls.getSuperclass();
@@ -310,10 +338,7 @@ function rollMovesCsv(configuredMoveList) {
     var KiMoveEntry = loadClass(
         "net.shurui.dev.shuruis_dmz_dungeons.block.KiMoveEntry"
     );
-    if (KiMoveEntry == null) {
-        logFail("KiMoveEntry class missing; moves will be empty.");
-        return { csv: "", size: size };
-    }
+    if (KiMoveEntry == null) return { csv: "", size: size };
 
     for (var i = 0; i < size; i++) {
         var tokenObj = null;
@@ -391,6 +416,10 @@ function queueRetry(mc, reason) {
             return;
         }
     }
+    /* Cap queue under continuous spawn pressure. */
+    if (q.length >= 256) {
+        q.splice(0, q.length - 255);
+    }
     q.push({ uuid: id, mc: mc, attempts: 0, reason: reason || "" });
     dbg("queued retry uuid=" + id + " reason=" + reason);
 }
@@ -406,6 +435,12 @@ function tryApplyCloneFix(entityOrMc) {
 
     var tag = pd(mc);
     if (tag == null) return { ok: false, reason: "no_persistent" };
+
+    /* Already done for this clone. */
+    if (tagHas(tag, FIXED_SETTINGS_KEY) && tagBool(tag, FIXED_SETTINGS_KEY)) {
+        return { ok: true, reason: "already_fixed" };
+    }
+
     if (!tagHas(tag, "sdd_spawner")) {
         return { ok: false, reason: "no_sdd_spawner", retry: true };
     }
@@ -422,8 +457,7 @@ function tryApplyCloneFix(entityOrMc) {
     var desiredScale = 1.0;
 
     var hasStoredRoll =
-        (tagHas(tag, FIXED_SETTINGS_KEY) && tagBool(tag, FIXED_SETTINGS_KEY)) ||
-        (tagHas(tag, FIXED_DAMAGE_KEY) && tagHas(tag, FIXED_MOVES_KEY));
+        tagHas(tag, FIXED_DAMAGE_KEY) && tagHas(tag, FIXED_MOVES_KEY);
 
     if (hasStoredRoll) {
         desiredKiDamage = tagFloat(tag, FIXED_DAMAGE_KEY, 0);
@@ -465,11 +499,7 @@ function tryApplyCloneFix(entityOrMc) {
             }
         }
         if (!isAdvancedSpawner(be)) {
-            return {
-                ok: false,
-                reason: "no_spawner_te@" + pos.getX() + "," + pos.getY() + "," + pos.getZ(),
-                retry: true
-            };
+            return { ok: false, reason: "no_spawner_te", retry: true };
         }
 
         var config = null;
@@ -559,9 +589,7 @@ function tryApplyCloneFix(entityOrMc) {
 
     try {
         mc.getSkillPool().clear();
-    } catch (eClear) {
-        logFail("skillPool.clear failed (continuing): " + eClear);
-    }
+    } catch (eClear) {}
 
     if (!invokeApply(applyMethod, mc, raw)) {
         return { ok: false, reason: "invoke_failed", retry: true };
@@ -573,8 +601,8 @@ function tryApplyCloneFix(entityOrMc) {
         mc.setKiBlastDamage(desiredKiDamage);
     } catch (eSet) {}
 
-    console.info(
-        "[Dungeon Clone Fix] OK ki=" +
+    logOk(
+        "OK ki=" +
             desiredKiDamage +
             " moves=" +
             (desiredMovesCsv || "(none)") +
@@ -585,9 +613,9 @@ function tryApplyCloneFix(entityOrMc) {
     return { ok: true, reason: "applied" };
 }
 
-function handleCandidate(entityOrMc, source) {
-    var mc = unwrapMc(entityOrMc);
-    if (!isSduDmzFighter(mc)) return;
+function handleCandidate(entity, source) {
+    if (!isCloneCandidate(entity)) return;
+    var mc = unwrapMc(entity);
     if (!isServerMc(mc)) return;
 
     var result = tryApplyCloneFix(mc);
@@ -595,7 +623,6 @@ function handleCandidate(entityOrMc, source) {
         dbg("source=" + source + " " + result.reason);
         return;
     }
-
     if (result.retry) {
         queueRetry(mc, result.reason);
     } else {
@@ -603,16 +630,16 @@ function handleCandidate(entityOrMc, source) {
     }
 }
 
-/* Primary: entity spawn. */
+/* Every continuous spawn. */
 EntityEvents.spawned(function (event) {
     try {
         handleCandidate(event.entity, "spawned");
     } catch (err) {
-        logFail("spawned handler error: " + err);
+        logFail("spawned error: " + err);
     }
 });
 
-/* Drain startup Forge join queue if present. */
+/* Retry when sdd_* tags / spawner TE are not ready on the spawn tick. */
 ServerEvents.tick(function (event) {
     try {
         if (event.server == null) return;
@@ -623,24 +650,10 @@ ServerEvents.tick(function (event) {
             try {
                 tick = event.server.tickCount;
             } catch (eT2) {
-                tick = 0;
+                return;
             }
         }
         if (tick % RETRY_EVERY_TICKS !== 0) return;
-
-        /* Merge joins queued by startup hook. */
-        if (
-            global.dungeonCloneKiJoinQueue &&
-            global.dungeonCloneKiJoinQueue.length
-        ) {
-            var joins = global.dungeonCloneKiJoinQueue.splice(
-                0,
-                global.dungeonCloneKiJoinQueue.length
-            );
-            for (var j = 0; j < joins.length; j++) {
-                handleCandidate(joins[j], "join_queue");
-            }
-        }
 
         var q = global.dungeonCloneKiRetry;
         if (!q.length) return;
