@@ -126,10 +126,13 @@ function isSduDmzFighter(mc) {
 }
 
 function isCloneCandidate(entity) {
-    var tid = typeIdOf(entity);
+    var tid = typeIdOf(entity).toLowerCase();
+    /* Fast path for continuous spawn volume — only touch SDU fighters. */
     if (tid.indexOf("dmz_fighter") >= 0) return true;
     if (tid.indexOf("sdu:dmz") >= 0) return true;
-    return isSduDmzFighter(unwrapMc(entity));
+    if (tid.indexOf("sdu") >= 0 && tid.indexOf("fighter") >= 0) return true;
+    /* Do not instanceof-check every pig/zombie spawn. */
+    return false;
 }
 
 function isAdvancedSpawner(be) {
