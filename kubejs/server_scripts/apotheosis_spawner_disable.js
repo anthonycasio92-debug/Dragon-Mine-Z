@@ -1339,14 +1339,8 @@ PlayerEvents.loggedIn(function (event) {
         getApothSpawnerTileClass();
         var n = vanillaizeNearPlayer(event.player);
         purgeSpawnerItems(event.player);
-        if (n > 0) {
-            try {
-                event.player.tell(
-                    "\u00A77Reset " +
-                        n +
-                        " nearby spawner(s) to vanilla stats (mob type kept)."
-                );
-            } catch (eTell) {}
+        /* No player.tell - silent background reset. */
+        if (n > 0 && DEBUG_SPAWNER) {
             console.info(
                 "[Apotheosis Spawner] Login scan vanillaized " +
                     n +
@@ -1366,20 +1360,14 @@ PlayerEvents.tick(function (event) {
         if (player.age % PLAYER_SCAN_INTERVAL !== 0) return;
         var n = vanillaizeNearPlayer(player);
         purgeSpawnerItems(player);
-        if (n > 0) {
+        /* No player.tell - nearby scan must stay silent (was spamming chat). */
+        if (n > 0 && DEBUG_SPAWNER) {
             console.info(
                 "[Apotheosis Spawner] Nearby scan vanillaized " +
                     n +
                     " spawner(s) near " +
                     player.username
             );
-            try {
-                player.tell(
-                    "\u00A77Reset " +
-                        n +
-                        " nearby spawner(s) to vanilla stats (redstone control kept)."
-                );
-            } catch (eTell) {}
         }
     } catch (err) {}
 });
