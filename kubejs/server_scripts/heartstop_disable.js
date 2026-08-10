@@ -1,5 +1,6 @@
 /*
  * DBZ Legacy Reborn - Disable Iron's Spells Heartstop (server)
+ * Version: 1.1.0 (no PlayerEvents.spellPreCast)
  *
  * Pure ASCII.
  *
@@ -7,8 +8,7 @@
  * 2) Strips active Heartstop mob effect if somehow applied.
  *
  * Cast cancel is ONLY in startup_scripts/heartstop_disable_hook.js via
- * Forge SpellPreCastEvent (no PlayerEvents.spellPreCast - that needs the
- * optional irons_spells_js addon, which this pack does not use).
+ * Forge SpellPreCastEvent. Do NOT use PlayerEvents.spellPreCast here.
  *
  * Optional hard config (1.20.1 TOML): in
  *   <world>/serverconfig/irons_spellbooks-server.toml
@@ -18,9 +18,9 @@
  * Startup hook: full restart once.
  */
 
-var SPELL_ID = "irons_spellbooks:heartstop";
-
-console.info("[Heartstop Disable] server script loading...");
+console.info(
+    "[Heartstop Disable] server script v1.1.0 loading (no spellPreCast)..."
+);
 
 ServerEvents.recipes(function (event) {
     var removed = 0;
@@ -55,35 +55,6 @@ ServerEvents.recipes(function (event) {
         "[Heartstop Disable] Recipe cleanup done (removed=" + removed + ")."
     );
 });
-
-/* Addon path (only if irons_spells_js is installed). */
-try {
-    if (typeof PlayerEvents !== "undefined" && PlayerEvents.spellPreCast) {
-        PlayerEvents.spellPreCast(function (event) {
-            try {
-                var id = "";
-                try {
-                    id = String(event.spellId || "");
-                } catch (e1) {}
-                try {
-                    if (!id && event.getSpellId) id = String(event.getSpellId());
-                } catch (e2) {}
-                if (id.toLowerCase() !== SPELL_ID) return;
-                try {
-                    event.cancel();
-                } catch (eC) {
-                    try {
-                        event.setCanceled(true);
-                    } catch (eC2) {}
-                }
-                try {
-                    event.player.tell("\u00A77Heartstop is disabled on this server.");
-                } catch (eT) {}
-            } catch (err) {}
-        });
-        console.info("[Heartstop Disable] PlayerEvents.spellPreCast registered.");
-    }
-} catch (eAddon) {}
 
 function stripHeartstopEffect(entity) {
     if (entity == null) return;
@@ -138,5 +109,5 @@ PlayerEvents.tick(function (event) {
 });
 
 console.info(
-    "[DBZ Legacy Reborn] Heartstop disabled (recipes + effect strip). Cast cancel needs startup hook restart."
+    "[DBZ Legacy Reborn] Heartstop server v1.1.0 ready (recipes + effect strip)."
 );
