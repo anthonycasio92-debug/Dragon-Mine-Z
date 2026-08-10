@@ -22,6 +22,7 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 | `kubejs/server_scripts/capsule_disable.js` | Capsule disable |
 | `kubejs/server_scripts/tinkers_necrotic_disable.js` | Removes Tinkers **Necrotic** life-steal modifier |
 | `kubejs/server_scripts/dungeon_clone_ki_fix.js` | Dungeon clone ki/moves (**server only**; continuous spawns) |
+| `kubejs/server_scripts/heartstop_disable.js` | Iron's Spells **Heartstop** recipe/effect strip |
 
 ### startup_scripts/ (**full server restart** required)
 | File | Purpose |
@@ -29,6 +30,7 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 | `kubejs/startup_scripts/healing_received_cap_hook.js` | Heal + Overheal combat backups |
 | `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` | Spawner chunk-load vanillaize queue |
 | `kubejs/startup_scripts/shadow_dummy_protect_hook.js` | Shadow dummy spawn protect (replaces CNPC forge script) |
+| `kubejs/startup_scripts/heartstop_disable_hook.js` | Cancels casting **irons_spellbooks:heartstop** |
 
 ### data/ (apply with `/reload` or restart)
 - `kubejs/data/apotheosis/affixes/sword/attribute/vampiric.json`
