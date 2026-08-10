@@ -3,10 +3,13 @@
  *
  * Pure ASCII. No startup script required.
  *
- * On every spawn of sdu:dmz_fighter clones from Advanced Spawners, restores
+ * On every spawn of SduDmzFighter clones from Advanced Spawners, restores
  * full ki damage / moves via SduDmzFighter.applySuSpawnNbt.
  *
- * Continuous spawns: EntityEvents.spawned + short tick retries for tag race.
+ * Detection paths (server-only):
+ *  1) EntityEvents.spawned
+ *  2) Bounded tick retries (tag / TE race)
+ *  3) Player nearby AABB scan (backup for continuous dungeon spawns)
  *
  * Install: copy to kubejs/server_scripts/
  * Apply:   /kubejs reload server_scripts
@@ -22,15 +25,18 @@ var FIXED_AI_TIER_KEY = "sdd_clone_ai_tier_fix";
 var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
-var RETRY_MAX_ATTEMPTS = 30;
+var RETRY_MAX_ATTEMPTS = 40;
 var RETRY_EVERY_TICKS = 4;
-var LOG_OK_LEFT = 8;
-var LOG_FAIL_LEFT = 16;
+var NEARBY_SCAN_EVERY = 40; /* player ticks ~= 2s */
+var NEARBY_RANGE = 48.0;
+var LOG_OK_LEFT = 16;
+var LOG_FAIL_LEFT = 24;
+var LOG_SEEN_LEFT = 16;
 
 global.dungeonCloneKiRetry = global.dungeonCloneKiRetry || [];
 
 console.info(
-    "[Dungeon Clone Fix] server-only script loaded (EntityEvents.spawned + tick retries)."
+    "[Dungeon Clone Fix] server-only script loaded (spawned + tick retries + nearby scan)."
 );
 
 function dbg(msg) {
@@ -56,6 +62,14 @@ function logFail(msg) {
     } catch (e) {}
 }
 
+function logSeen(msg) {
+    if (LOG_SEEN_LEFT <= 0) return;
+    LOG_SEEN_LEFT--;
+    try {
+        console.info("[Dungeon Clone Fix] " + msg);
+    } catch (e) {}
+}
+
 function loadClass(name) {
     try {
         return Java.loadClass(name);
@@ -68,6 +82,41 @@ function loadClass(name) {
     }
 }
 
+var LongClass = loadClass("java.lang.Long");
+var BigInteger = loadClass("java.math.BigInteger");
+var BlockPosClass = loadClass("net.minecraft.core.BlockPos");
+var AABBClass = loadClass("net.minecraft.world.phys.AABB");
+var CompoundTagClass = loadClass("net.minecraft.nbt.CompoundTag");
+var KiMoveEntryClass = loadClass(
+    "net.shurui.dev.shuruis_dmz_dungeons.block.KiMoveEntry"
+);
+var SduDmzFighterClass = loadClass("net.shurui.dev.sdu.entity.SduDmzFighter");
+var AdvancedSpawnerClass = loadClass(
+    "net.shurui.dev.shuruis_dmz_dungeons.block.AdvancedSpawnerBlockEntity"
+);
+
+var TWO_64 = BigInteger != null ? new BigInteger("18446744073709551616") : null;
+var MASK_26 = BigInteger != null ? new BigInteger("67108863") : null;
+var MASK_12 = BigInteger != null ? new BigInteger("4095") : null;
+
+if (SduDmzFighterClass != null) {
+    console.info("[Dungeon Clone Fix] SduDmzFighter class ready.");
+} else {
+    console.warn("[Dungeon Clone Fix] SduDmzFighter class missing at load.");
+}
+if (AdvancedSpawnerClass != null) {
+    console.info("[Dungeon Clone Fix] AdvancedSpawnerBlockEntity class ready.");
+} else {
+    console.warn(
+        "[Dungeon Clone Fix] AdvancedSpawnerBlockEntity class missing at load."
+    );
+}
+if (KiMoveEntryClass != null) {
+    console.info("[Dungeon Clone Fix] KiMoveEntry class ready.");
+} else {
+    console.warn("[Dungeon Clone Fix] KiMoveEntry class missing at load.");
+}
+
 function unwrapMc(entity) {
     if (entity == null) return null;
     try {
@@ -77,8 +126,11 @@ function unwrapMc(entity) {
         if (entity.getMinecraftEntity) return entity.getMinecraftEntity();
     } catch (e2) {}
     try {
-        if (entity.entity != null && entity.entity.getClass) return entity.entity;
+        if (entity.getMCEntity) return entity.getMCEntity();
     } catch (e3) {}
+    try {
+        if (entity.entity != null && entity.entity.getClass) return entity.entity;
+    } catch (e4) {}
     return entity;
 }
 
@@ -110,28 +162,40 @@ function isSduDmzFighter(mc) {
     if (mc == null) return false;
     var cn = className(mc);
     if (cn.indexOf("SduDmzFighter") >= 0) return true;
-    try {
-        var cls = loadClass("net.shurui.dev.sdu.entity.SduDmzFighter");
-        if (cls != null) {
+    if (SduDmzFighterClass != null) {
+        try {
+            return SduDmzFighterClass.isInstance(mc);
+        } catch (e1) {
             try {
-                return cls.isInstance(mc);
-            } catch (e1) {
-                try {
-                    return cls.class.isInstance(mc);
-                } catch (e2) {}
-            }
+                return SduDmzFighterClass.class.isInstance(mc);
+            } catch (e2) {}
         }
-    } catch (e3) {}
+    }
     return false;
 }
 
+/*
+ * Cheap spawn filter: class-name string check (no Class.forName per spawn).
+ * Also accepts sdu fighter type ids and already-tagged dungeon clones.
+ */
 function isCloneCandidate(entity) {
+    var mc = unwrapMc(entity);
+    if (mc == null) return false;
+
+    var cn = className(mc);
+    if (cn.indexOf("SduDmzFighter") >= 0) return true;
+
     var tid = typeIdOf(entity).toLowerCase();
-    /* Fast path for continuous spawn volume — only touch SDU fighters. */
     if (tid.indexOf("dmz_fighter") >= 0) return true;
     if (tid.indexOf("sdu:dmz") >= 0) return true;
     if (tid.indexOf("sdu") >= 0 && tid.indexOf("fighter") >= 0) return true;
-    /* Do not instanceof-check every pig/zombie spawn. */
+
+    if (cn.toLowerCase().indexOf("sdu") >= 0 || cn.indexOf("shurui") >= 0) {
+        var tag = pd(mc);
+        if (tagHas(tag, "sdd_spawner") || tagHas(tag, "sdu_clone_ref")) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -139,38 +203,39 @@ function isAdvancedSpawner(be) {
     if (be == null) return false;
     var cn = className(be);
     if (cn.indexOf("AdvancedSpawnerBlockEntity") >= 0) return true;
-    try {
-        var cls = loadClass(
-            "net.shurui.dev.shuruis_dmz_dungeons.block.AdvancedSpawnerBlockEntity"
-        );
-        if (cls != null) {
+    if (AdvancedSpawnerClass != null) {
+        try {
+            return AdvancedSpawnerClass.isInstance(be);
+        } catch (e1) {
             try {
-                return cls.isInstance(be);
-            } catch (e1) {
-                try {
-                    return cls.class.isInstance(be);
-                } catch (e2) {}
+                return AdvancedSpawnerClass.class.isInstance(be);
+            } catch (e2) {}
+        }
+    }
+    return false;
+}
+
+function getLevel(mc) {
+    if (mc == null) return null;
+    try {
+        return mc.level();
+    } catch (e1) {
+        try {
+            return mc.getLevel();
+        } catch (e2) {
+            try {
+                return mc.m_9236_();
+            } catch (e3) {
+                return null;
             }
         }
-    } catch (e3) {}
-    return false;
+    }
 }
 
 function isServerMc(mc) {
     if (mc == null) return false;
     try {
-        var level = null;
-        try {
-            level = mc.level();
-        } catch (e1) {
-            try {
-                level = mc.getLevel();
-            } catch (e2) {
-                try {
-                    level = mc.m_9236_();
-                } catch (e3) {}
-            }
-        }
+        var level = getLevel(mc);
         if (level == null) return false;
         try {
             if (typeof level.isClientSide === "function") {
@@ -255,15 +320,60 @@ function tagSetString(tag, key, value) {
     } catch (e) {}
 }
 
-function unpackSpawnerPos(tag) {
+function readPackedSpawnerLongString(tag) {
     if (tag == null || !tagHas(tag, "sdd_spawner")) return null;
-    var BlockPos = loadClass("net.minecraft.core.BlockPos");
-    if (BlockPos == null) return null;
     try {
-        return BlockPos.of(tag.getLong("sdd_spawner"));
+        if (LongClass != null) {
+            return LongClass.toString(tag.getLong("sdd_spawner"));
+        }
+    } catch (e1) {}
+    try {
+        return "" + tag.getLong("sdd_spawner");
+    } catch (e2) {
+        return null;
+    }
+}
+
+/*
+ * Unpack BlockPos long WITHOUT JS Number coercion (precision loss far from origin).
+ * Same bit layout as Minecraft BlockPos.asLong / of.
+ */
+function unpackSpawnerPos(tag) {
+    if (BlockPosClass == null) return null;
+    var packedText = readPackedSpawnerLongString(tag);
+    if (packedText == null) return null;
+
+    if (BigInteger != null && TWO_64 != null) {
+        try {
+            var packed = new BigInteger("" + packedText);
+            if (packed.signum() < 0) packed = packed.add(TWO_64);
+
+            var blockX = packed.shiftRight(38).and(MASK_26).intValue();
+            var blockZ = packed.shiftRight(12).and(MASK_26).intValue();
+            var blockY = packed.and(MASK_12).intValue();
+
+            if (blockX >= 33554432) blockX = blockX - 67108864;
+            if (blockZ >= 33554432) blockZ = blockZ - 67108864;
+            if (blockY >= 2048) blockY = blockY - 4096;
+
+            try {
+                return new BlockPosClass(blockX, blockY, blockZ);
+            } catch (eNew) {
+                try {
+                    return BlockPosClass.containing(blockX, blockY, blockZ);
+                } catch (eCont) {}
+            }
+        } catch (eBi) {
+            dbg("BigInteger unpack failed: " + eBi);
+        }
+    }
+
+    /* Last resort — may be wrong far from spawn. */
+    try {
+        return BlockPosClass.of(tag.getLong("sdd_spawner"));
     } catch (e1) {
         try {
-            return BlockPos.m_122022_(tag.getLong("sdd_spawner"));
+            return BlockPosClass.m_122022_(tag.getLong("sdd_spawner"));
         } catch (e2) {
             return null;
         }
@@ -298,6 +408,7 @@ function findApplyMethod(mc) {
 
 function invokeApply(method, mc, raw) {
     try {
+        /* Pass CompoundTag directly — do NOT wrap for Rhino. */
         method.invoke(mc, raw);
         return true;
     } catch (e1) {}
@@ -338,10 +449,7 @@ function rollMovesCsv(configuredMoveList) {
     } catch (e) {
         size = 0;
     }
-    var KiMoveEntry = loadClass(
-        "net.shurui.dev.shuruis_dmz_dungeons.block.KiMoveEntry"
-    );
-    if (KiMoveEntry == null) return { csv: "", size: size };
+    if (KiMoveEntryClass == null) return { csv: "", size: size };
 
     for (var i = 0; i < size; i++) {
         var tokenObj = null;
@@ -356,7 +464,7 @@ function rollMovesCsv(configuredMoveList) {
 
         var entry = null;
         try {
-            entry = KiMoveEntry.fromToken(token);
+            entry = KiMoveEntryClass.fromToken(token);
         } catch (eParse) {
             continue;
         }
@@ -408,6 +516,59 @@ function entityUuid(mc) {
     }
 }
 
+function resolveEntityByUuid(mcHint, uuid) {
+    if (mcHint != null) {
+        try {
+            if (mcHint.isAlive && mcHint.isAlive()) return mcHint;
+        } catch (e1) {
+            try {
+                if (mcHint.isAlive) return mcHint;
+            } catch (e2) {}
+        }
+    }
+    if (!uuid) return mcHint;
+    try {
+        var level = getLevel(mcHint);
+        if (level == null) return mcHint;
+        var server = null;
+        try {
+            server = level.getServer();
+        } catch (eS1) {
+            try {
+                server = level.m_7654_();
+            } catch (eS2) {}
+        }
+        if (server == null) return mcHint;
+        var UUID = loadClass("java.util.UUID");
+        var id = UUID.fromString(uuid);
+        var levels = null;
+        try {
+            levels = server.getAllLevels();
+        } catch (eL) {
+            try {
+                levels = server.getAllLevels;
+            } catch (eL2) {
+                return mcHint;
+            }
+        }
+        if (levels == null) return mcHint;
+        var it = levels.iterator();
+        while (it.hasNext()) {
+            var lvl = it.next();
+            var found = null;
+            try {
+                found = lvl.getEntity(id);
+            } catch (eG1) {
+                try {
+                    found = lvl.m_6815_(id);
+                } catch (eG2) {}
+            }
+            if (found != null) return found;
+        }
+    } catch (e) {}
+    return mcHint;
+}
+
 function queueRetry(mc, reason) {
     if (mc == null) return;
     var id = entityUuid(mc);
@@ -416,15 +577,36 @@ function queueRetry(mc, reason) {
     for (var i = 0; i < q.length; i++) {
         if (q[i].uuid === id) {
             q[i].mc = mc;
+            q[i].reason = reason || q[i].reason;
             return;
         }
     }
-    /* Cap queue under continuous spawn pressure. */
     if (q.length >= 256) {
         q.splice(0, q.length - 255);
     }
     q.push({ uuid: id, mc: mc, attempts: 0, reason: reason || "" });
     dbg("queued retry uuid=" + id + " reason=" + reason);
+}
+
+function looksAlreadyApplied(mc, tag) {
+    if (!tagHas(tag, FIXED_SETTINGS_KEY) || !tagBool(tag, FIXED_SETTINGS_KEY)) {
+        return false;
+    }
+    var wantEnabled = tagBool(tag, FIXED_ENABLED_KEY);
+    var wantDmg = tagFloat(tag, FIXED_DAMAGE_KEY, 0);
+    var wantMoves = tagString(tag, FIXED_MOVES_KEY);
+    if (!wantEnabled && wantDmg <= 0 && (!wantMoves || !wantMoves.length)) {
+        return true;
+    }
+    var curDmg = 0;
+    try {
+        curDmg = parseFloat("" + mc.getKiBlastDamage());
+    } catch (e1) {}
+    var curMoves = 0;
+    try {
+        curMoves = mc.getSkillPool().size();
+    } catch (e2) {}
+    return curDmg > 0 || curMoves > 0;
 }
 
 function tryApplyCloneFix(entityOrMc) {
@@ -439,8 +621,7 @@ function tryApplyCloneFix(entityOrMc) {
     var tag = pd(mc);
     if (tag == null) return { ok: false, reason: "no_persistent" };
 
-    /* Already done for this clone. */
-    if (tagHas(tag, FIXED_SETTINGS_KEY) && tagBool(tag, FIXED_SETTINGS_KEY)) {
+    if (looksAlreadyApplied(mc, tag)) {
         return { ok: true, reason: "already_fixed" };
     }
 
@@ -475,18 +656,7 @@ function tryApplyCloneFix(entityOrMc) {
             return { ok: false, reason: "bad_spawner_pos", retry: true };
         }
 
-        var level = null;
-        try {
-            level = mc.level();
-        } catch (eL1) {
-            try {
-                level = mc.getLevel();
-            } catch (eL2) {
-                try {
-                    level = mc.m_9236_();
-                } catch (eL3) {}
-            }
-        }
+        var level = getLevel(mc);
         if (level == null) {
             return { ok: false, reason: "no_level", retry: true };
         }
@@ -502,7 +672,19 @@ function tryApplyCloneFix(entityOrMc) {
             }
         }
         if (!isAdvancedSpawner(be)) {
-            return { ok: false, reason: "no_spawner_te", retry: true };
+            var px = "?";
+            var py = "?";
+            var pz = "?";
+            try {
+                px = pos.getX();
+                py = pos.getY();
+                pz = pos.getZ();
+            } catch (eP) {}
+            return {
+                ok: false,
+                reason: "no_spawner_te@" + px + "," + py + "," + pz,
+                retry: true
+            };
         }
 
         var config = null;
@@ -571,12 +753,11 @@ function tryApplyCloneFix(entityOrMc) {
         return { ok: false, reason: "no_applySuSpawnNbt" };
     }
 
-    var CompoundTag = loadClass("net.minecraft.nbt.CompoundTag");
-    if (CompoundTag == null) {
+    if (CompoundTagClass == null) {
         return { ok: false, reason: "no_CompoundTag" };
     }
 
-    var raw = new CompoundTag();
+    var raw = new CompoundTagClass();
     try {
         raw.putInt("AiTier", desiredAiTier);
         raw.putInt("Behavior", desiredBehavior);
@@ -621,6 +802,20 @@ function handleCandidate(entity, source) {
     var mc = unwrapMc(entity);
     if (!isServerMc(mc)) return;
 
+    var tag = pd(mc);
+    logSeen(
+        "seen source=" +
+            source +
+            " type=" +
+            typeIdOf(entity) +
+            " class=" +
+            className(mc) +
+            " sdd_spawner=" +
+            tagHas(tag, "sdd_spawner") +
+            " sdu_clone_ref=" +
+            tagHas(tag, "sdu_clone_ref")
+    );
+
     var result = tryApplyCloneFix(mc);
     if (result.ok) {
         dbg("source=" + source + " " + result.reason);
@@ -628,8 +823,67 @@ function handleCandidate(entity, source) {
     }
     if (result.retry) {
         queueRetry(mc, result.reason);
+        dbg("source=" + source + " retry=" + result.reason);
     } else {
         logFail("source=" + source + " fail=" + result.reason);
+    }
+}
+
+function scanNearbyPlayer(player) {
+    var mcPlayer = unwrapMc(player);
+    if (!isServerMc(mcPlayer)) return;
+
+    var level = getLevel(mcPlayer);
+    if (level == null || AABBClass == null) return;
+
+    var x = 0;
+    var y = 0;
+    var z = 0;
+    try {
+        x = mcPlayer.getX();
+        y = mcPlayer.getY();
+        z = mcPlayer.getZ();
+    } catch (ePos) {
+        try {
+            x = mcPlayer.m_20185_();
+            y = mcPlayer.m_20186_();
+            z = mcPlayer.m_20189_();
+        } catch (ePos2) {
+            return;
+        }
+    }
+
+    var r = NEARBY_RANGE;
+    var box = null;
+    try {
+        box = new AABBClass(x - r, y - r, z - r, x + r, y + r, z + r);
+    } catch (eBox) {
+        return;
+    }
+
+    var list = null;
+    try {
+        list = level.getEntities(mcPlayer, box);
+    } catch (e1) {
+        try {
+            list = level.m_45933_(mcPlayer, box);
+        } catch (e2) {
+            list = null;
+        }
+    }
+    if (list == null) return;
+
+    var it = null;
+    try {
+        it = list.iterator();
+    } catch (eIt) {
+        return;
+    }
+    while (it.hasNext()) {
+        var ent = it.next();
+        if (ent == null) continue;
+        if (!isCloneCandidate(ent)) continue;
+        handleCandidate(ent, "nearby");
     }
 }
 
@@ -639,6 +893,28 @@ EntityEvents.spawned(function (event) {
         handleCandidate(event.entity, "spawned");
     } catch (err) {
         logFail("spawned error: " + err);
+    }
+});
+
+/* Nearby backup — catches clones if spawn-event timing misses tags. */
+PlayerEvents.tick(function (event) {
+    try {
+        var player = event.player;
+        if (player == null) return;
+        var age = 0;
+        try {
+            age = player.age;
+        } catch (eA) {
+            try {
+                age = unwrapMc(player).tickCount;
+            } catch (eA2) {
+                return;
+            }
+        }
+        if (age % NEARBY_SCAN_EVERY !== 0) return;
+        scanNearbyPlayer(player);
+    } catch (err) {
+        logFail("nearby scan error: " + err);
     }
 });
 
@@ -665,9 +941,12 @@ ServerEvents.tick(function (event) {
         for (var i = 0; i < q.length; i++) {
             var item = q[i];
             item.attempts++;
-            var result = tryApplyCloneFix(item.mc);
+            var live = resolveEntityByUuid(item.mc, item.uuid);
+            item.mc = live;
+            var result = tryApplyCloneFix(live);
             if (result.ok) continue;
             if (result.retry && item.attempts < RETRY_MAX_ATTEMPTS) {
+                item.reason = result.reason;
                 next.push(item);
             } else if (!result.ok) {
                 logFail(
