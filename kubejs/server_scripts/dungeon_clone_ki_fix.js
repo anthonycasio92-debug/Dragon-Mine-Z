@@ -368,7 +368,7 @@ function unpackSpawnerPos(tag) {
         }
     }
 
-    /* Last resort — may be wrong far from spawn. */
+    /* Last resort - may be wrong far from spawn. */
     try {
         return BlockPosClass.of(tag.getLong("sdd_spawner"));
     } catch (e1) {
@@ -408,7 +408,7 @@ function findApplyMethod(mc) {
 
 function invokeApply(method, mc, raw) {
     try {
-        /* Pass CompoundTag directly — do NOT wrap for Rhino. */
+        /* Pass CompoundTag directly - do NOT wrap for Rhino. */
         method.invoke(mc, raw);
         return true;
     } catch (e1) {}
@@ -896,7 +896,7 @@ EntityEvents.spawned(function (event) {
     }
 });
 
-/* Nearby backup — catches clones if spawn-event timing misses tags. */
+/* Nearby backup - catches clones if spawn-event timing misses tags. */
 PlayerEvents.tick(function (event) {
     try {
         var player = event.player;
