@@ -1,15 +1,22 @@
 /*
  * DBZ Legacy Reborn - Disable Iron's Spells Heartstop (startup)
+ * Version: 1.1.0
  *
  * Pure ASCII. ForgeEvents only work from startup_scripts on this KubeJS build.
+ *
  * Cancels SpellPreCastEvent for irons_spellbooks:heartstop so it cannot be
  * cast from books, scrolls, imbued weapons, etc.
  *
+ * NOTE: Do NOT use MobEffectEvent$Added here - it is NOT cancelable on
+ * Forge 1.20.1 and can error. Effect strip is handled by the server script.
+ *
  * Requires a FULL server restart once.
- * Companion: kubejs/server_scripts/heartstop_disable.js (recipes + effect strip)
+ * Companion: kubejs/server_scripts/heartstop_disable.js
  */
 
-console.info("[Heartstop Disable] startup hook evaluating...");
+console.info(
+    "[Heartstop Disable] startup hook v1.1.0 evaluating..."
+);
 
 var SPELL_ID = "irons_spellbooks:heartstop";
 
@@ -39,77 +46,41 @@ function onSpellPreCast(event) {
     } catch (err) {}
 }
 
-function onEffectAdded(event) {
-    try {
-        var effect = null;
-        try {
-            effect = event.getEffectInstance();
-        } catch (e1) {
-            try {
-                effect = event.effectInstance;
-            } catch (e2) {}
-        }
-        if (effect == null) return;
-
-        var eff = null;
-        try {
-            eff = effect.getEffect();
-        } catch (e3) {
-            try {
-                eff = effect.effect;
-            } catch (e4) {}
-        }
-        if (eff == null) return;
-
-        var key = "";
-        try {
-            key = String(eff.getDescriptionId()).toLowerCase();
-        } catch (e5) {
-            try {
-                key = String(eff).toLowerCase();
-            } catch (e6) {}
-        }
-        if (key.indexOf("heartstop") < 0) return;
-
-        try {
-            event.setCanceled(true);
-        } catch (eC) {
-            try {
-                event.cancel();
-            } catch (eC2) {}
-        }
-
-        try {
-            var entity = event.getEntity();
-            if (entity != null && typeof entity.removeEffect === "function") {
-                entity.removeEffect(eff);
-            }
-        } catch (eR) {}
-    } catch (err) {}
-}
+var registered = false;
 
 try {
-    ForgeEvents.onEvent(
-        "io.redspace.ironsspellbooks.api.events.SpellPreCastEvent",
-        onSpellPreCast
-    );
-    console.info(
-        "[Heartstop Disable] SpellPreCastEvent registered (irons_spellbooks:heartstop)."
-    );
+    var SpellPreCastEvent = null;
+    try {
+        SpellPreCastEvent = Java.loadClass(
+            "io.redspace.ironsspellbooks.api.events.SpellPreCastEvent"
+        );
+        console.info(
+            "[Heartstop Disable] Loaded Java class SpellPreCastEvent."
+        );
+    } catch (eLoad) {
+        console.error(
+            "[Heartstop Disable] SpellPreCastEvent class missing: " + eLoad
+        );
+    }
+
+    if (SpellPreCastEvent != null) {
+        ForgeEvents.onEvent(
+            "io.redspace.ironsspellbooks.api.events.SpellPreCastEvent",
+            onSpellPreCast
+        );
+        registered = true;
+        console.info(
+            "[Heartstop Disable] startup v1.1.0 SpellPreCastEvent registered (irons_spellbooks:heartstop)."
+        );
+    }
 } catch (err) {
     console.error(
         "[Heartstop Disable] SpellPreCastEvent register failed: " + err
     );
 }
 
-try {
-    ForgeEvents.onEvent(
-        "net.minecraftforge.event.entity.living.MobEffectEvent$Added",
-        onEffectAdded
-    );
-    console.info("[Heartstop Disable] MobEffectEvent$Added registered.");
-} catch (err) {
+if (!registered) {
     console.error(
-        "[Heartstop Disable] MobEffectEvent register failed: " + err
+        "[Heartstop Disable] startup v1.1.0 FAILED to register cast cancel. Is Iron's Spells installed?"
     );
 }
