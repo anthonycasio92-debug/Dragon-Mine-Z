@@ -3,11 +3,12 @@
  *
  * Pure ASCII.
  *
- * 1) Removes recipes whose id/output mentions heartstop (scrolls, etc.).
- * 2) If KubeJS Iron's Spells addon is present, cancels spellPreCast.
- * 3) Strips active Heartstop mob effect if somehow applied.
+ * 1) Removes recipes whose id mentions heartstop (scrolls, etc.).
+ * 2) Strips active Heartstop mob effect if somehow applied.
  *
- * Cast block itself is in startup_scripts/heartstop_disable_hook.js (restart).
+ * Cast cancel is ONLY in startup_scripts/heartstop_disable_hook.js via
+ * Forge SpellPreCastEvent (no PlayerEvents.spellPreCast - that needs the
+ * optional irons_spells_js addon, which this pack does not use).
  *
  * Optional hard config (1.20.1 TOML): in
  *   <world>/serverconfig/irons_spellbooks-server.toml
