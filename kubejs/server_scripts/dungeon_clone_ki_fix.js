@@ -29,16 +29,22 @@ var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
 /*
- * Fast early retries (tags/TE/pool overwrite race). Dense in the first second
- * so new dungeon clones start working quickly. Nearby scan must NOT reset this.
+ * Fast early retries + hot window. SDU often wipes the skill pool after our
+ * first apply; keep force-reapplying for HOT_WINDOW_TICKS so clones work ASAP.
+ * Nearby scan must NOT reset in-flight retry schedules.
  */
-var RETRY_DELAYS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 30];
-/* Re-assert after a successful apply (SDU may clear the pool shortly after spawn). */
-var REASSERT_DELAYS = [1, 2, 4, 8, 16];
+var RETRY_DELAYS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 30, 40, 60];
+var REASSERT_DELAYS = [1, 2, 3, 4, 5, 8, 12, 16, 24, 32];
+var HOT_WINDOW_TICKS = 200; /* ~10s every-tick / frequent force re-apply */
+var HOT_EVERY_EARLY = 1; /* first 2s: every tick */
+var HOT_EARLY_TICKS = 40;
+var HOT_EVERY_LATE = 2; /* after that: every 2 ticks until window ends */
 var RETRY_EVERY_TICKS = 1;
-var NEARBY_SCAN_EVERY = 10; /* 0.5s backup; only applies if not already fixed */
+var NEARBY_SCAN_EVERY = 10;
 var NEARBY_RANGE = 48.0;
 var NEAREST_SPAWNER_RANGE = 32;
+
+global.dungeonCloneKiHot = global.dungeonCloneKiHot || {};
 /* Runtime logs only when DEBUG=true (avoids console flood in dungeons). */
 var LOG_OK_LEFT = DEBUG ? 16 : 0;
 var LOG_FAIL_LEFT = DEBUG ? 24 : 0;
@@ -897,6 +903,60 @@ function queueReassertPasses(mc) {
     enqueueDelays(mc, REASSERT_DELAYS, "reassert", false);
 }
 
+function markHot(mc) {
+    if (mc == null) return;
+    var id = entityUuid(mc);
+    if (!id) return;
+    var tick = getServerTick(mc);
+    var prev = global.dungeonCloneKiHot[id];
+    if (prev != null && prev.until > tick) {
+        prev.mc = mc;
+        return;
+    }
+    global.dungeonCloneKiHot[id] = {
+        mc: mc,
+        start: tick,
+        until: tick + HOT_WINDOW_TICKS
+    };
+}
+
+function entityAgeTicks(mc) {
+    try {
+        return parseInt("" + mc.tickCount, 10);
+    } catch (e1) {
+        try {
+            return parseInt("" + mc.f_19797_, 10);
+        } catch (e2) {
+            return 0;
+        }
+    }
+}
+
+/*
+ * True only when desired ki/moves are actually present on the fighter.
+ * IMPORTANT: damage alone must not skip re-apply if moves are still missing
+ * (SDU often keeps ki damage but wipes the skill pool after spawn).
+ */
+function isEffectivelyApplied(mc, desiredKiDamage, desiredMovesCsv, desiredKiEnabled) {
+    var wantMoves = !!(desiredMovesCsv && desiredMovesCsv.length > 0);
+    var wantDmg = desiredKiDamage > 0;
+    if (!desiredKiEnabled && !wantDmg && !wantMoves) return true;
+
+    var curDmg = 0;
+    var curMoves = 0;
+    try {
+        curDmg = parseFloat("" + mc.getKiBlastDamage());
+    } catch (eD) {}
+    try {
+        curMoves = mc.getSkillPool().size();
+    } catch (eM) {}
+
+    if (wantMoves && curMoves <= 0) return false;
+    if (wantDmg && !(curDmg > 0)) return false;
+    if (desiredKiEnabled && curMoves <= 0 && !(curDmg > 0)) return false;
+    return curMoves > 0 || curDmg > 0;
+}
+
 function rollFromSpawnerConfig(blockEntity, isBoss, iNbt, mc) {
     var config = null;
     try {
@@ -966,8 +1026,9 @@ function rollFromSpawnerConfig(blockEntity, isBoss, iNbt, mc) {
 
 /*
  * Core apply - mirrors Dungeon-Clone-Ki-Fix-Forge.js applyCloneFix.
+ * force=true: always re-invoke applySuSpawnNbt (hot window / reassert).
  */
-function applyCloneFix(mc, allowRetryLater) {
+function applyCloneFix(mc, allowRetryLater, force) {
     if (!isSduDmzFighter(mc)) return { ok: false, reason: "not_fighter" };
     if (!isServerMc(mc)) return { ok: false, reason: "not_server" };
 
@@ -1012,6 +1073,27 @@ function applyCloneFix(mc, allowRetryLater) {
     var hasStoredRoll =
         nbtHas(iNbt, mc, FIXED_DAMAGE_KEY) && nbtHas(iNbt, mc, FIXED_MOVES_KEY);
 
+    /*
+     * If we stored an empty roll from a too-early nearest-spawner peek, discard
+     * it once real sdd_* tags exist so we can re-roll from the real TE.
+     */
+    if (
+        hasStoredRoll &&
+        hasSpawner &&
+        !force &&
+        nbtGetFloat(iNbt, mc, FIXED_DAMAGE_KEY, 0) <= 0 &&
+        !nbtGetString(iNbt, mc, FIXED_MOVES_KEY) &&
+        !nbtGetBoolean(iNbt, mc, FIXED_ENABLED_KEY)
+    ) {
+        hasStoredRoll = false;
+        loadedStoredSettings = false;
+        try {
+            mc.getPersistentData().remove(FIXED_SETTINGS_KEY);
+            mc.getPersistentData().remove(FIXED_DAMAGE_KEY);
+            mc.getPersistentData().remove(FIXED_MOVES_KEY);
+        } catch (eClr) {}
+    }
+
     /* Forge: if already marked, still re-apply from stored rolls. */
     if (loadedStoredSettings || hasStoredRoll) {
         desiredKiDamage = nbtGetFloat(iNbt, mc, FIXED_DAMAGE_KEY, 0);
@@ -1022,25 +1104,17 @@ function applyCloneFix(mc, allowRetryLater) {
         desiredScale = nbtGetFloat(iNbt, mc, FIXED_SCALE_KEY, 1.0);
         via = "stored";
 
-        /* Skip if already looks applied (avoid clearing pool every nearby tick). */
-        if (loadedStoredSettings) {
-            var curDmg = 0;
-            var curMoves = 0;
-            try {
-                curDmg = parseFloat("" + mc.getKiBlastDamage());
-            } catch (eD) {}
-            try {
-                curMoves = mc.getSkillPool().size();
-            } catch (eM) {}
-            if (
-                (!desiredKiEnabled &&
-                    desiredKiDamage <= 0 &&
-                    !desiredMovesCsv) ||
-                curDmg > 0 ||
-                curMoves > 0
-            ) {
-                return { ok: true, reason: "already_fixed" };
-            }
+        if (
+            !force &&
+            loadedStoredSettings &&
+            isEffectivelyApplied(
+                mc,
+                desiredKiDamage,
+                desiredMovesCsv,
+                desiredKiEnabled
+            )
+        ) {
+            return { ok: true, reason: "already_fixed" };
         }
     } else {
         var blockEntity = null;
@@ -1208,6 +1282,9 @@ function handleCandidate(entity, source) {
     var mc = unwrapMc(entity);
     if (!isServerMc(mc)) return;
 
+    /* Always hot-track young / newly seen clones for force re-apply. */
+    markHot(mc);
+
     var iEntity = getIEntity(mc);
     var iNbt = getINbt(iEntity, mc);
     logSeen(
@@ -1220,19 +1297,19 @@ function handleCandidate(entity, source) {
             " sdd_spawner=" +
             nbtHas(iNbt, mc, "sdd_spawner") +
             " sdu_clone_ref=" +
-            nbtHas(iNbt, mc, "sdu_clone_ref")
+            nbtHas(iNbt, mc, "sdu_clone_ref") +
+            " age=" +
+            entityAgeTicks(mc)
     );
 
-    var result = applyCloneFix(mc, true);
+    var result = applyCloneFix(mc, true, source === "spawned" || source === "hot");
     if (result.ok) {
-        /* Re-assert quickly - SDU often overwrites the pool shortly after join. */
         if (result.reason === "applied") {
             queueReassertPasses(mc);
         }
         return;
     }
     if (result.retry) {
-        /* Spawn path may replace; nearby must not reset an in-flight schedule. */
         enqueueDelays(
             mc,
             RETRY_DELAYS,
@@ -1242,6 +1319,48 @@ function handleCandidate(entity, source) {
         dbg("source=" + source + " retry=" + result.reason);
     } else {
         logFail("source=" + source + " fail=" + result.reason);
+    }
+}
+
+function drainHotWindow(serverTick) {
+    var hot = global.dungeonCloneKiHot;
+    var ids = Object.keys(hot);
+    if (!ids.length) return;
+    for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var entry = hot[id];
+        if (entry == null) continue;
+        if (serverTick >= entry.until) {
+            delete hot[id];
+            continue;
+        }
+        var age = serverTick - entry.start;
+        var due = false;
+        if (age <= HOT_EARLY_TICKS) {
+            due = age % HOT_EVERY_EARLY === 0;
+        } else {
+            due = age % HOT_EVERY_LATE === 0;
+        }
+        if (!due) continue;
+
+        var mc = entry.mc;
+        try {
+            if (mc == null || !mc.isAlive()) {
+                delete hot[id];
+                continue;
+            }
+        } catch (eDead) {
+            delete hot[id];
+            continue;
+        }
+        /*
+         * Prefer non-force first (skips when moves/damage already stick).
+         * If not effectively applied, force re-invoke applySuSpawnNbt.
+         */
+        var result = applyCloneFix(mc, false, false);
+        if (result.reason !== "already_fixed") {
+            applyCloneFix(mc, false, true);
+        }
     }
 }
 
@@ -1321,7 +1440,7 @@ PlayerEvents.tick(function (event) {
     }
 });
 
-/* Drain forge-style delayed retries. */
+/* Hot window (force) + delayed retries every tick. */
 ServerEvents.tick(function (event) {
     try {
         if (event.server == null) return;
@@ -1336,6 +1455,8 @@ ServerEvents.tick(function (event) {
             }
         }
         if (tick % RETRY_EVERY_TICKS !== 0) return;
+
+        drainHotWindow(tick);
 
         var q = global.dungeonCloneKiRetry;
         if (!q.length) return;
@@ -1354,14 +1475,15 @@ ServerEvents.tick(function (event) {
             } catch (eDead) {
                 continue;
             }
-            var result = applyCloneFix(mc, item.reason === "fast_retry");
+            var force = item.reason === "reassert" || item.reason === "fast_retry";
+            var result = applyCloneFix(mc, false, force);
             if (result.ok) {
                 if (result.reason === "applied") {
+                    markHot(mc);
                     queueReassertPasses(mc);
                 }
                 continue;
             }
-            /* Each delayed entry is one-shot (like forge TickTask). */
             if (!result.ok && item.reason === "fast_retry" && DEBUG) {
                 logFail(
                     "retry done uuid=" +
