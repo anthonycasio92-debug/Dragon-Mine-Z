@@ -21,13 +21,14 @@ Versions: Rival **v4.7.7** / Sparring **v3.2.8** / End Strength **v2.11.0**
 | `kubejs/server_scripts/remove_silk_touch.js` | Strip Silk Touch (keep item) |
 | `kubejs/server_scripts/capsule_disable.js` | Capsule disable |
 | `kubejs/server_scripts/tinkers_necrotic_disable.js` | Removes Tinkers **Necrotic** life-steal modifier |
+| `kubejs/server_scripts/dungeon_clone_ki_fix.js` | Dungeon clone full ki/moves (main fix; `/kubejs reload server_scripts`) |
 
 ### startup_scripts/ (**full server restart** required)
 | File | Purpose |
 |------|---------|
 | `kubejs/startup_scripts/healing_received_cap_hook.js` | Heal + Overheal combat backups |
 | `kubejs/startup_scripts/apotheosis_spawner_chunk_hook.js` | Spawner chunk-load vanillaize queue |
-| `kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js` | Dungeon clone full ki/moves (replaces CNPC forge script) |
+| `kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js` | Queues clone joins for the server script |
 | `kubejs/startup_scripts/shadow_dummy_protect_hook.js` | Shadow dummy spawn protect (replaces CNPC forge script) |
 
 ### data/ (apply with `/reload` or restart)
