@@ -5,7 +5,8 @@
  * ============================================================
  *
  * PREFERRED INSTALL (no CNPC forge NPE spam):
- *   Use kubejs/startup_scripts/dungeon_clone_ki_fix_hook.js
+ *   Use kubejs/server_scripts/dungeon_clone_ki_fix.js
+ *   (ports this file's NpcAPI getNbt + applySuSpawnNbt logic)
  *   and DISABLE CustomNPCs -> Global -> Forge Scripts entirely.
  *
  * This CNPC Forge file is kept only as a fallback. Enabling ANY

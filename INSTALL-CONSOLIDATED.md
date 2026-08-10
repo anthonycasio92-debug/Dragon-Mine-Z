@@ -114,7 +114,8 @@ Proof from your logs: stack hits `noppes.npcs.ForgeEventHandler` while Create bu
 6. Dungeon fix = KubeJS **server_scripts only** (below) — no CNPC forge
 
 ## Dungeons / Shadow dummy (KubeJS — not CNPC forge)
-- `server_scripts/dungeon_clone_ki_fix.js` — **server script only** (EntityEvents.spawned + tick retries + nearby player scan)  
+- `server_scripts/dungeon_clone_ki_fix.js` — **server script only**; ports working CNPC forge NBT path (`NpcAPI.getIEntity().getNbt()`) + spawned/retries/nearby scan  
+
 
 - `startup_scripts/shadow_dummy_protect_hook.js` — shadow dummy protect (restart once)  
 - Dungeon fix apply: copy file → `/kubejs reload server_scripts` (no restart)  

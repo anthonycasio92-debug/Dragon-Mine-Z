@@ -1,24 +1,22 @@
 /*
  * DBZ Legacy Reborn - Dungeon Clone Ki Fix (KubeJS SERVER SCRIPT ONLY)
  *
- * Pure ASCII. No startup script required.
+ * Pure ASCII. No startup script / no CNPC Forge Scripts required.
  *
- * On every spawn of SduDmzFighter clones from Advanced Spawners, restores
- * full ki damage / moves via SduDmzFighter.applySuSpawnNbt.
+ * Port of Dungeon-Clone-Ki-Fix-Forge.js (v1.2.1) apply logic:
+ *   - Read clone tags via CNPC NpcAPI IEntity.getNbt() (same as working forge)
+ *   - Fallback: Forge persistent data + full entity save NBT deep search
+ *   - Fallback: nearest AdvancedSpawnerBlockEntity in nearby chunks
+ *   - BigInteger BlockPos unpack (no JS long precision loss)
+ *   - applySuSpawnNbt BEFORE/with skill-pool clear; CompoundTag passed directly
+ *   - FIXED_* persisted on MC persistent data; mark only after successful apply
  *
- * IMPORTANT: SDD clone tags (sdd_spawner / sdu_clone_ref) live in the entity
- * SAVE NBT (addAdditionalSaveData), NOT always in Forge getPersistentData().
- * CNPC getNbt() saw them; plain persistent-data checks miss them.
- *
- * Detection paths (server-only):
- *  1) EntityEvents.spawned
- *  2) Bounded tick retries (tag / TE race)
- *  3) Player nearby AABB scan (backup for continuous dungeon spawns)
- *  4) Nearest AdvancedSpawner TE fallback if tags absent
+ * Events (server-only continuous spawns):
+ *   EntityEvents.spawned + tick retries (mirrors forge RETRY_DELAYS) + nearby scan
  *
  * Install: copy to kubejs/server_scripts/
  * Apply:   /kubejs reload server_scripts
- * Keep CustomNPCs Global Forge Scripts OFF.
+ * Keep CustomNPCs Global Forge Scripts OFF (API is fine; forge event hooks spam).
  */
 
 var DEBUG = false;
@@ -30,11 +28,12 @@ var FIXED_AI_TIER_KEY = "sdd_clone_ai_tier_fix";
 var FIXED_BEHAVIOR_KEY = "sdd_clone_behavior_fix";
 var FIXED_SCALE_KEY = "sdd_clone_scale_fix";
 
-var RETRY_MAX_ATTEMPTS = 40;
-var RETRY_EVERY_TICKS = 4;
-var NEARBY_SCAN_EVERY = 40; /* player ticks ~= 2s */
+/* Same delays as Dungeon-Clone-Ki-Fix-Forge.js scheduleAllCloneRetries. */
+var RETRY_DELAYS = [5, 15, 30, 60, 100];
+var RETRY_EVERY_TICKS = 1;
+var NEARBY_SCAN_EVERY = 40;
 var NEARBY_RANGE = 48.0;
-var NEAREST_SPAWNER_RANGE = 24; /* blocks for tagless fallback */
+var NEAREST_SPAWNER_RANGE = 24;
 var LOG_OK_LEFT = 16;
 var LOG_FAIL_LEFT = 24;
 var LOG_SEEN_LEFT = 20;
@@ -43,7 +42,7 @@ var LOG_NBT_LEFT = 8;
 global.dungeonCloneKiRetry = global.dungeonCloneKiRetry || [];
 
 console.info(
-    "[Dungeon Clone Fix] server-only script loaded (spawned + retries + nearby + NBT/nearest-spawner)."
+    "[Dungeon Clone Fix] server script loaded (CNPC-NBT port + spawned/retries/nearby)."
 );
 
 function dbg(msg) {
@@ -102,6 +101,7 @@ var BigInteger = loadClass("java.math.BigInteger");
 var BlockPosClass = loadClass("net.minecraft.core.BlockPos");
 var AABBClass = loadClass("net.minecraft.world.phys.AABB");
 var CompoundTagClass = loadClass("net.minecraft.nbt.CompoundTag");
+var NpcAPIClass = loadClass("noppes.npcs.api.NpcAPI");
 var KiMoveEntryClass = loadClass(
     "net.shurui.dev.shuruis_dmz_dungeons.block.KiMoveEntry"
 );
@@ -114,6 +114,13 @@ var TWO_64 = BigInteger != null ? new BigInteger("18446744073709551616") : null;
 var MASK_26 = BigInteger != null ? new BigInteger("67108863") : null;
 var MASK_12 = BigInteger != null ? new BigInteger("4095") : null;
 
+if (NpcAPIClass != null) {
+    console.info("[Dungeon Clone Fix] NpcAPI ready (CNPC NBT path).");
+} else {
+    console.warn(
+        "[Dungeon Clone Fix] NpcAPI missing - using MC NBT / nearest-spawner only."
+    );
+}
 if (SduDmzFighterClass != null) {
     console.info("[Dungeon Clone Fix] SduDmzFighter class ready.");
 } else {
@@ -175,53 +182,40 @@ function typeIdOf(entity) {
 
 function isSduDmzFighter(mc) {
     if (mc == null) return false;
-    var cn = className(mc);
-    if (cn.indexOf("SduDmzFighter") >= 0) return true;
-    if (SduDmzFighterClass != null) {
-        try {
-            return SduDmzFighterClass.isInstance(mc);
-        } catch (e1) {
+    try {
+        if (SduDmzFighterClass != null) {
             try {
                 return SduDmzFighterClass.class.isInstance(mc);
-            } catch (e2) {}
+            } catch (e0) {
+                return SduDmzFighterClass.isInstance(mc);
+            }
         }
-    }
-    return false;
+    } catch (e1) {}
+    return className(mc).indexOf("SduDmzFighter") >= 0;
 }
 
 function isCloneCandidate(entity) {
     var mc = unwrapMc(entity);
     if (mc == null) return false;
-
-    var cn = className(mc);
-    if (cn.indexOf("SduDmzFighter") >= 0) return true;
-
+    if (isSduDmzFighter(mc)) return true;
     var tid = typeIdOf(entity).toLowerCase();
     if (tid.indexOf("dmz_fighter") >= 0) return true;
-    if (tid.indexOf("sdu:dmz") >= 0) return true;
     if (tid.indexOf("sdu") >= 0 && tid.indexOf("fighter") >= 0) return true;
-
-    if (cn.toLowerCase().indexOf("sdu") >= 0 || cn.indexOf("shurui") >= 0) {
-        var meta = readCloneMeta(mc);
-        if (meta.hasSpawner || meta.hasCloneRef) return true;
-    }
     return false;
 }
 
 function isAdvancedSpawner(be) {
     if (be == null) return false;
-    var cn = className(be);
-    if (cn.indexOf("AdvancedSpawnerBlockEntity") >= 0) return true;
-    if (AdvancedSpawnerClass != null) {
-        try {
-            return AdvancedSpawnerClass.isInstance(be);
-        } catch (e1) {
+    try {
+        if (AdvancedSpawnerClass != null) {
             try {
                 return AdvancedSpawnerClass.class.isInstance(be);
-            } catch (e2) {}
+            } catch (e0) {
+                return AdvancedSpawnerClass.isInstance(be);
+            }
         }
-    }
-    return false;
+    } catch (e1) {}
+    return className(be).indexOf("AdvancedSpawnerBlockEntity") >= 0;
 }
 
 function getLevel(mc) {
@@ -248,86 +242,178 @@ function isServerMc(mc) {
         if (level == null) return false;
         try {
             if (typeof level.isClientSide === "function") {
-                return !level.isClientSide();
+                if (level.isClientSide()) return false;
+            } else if (level.isClientSide) {
+                return false;
             }
-        } catch (e4) {}
-        try {
-            return !level.clientSide;
-        } catch (e5) {}
+        } catch (e4) {
+            try {
+                if (level.m_5776_()) return false;
+            } catch (e5) {}
+        }
         return true;
     } catch (e) {
         return false;
     }
 }
 
-/* Our FIXED_* markers always go on Forge persistent data. */
-function pd(mc) {
+/* ---- CNPC NBT helpers (same contract as Dungeon-Clone-Ki-Fix-Forge.js) ---- */
+
+function getIEntity(mc) {
+    if (mc == null || NpcAPIClass == null) return null;
     try {
-        return mc.getPersistentData();
+        return NpcAPIClass.Instance().getIEntity(mc);
     } catch (e) {
         return null;
     }
 }
 
-function tagHas(tag, key) {
+function getINbt(iEntity, mc) {
     try {
-        return tag != null && tag.contains(key);
-    } catch (e) {
-        return false;
-    }
+        if (iEntity != null && iEntity.getNbt) {
+            var nbt = iEntity.getNbt();
+            if (nbt != null) return nbt;
+        }
+    } catch (e1) {}
+    try {
+        if (mc != null && NpcAPIClass != null) {
+            return NpcAPIClass.Instance().getINbt(mc.getPersistentData());
+        }
+    } catch (e2) {}
+    return null;
 }
 
-function tagBool(tag, key) {
+function getMcCompound(iNbt, mc) {
     try {
-        return !!tag.getBoolean(key);
-    } catch (e) {
-        return false;
-    }
+        if (iNbt != null && iNbt.getMCNBT) {
+            var tag = iNbt.getMCNBT();
+            if (tag != null) return tag;
+        }
+    } catch (e1) {}
+    try {
+        if (mc != null) return mc.getPersistentData();
+    } catch (e2) {}
+    return null;
 }
 
-function tagFloat(tag, key, fallback) {
+function nbtHas(iNbt, mc, key) {
     try {
-        if (tagHas(tag, key)) return parseFloat("" + tag.getFloat(key));
-    } catch (e) {}
+        if (iNbt != null && iNbt.has(key)) return true;
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains(key)) return true;
+    } catch (e2) {}
+    return false;
+}
+
+function nbtGetBoolean(iNbt, mc, key) {
+    try {
+        if (iNbt != null && iNbt.has(key)) return !!iNbt.getBoolean(key);
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains(key)) return !!tag.getBoolean(key);
+    } catch (e2) {}
+    return false;
+}
+
+function nbtGetFloat(iNbt, mc, key, fallback) {
+    try {
+        if (iNbt != null && iNbt.has(key)) {
+            return parseFloat("" + iNbt.getFloat(key));
+        }
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains(key)) {
+            return parseFloat("" + tag.getFloat(key));
+        }
+    } catch (e2) {}
     return fallback;
 }
 
-function tagInt(tag, key, fallback) {
+function nbtGetInt(iNbt, mc, key, fallback) {
     try {
-        if (tagHas(tag, key)) return parseInt("" + tag.getInt(key), 10);
-    } catch (e) {}
+        if (iNbt != null && iNbt.has(key)) {
+            return parseInt("" + iNbt.getInteger(key), 10);
+        }
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains(key)) {
+            return parseInt("" + tag.getInt(key), 10);
+        }
+    } catch (e2) {}
     return fallback;
 }
 
-function tagString(tag, key) {
+function nbtGetString(iNbt, mc, key) {
     try {
-        if (tagHas(tag, key)) return "" + tag.getString(key);
-    } catch (e) {}
+        if (iNbt != null && iNbt.has(key)) return "" + iNbt.getString(key);
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains(key)) return "" + tag.getString(key);
+    } catch (e2) {}
     return "";
 }
 
-function tagSetBool(tag, key, value) {
+function nbtSetBoolean(iNbt, mc, key, value) {
     try {
-        tag.putBoolean(key, !!value);
-    } catch (e) {}
+        if (iNbt != null) iNbt.setBoolean(key, !!value);
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null) tag.putBoolean(key, !!value);
+    } catch (e2) {}
+    try {
+        if (mc != null) mc.getPersistentData().putBoolean(key, !!value);
+    } catch (e3) {}
 }
 
-function tagSetFloat(tag, key, value) {
+function nbtSetFloat(iNbt, mc, key, value) {
     try {
-        tag.putFloat(key, value);
-    } catch (e) {}
+        if (iNbt != null) iNbt.setFloat(key, value);
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null) tag.putFloat(key, value);
+    } catch (e2) {}
+    try {
+        if (mc != null) mc.getPersistentData().putFloat(key, value);
+    } catch (e3) {}
 }
 
-function tagSetInt(tag, key, value) {
+function nbtSetInt(iNbt, mc, key, value) {
     try {
-        tag.putInt(key, value);
-    } catch (e) {}
+        if (iNbt != null) iNbt.setInteger(key, value);
+    } catch (e1) {}
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null) tag.putInt(key, value);
+    } catch (e2) {}
+    try {
+        if (mc != null) mc.getPersistentData().putInt(key, value);
+    } catch (e3) {}
 }
 
-function tagSetString(tag, key, value) {
+function nbtSetString(iNbt, mc, key, value) {
+    var text = "" + value;
     try {
-        tag.putString(key, "" + value);
-    } catch (e) {}
+        if (iNbt != null && iNbt.setString) iNbt.setString(key, text);
+    } catch (e1) {
+        try {
+            if (iNbt != null && iNbt.putString) iNbt.putString(key, text);
+        } catch (e1b) {}
+    }
+    try {
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null) tag.putString(key, text);
+    } catch (e2) {}
+    try {
+        if (mc != null) mc.getPersistentData().putString(key, text);
+    } catch (e3) {}
 }
 
 function serializeEntityNbt(mc) {
@@ -342,11 +428,46 @@ function serializeEntityNbt(mc) {
             return tag;
         } catch (e2) {
             try {
-                var ser = mc.serializeNBT();
-                if (ser != null) return ser;
-            } catch (e3) {}
+                return mc.serializeNBT();
+            } catch (e3) {
+                return null;
+            }
         }
     }
+}
+
+function findCompoundWithKey(tag, key, depth) {
+    if (tag == null || depth > 5) return null;
+    try {
+        if (tag.contains(key)) return tag;
+    } catch (e1) {}
+    try {
+        var keys = tag.getAllKeys();
+        var it = keys.iterator();
+        while (it.hasNext()) {
+            var k = String(it.next());
+            var type = -1;
+            try {
+                type = tag.getTagType(k);
+            } catch (eT) {
+                try {
+                    type = tag.m_128425_(k);
+                } catch (eT2) {
+                    type = -1;
+                }
+            }
+            if (type === 10) {
+                var child = null;
+                try {
+                    child = tag.getCompound(k);
+                } catch (eC) {
+                    child = null;
+                }
+                var found = findCompoundWithKey(child, key, depth + 1);
+                if (found != null) return found;
+            }
+        }
+    } catch (e2) {}
     return null;
 }
 
@@ -368,154 +489,67 @@ function compoundKeySample(tag, limit) {
 }
 
 /*
- * Find a compound that contains key, searching root + nested compounds.
- * SDD writes sdd_spawner into entity save NBT, not only ForgeData.
+ * Mirror forge readPackedSpawnerLongString, plus entity-save-NBT deep search.
  */
-function findCompoundWithKey(tag, key, depth) {
-    if (tag == null || depth > 5) return null;
+function readPackedSpawnerLongString(iNbt, mc) {
     try {
-        if (tag.contains(key)) return tag;
+        var tag = getMcCompound(iNbt, mc);
+        if (tag != null && tag.contains("sdd_spawner") && LongClass != null) {
+            return LongClass.toString(tag.getLong("sdd_spawner"));
+        }
     } catch (e1) {}
     try {
-        var keys = tag.getAllKeys();
-        var it = keys.iterator();
-        while (it.hasNext()) {
-            var k = String(it.next());
-            var type = -1;
-            try {
-                type = tag.getTagType(k);
-            } catch (eT) {
-                try {
-                    type = tag.m_128425_(k);
-                } catch (eT2) {
-                    type = -1;
-                }
-            }
-            /* 10 = TAG_COMPOUND */
-            if (type === 10) {
-                var child = null;
-                try {
-                    child = tag.getCompound(k);
-                } catch (eC) {
-                    child = null;
-                }
-                var found = findCompoundWithKey(child, key, depth + 1);
-                if (found != null) return found;
+        if (iNbt != null && iNbt.has("sdd_spawner") && iNbt.getMCNBT) {
+            var mcTag = iNbt.getMCNBT();
+            if (mcTag != null && mcTag.contains("sdd_spawner") && LongClass != null) {
+                return LongClass.toString(mcTag.getLong("sdd_spawner"));
             }
         }
     } catch (e2) {}
-    return null;
-}
-
-/*
- * Clone meta from persistent data OR full entity save NBT.
- * source: "persistent" | "entity_nbt" | "none"
- */
-function readCloneMeta(mc) {
-    var meta = {
-        hasSpawner: false,
-        hasCloneRef: false,
-        isBoss: false,
-        spawnerTag: null,
-        source: "none"
-    };
-    if (mc == null) return meta;
-
-    var persist = pd(mc);
-    if (persist != null) {
-        if (tagHas(persist, "sdd_spawner")) {
-            meta.hasSpawner = true;
-            meta.spawnerTag = persist;
-            meta.source = "persistent";
+    try {
+        if (iNbt != null && iNbt.has("sdd_spawner") && LongClass != null) {
+            return LongClass.toString(iNbt.getLong("sdd_spawner"));
         }
-        if (tagHas(persist, "sdu_clone_ref")) meta.hasCloneRef = true;
-        if (tagHas(persist, "sdd_boss")) meta.isBoss = tagBool(persist, "sdd_boss");
-        if (meta.hasSpawner && meta.hasCloneRef) return meta;
-    }
+    } catch (e3) {}
 
-    var full = serializeEntityNbt(mc);
-    if (full != null) {
+    /* Extra vs forge: entity save NBT (addAdditionalSaveData). */
+    try {
+        var full = serializeEntityNbt(mc);
         var host = findCompoundWithKey(full, "sdd_spawner", 0);
-        if (host != null) {
-            meta.hasSpawner = true;
-            meta.spawnerTag = host;
-            meta.source = "entity_nbt";
-            if (tagHas(host, "sdu_clone_ref")) meta.hasCloneRef = true;
-            if (tagHas(host, "sdd_boss")) meta.isBoss = tagBool(host, "sdd_boss");
-        } else {
-            var refHost = findCompoundWithKey(full, "sdu_clone_ref", 0);
-            if (refHost != null) {
-                meta.hasCloneRef = true;
-                if (meta.source === "none") meta.source = "entity_nbt";
-            }
+        if (host != null && LongClass != null) {
+            return LongClass.toString(host.getLong("sdd_spawner"));
+        }
+        if (full != null) {
             logNbt(
                 "entity_nbt keys=" +
                     compoundKeySample(full, 24) +
                     " forge=" +
                     compoundKeySample(
-                        tagHas(full, "ForgeData") ? full.getCompound("ForgeData") : null,
+                        full.contains("ForgeData")
+                            ? full.getCompound("ForgeData")
+                            : null,
                         16
                     )
             );
         }
-    }
-    return meta;
+    } catch (e4) {}
+    return null;
 }
 
-function readPackedSpawnerLongString(tag) {
-    if (tag == null || !tagHas(tag, "sdd_spawner")) return null;
-    try {
-        if (LongClass != null) {
-            return LongClass.toString(tag.getLong("sdd_spawner"));
-        }
-    } catch (e1) {}
-    try {
-        return "" + tag.getLong("sdd_spawner");
-    } catch (e2) {
-        return null;
-    }
-}
+function unpackBlockPos(packedText) {
+    if (BigInteger == null || TWO_64 == null || packedText == null) return null;
+    var packed = new BigInteger("" + packedText);
+    if (packed.signum() < 0) packed = packed.add(TWO_64);
 
-function unpackSpawnerPosFromTag(tag) {
-    if (BlockPosClass == null) return null;
-    var packedText = readPackedSpawnerLongString(tag);
-    if (packedText == null) return null;
+    var blockX = packed.shiftRight(38).and(MASK_26).intValue();
+    var blockZ = packed.shiftRight(12).and(MASK_26).intValue();
+    var blockY = packed.and(MASK_12).intValue();
 
-    if (BigInteger != null && TWO_64 != null) {
-        try {
-            var packed = new BigInteger("" + packedText);
-            if (packed.signum() < 0) packed = packed.add(TWO_64);
+    if (blockX >= 33554432) blockX = blockX - 67108864;
+    if (blockZ >= 33554432) blockZ = blockZ - 67108864;
+    if (blockY >= 2048) blockY = blockY - 4096;
 
-            var blockX = packed.shiftRight(38).and(MASK_26).intValue();
-            var blockZ = packed.shiftRight(12).and(MASK_26).intValue();
-            var blockY = packed.and(MASK_12).intValue();
-
-            if (blockX >= 33554432) blockX = blockX - 67108864;
-            if (blockZ >= 33554432) blockZ = blockZ - 67108864;
-            if (blockY >= 2048) blockY = blockY - 4096;
-
-            try {
-                return new BlockPosClass(blockX, blockY, blockZ);
-            } catch (eNew) {
-                try {
-                    return BlockPosClass.containing(blockX, blockY, blockZ);
-                } catch (eCont) {}
-            }
-        } catch (eBi) {
-            dbg("BigInteger unpack failed: " + eBi);
-        }
-    }
-
-    /* Last resort - may be wrong far from spawn. */
-    try {
-        return BlockPosClass.of(tag.getLong("sdd_spawner"));
-    } catch (e1) {
-        try {
-            return BlockPosClass.m_122022_(tag.getLong("sdd_spawner"));
-        } catch (e2) {
-            return null;
-        }
-    }
+    return { x: blockX, y: blockY, z: blockZ };
 }
 
 function entityBlockPos(mc) {
@@ -527,10 +561,11 @@ function entityBlockPos(mc) {
             return mc.m_20183_();
         } catch (e2) {
             try {
-                var x = Math.floor(mc.getX());
-                var y = Math.floor(mc.getY());
-                var z = Math.floor(mc.getZ());
-                return new BlockPosClass(x, y, z);
+                return new BlockPosClass(
+                    Math.floor(mc.getX()),
+                    Math.floor(mc.getY()),
+                    Math.floor(mc.getZ())
+                );
             } catch (e3) {
                 return null;
             }
@@ -549,10 +584,6 @@ function dist2ToBlock(mc, pos) {
     }
 }
 
-/*
- * Fallback when clone tags are missing: nearest AdvancedSpawner TE in range.
- * Scans chunk block-entity maps (not every block) to avoid lag.
- */
 function findNearestAdvancedSpawner(mc, rangeBlocks) {
     var level = getLevel(mc);
     var origin = entityBlockPos(mc);
@@ -597,10 +628,8 @@ function findNearestAdvancedSpawner(mc, rangeBlocks) {
             try {
                 values = map.values();
             } catch (eV) {
-                values = null;
+                continue;
             }
-            if (values == null) continue;
-
             var it = null;
             try {
                 it = values.iterator();
@@ -632,20 +661,67 @@ function findNearestAdvancedSpawner(mc, rangeBlocks) {
     return best;
 }
 
-function findApplyMethod(mc) {
+/*
+ * Resolve AdvancedSpawner TE the same way as forge when possible:
+ * CNPC IWorld.getBlock(x,y,z).getMCTileEntity(), else level.getBlockEntity.
+ */
+function resolveSpawnerTE(iEntity, mc, posXYZ) {
+    if (posXYZ == null) return null;
+
     try {
-        var cls = mc.getClass();
-        while (cls != null) {
-            var methods = cls.getDeclaredMethods();
-            for (var i = 0; i < methods.length; i++) {
-                if (String(methods[i].getName()) === "applySuSpawnNbt") {
-                    methods[i].setAccessible(true);
-                    return methods[i];
+        if (iEntity != null && iEntity.getWorld) {
+            var world = iEntity.getWorld();
+            if (world != null) {
+                var spawnerBlock = world.getBlock(posXYZ.x, posXYZ.y, posXYZ.z);
+                if (spawnerBlock != null) {
+                    var te = null;
+                    try {
+                        te = spawnerBlock.getMCTileEntity();
+                    } catch (eTE) {
+                        te = null;
+                    }
+                    if (isAdvancedSpawner(te)) return te;
                 }
             }
-            cls = cls.getSuperclass();
         }
-    } catch (e) {}
+    } catch (eW) {}
+
+    var level = getLevel(mc);
+    if (level == null || BlockPosClass == null) return null;
+    var pos = null;
+    try {
+        pos = new BlockPosClass(posXYZ.x, posXYZ.y, posXYZ.z);
+    } catch (eP) {
+        try {
+            pos = BlockPosClass.containing(posXYZ.x, posXYZ.y, posXYZ.z);
+        } catch (eP2) {
+            return null;
+        }
+    }
+    var be = null;
+    try {
+        be = level.getBlockEntity(pos);
+    } catch (eBE) {
+        try {
+            be = level.m_7702_(pos);
+        } catch (eBE2) {
+            be = null;
+        }
+    }
+    return isAdvancedSpawner(be) ? be : null;
+}
+
+function findApplySuSpawnNbt(mc) {
+    try {
+        var declaredMethods = mc.getClass().getDeclaredMethods();
+        for (var i = 0; i < declaredMethods.length; i++) {
+            var m = declaredMethods[i];
+            if (String(m.getName()) === "applySuSpawnNbt") {
+                m.setAccessible(true);
+                return m;
+            }
+        }
+    } catch (err) {}
     try {
         var methods2 = mc.getClass().getMethods();
         for (var j = 0; j < methods2.length; j++) {
@@ -656,29 +732,6 @@ function findApplyMethod(mc) {
         }
     } catch (e2) {}
     return null;
-}
-
-function invokeApply(method, mc, raw) {
-    try {
-        /* Pass CompoundTag directly - do NOT wrap for Rhino. */
-        method.invoke(mc, raw);
-        return true;
-    } catch (e1) {}
-    try {
-        method.invoke(mc, [raw]);
-        return true;
-    } catch (e2) {}
-    try {
-        var ArrayCls = loadClass("java.lang.reflect.Array");
-        var ObjectCls = loadClass("java.lang.Object");
-        var arr = ArrayCls.newInstance(ObjectCls, 1);
-        ArrayCls.set(arr, 0, raw);
-        method.invoke(mc, arr);
-        return true;
-    } catch (e3) {
-        logFail("applySuSpawnNbt invoke failed: " + e3);
-        return false;
-    }
 }
 
 function rollKiDamage(configuredMin, configuredMax, configuredFallback) {
@@ -693,67 +746,72 @@ function rollKiDamage(configuredMin, configuredMax, configuredFallback) {
 }
 
 function rollMovesCsv(configuredMoveList) {
-    var csv = "";
-    var size = 0;
+    var desiredMovesCsv = "";
+    var originalMoveListSize = 0;
     if (configuredMoveList == null) return { csv: "", size: 0 };
     try {
-        size = configuredMoveList.size();
-    } catch (e) {
-        size = 0;
+        originalMoveListSize = configuredMoveList.size();
+    } catch (eSize) {
+        originalMoveListSize = 0;
     }
-    if (KiMoveEntryClass == null) return { csv: "", size: size };
+    if (KiMoveEntryClass == null) {
+        return { csv: "", size: originalMoveListSize };
+    }
 
-    for (var i = 0; i < size; i++) {
-        var tokenObj = null;
+    for (var moveIndex = 0; moveIndex < originalMoveListSize; moveIndex++) {
+        var moveTokenObject = null;
         try {
-            tokenObj = configuredMoveList.get(i);
+            moveTokenObject = configuredMoveList.get(moveIndex);
         } catch (eGet) {
             continue;
         }
-        if (tokenObj == null) continue;
-        var token = ("" + tokenObj).trim();
-        if (!token) continue;
+        if (moveTokenObject == null) continue;
+        var moveToken = ("" + moveTokenObject).trim();
+        if (moveToken.length === 0) continue;
 
-        var entry = null;
+        var moveEntry = null;
         try {
-            entry = KiMoveEntryClass.fromToken(token);
+            moveEntry = KiMoveEntryClass.fromToken(moveToken);
         } catch (eParse) {
             continue;
         }
-        if (entry == null) continue;
+        if (moveEntry == null) continue;
 
-        var cdMin = Math.max(
+        var cooldownMin = Math.max(
             1,
             Math.min(
-                parseInt("" + entry.cdMin, 10),
-                parseInt("" + entry.cdMax, 10)
+                parseInt("" + moveEntry.cdMin, 10),
+                parseInt("" + moveEntry.cdMax, 10)
             )
         );
-        var cdMax = Math.max(
+        var cooldownMax = Math.max(
             1,
             Math.max(
-                parseInt("" + entry.cdMin, 10),
-                parseInt("" + entry.cdMax, 10)
+                parseInt("" + moveEntry.cdMin, 10),
+                parseInt("" + moveEntry.cdMax, 10)
             )
         );
-        var rolledCd = cdMin;
-        if (cdMax > cdMin) {
-            rolledCd = cdMin + Math.floor(Math.random() * (cdMax - cdMin + 1));
+        var rolledCooldown = cooldownMin;
+        if (cooldownMax > cooldownMin) {
+            rolledCooldown =
+                cooldownMin +
+                Math.floor(Math.random() * (cooldownMax - cooldownMin + 1));
         }
 
-        var piece =
+        var rolledMove =
             "" +
-            entry.type +
+            moveEntry.type +
             ":" +
-            rolledCd +
+            rolledCooldown +
             ":" +
-            parseFloat("" + entry.size) +
+            parseFloat("" + moveEntry.size) +
             ":" +
-            (parseInt("" + entry.colorMain, 10) & 16777215);
-        if (csv) csv += ",";
-        csv += piece;
+            (parseInt("" + moveEntry.colorMain, 10) & 16777215);
+
+        if (desiredMovesCsv.length > 0) desiredMovesCsv += ",";
+        desiredMovesCsv += rolledMove;
     }
-    return { csv: csv, size: size };
+    return { csv: desiredMovesCsv, size: originalMoveListSize };
 }
 
 function entityUuid(mc) {
@@ -768,116 +826,58 @@ function entityUuid(mc) {
     }
 }
 
-function resolveEntityByUuid(mcHint, uuid) {
-    if (mcHint != null) {
-        try {
-            if (mcHint.isAlive && mcHint.isAlive()) return mcHint;
-        } catch (e1) {
-            try {
-                if (mcHint.isAlive) return mcHint;
-            } catch (e2) {}
-        }
-    }
-    if (!uuid) return mcHint;
-    try {
-        var level = getLevel(mcHint);
-        if (level == null) return mcHint;
-        var server = null;
-        try {
-            server = level.getServer();
-        } catch (eS1) {
-            try {
-                server = level.m_7654_();
-            } catch (eS2) {}
-        }
-        if (server == null) return mcHint;
-        var UUID = loadClass("java.util.UUID");
-        var id = UUID.fromString(uuid);
-        var levels = null;
-        try {
-            levels = server.getAllLevels();
-        } catch (eL) {
-            return mcHint;
-        }
-        if (levels == null) return mcHint;
-        var it = levels.iterator();
-        while (it.hasNext()) {
-            var lvl = it.next();
-            var found = null;
-            try {
-                found = lvl.getEntity(id);
-            } catch (eG1) {
-                try {
-                    found = lvl.m_6815_(id);
-                } catch (eG2) {}
-            }
-            if (found != null) return found;
-        }
-    } catch (e) {}
-    return mcHint;
-}
-
-function queueRetry(mc, reason) {
+function queueForgeStyleRetries(mc) {
     if (mc == null) return;
     var id = entityUuid(mc);
     if (!id) return;
     var q = global.dungeonCloneKiRetry;
-    for (var i = 0; i < q.length; i++) {
-        if (q[i].uuid === id) {
-            q[i].mc = mc;
-            q[i].reason = reason || q[i].reason;
-            return;
+    var serverTick = 0;
+    try {
+        var level = getLevel(mc);
+        var server = level.getServer();
+        serverTick = server.getTickCount();
+    } catch (eT) {
+        try {
+            serverTick = getLevel(mc).getServer().tickCount;
+        } catch (eT2) {
+            serverTick = 0;
         }
     }
-    if (q.length >= 256) {
-        q.splice(0, q.length - 255);
+
+    /* Replace existing schedule for this uuid. */
+    var kept = [];
+    for (var i = 0; i < q.length; i++) {
+        if (q[i].uuid !== id) kept.push(q[i]);
     }
-    q.push({ uuid: id, mc: mc, attempts: 0, reason: reason || "" });
-    dbg("queued retry uuid=" + id + " reason=" + reason);
+
+    for (var d = 0; d < RETRY_DELAYS.length; d++) {
+        kept.push({
+            uuid: id,
+            mc: mc,
+            runAt: serverTick + RETRY_DELAYS[d],
+            attempts: 0,
+            reason: "forge_retry"
+        });
+    }
+    /* Cap */
+    if (kept.length > 512) {
+        kept.splice(0, kept.length - 512);
+    }
+    global.dungeonCloneKiRetry = kept;
 }
 
-function looksAlreadyApplied(mc, persist) {
-    if (
-        !tagHas(persist, FIXED_SETTINGS_KEY) ||
-        !tagBool(persist, FIXED_SETTINGS_KEY)
-    ) {
-        return false;
-    }
-    var wantEnabled = tagBool(persist, FIXED_ENABLED_KEY);
-    var wantDmg = tagFloat(persist, FIXED_DAMAGE_KEY, 0);
-    var wantMoves = tagString(persist, FIXED_MOVES_KEY);
-    if (!wantEnabled && wantDmg <= 0 && (!wantMoves || !wantMoves.length)) {
-        return true;
-    }
-    var curDmg = 0;
-    try {
-        curDmg = parseFloat("" + mc.getKiBlastDamage());
-    } catch (e1) {}
-    var curMoves = 0;
-    try {
-        curMoves = mc.getSkillPool().size();
-    } catch (e2) {}
-    return curDmg > 0 || curMoves > 0;
-}
-
-function rollFromSpawnerConfig(be, isBoss) {
+function rollFromSpawnerConfig(blockEntity, isBoss, iNbt, mc) {
     var config = null;
     try {
-        config = be.getConfig();
+        config = blockEntity.getConfig();
     } catch (eCfg) {
-        config = null;
+        return null;
     }
     if (config == null) return null;
 
-    var out = {
-        desiredAiTier: parseInt("" + config.aiTier, 10),
-        desiredBehavior: parseInt("" + config.behavior, 10),
-        desiredKiDamage: 0.0,
-        desiredMovesCsv: "",
-        desiredKiEnabled: false,
-        desiredScale: 1.0
-    };
-
+    var desiredAiTier = parseInt("" + config.aiTier, 10);
+    var desiredBehavior = parseInt("" + config.behavior, 10);
+    var desiredScale = 1.0;
     var configuredMin = 0;
     var configuredMax = 0;
     var configuredFallback = 0.0;
@@ -888,26 +888,31 @@ function rollFromSpawnerConfig(be, isBoss) {
         configuredMax = parseInt("" + config.bossKiDmgMax, 10);
         configuredFallback = parseFloat("" + config.bossKiPower);
         configuredMoveList = config.bossKiMoves;
-        out.desiredScale = parseFloat("" + config.bossScale);
+        desiredScale = parseFloat("" + config.bossScale);
     } else {
         configuredMin = parseInt("" + config.kiDmgMin, 10);
         configuredMax = parseInt("" + config.kiDmgMax, 10);
         configuredFallback = parseFloat("" + config.kiPower);
         configuredMoveList = config.kiMoves;
-        out.desiredScale = parseFloat("" + config.scale);
+        desiredScale = parseFloat("" + config.scale);
     }
 
-    out.desiredKiDamage = rollKiDamage(
-        configuredMin,
-        configuredMax,
-        configuredFallback
-    );
-    var rolled = rollMovesCsv(configuredMoveList);
-    out.desiredMovesCsv = rolled.csv;
+    var desiredKiDamage;
+    if (nbtHas(iNbt, mc, FIXED_DAMAGE_KEY)) {
+        desiredKiDamage = nbtGetFloat(iNbt, mc, FIXED_DAMAGE_KEY, 0);
+    } else {
+        desiredKiDamage = rollKiDamage(
+            configuredMin,
+            configuredMax,
+            configuredFallback
+        );
+    }
 
+    var rolled = rollMovesCsv(configuredMoveList);
+    var desiredMovesCsv = rolled.csv;
+    var desiredKiEnabled = false;
     if (isBoss) {
-        out.desiredKiEnabled =
-            out.desiredKiDamage > 0 || out.desiredMovesCsv.length > 0;
+        desiredKiEnabled = desiredKiDamage > 0 || desiredMovesCsv.length > 0;
     } else {
         var kiBox = false;
         try {
@@ -915,13 +920,23 @@ function rollFromSpawnerConfig(be, isBoss) {
         } catch (eEn) {
             kiBox = false;
         }
-        out.desiredKiEnabled = kiBox || rolled.size > 0;
+        desiredKiEnabled = kiBox || rolled.size > 0;
     }
-    return out;
+
+    return {
+        desiredAiTier: desiredAiTier,
+        desiredBehavior: desiredBehavior,
+        desiredKiDamage: desiredKiDamage,
+        desiredMovesCsv: desiredMovesCsv,
+        desiredKiEnabled: desiredKiEnabled,
+        desiredScale: desiredScale
+    };
 }
 
-function tryApplyCloneFix(entityOrMc) {
-    var mc = unwrapMc(entityOrMc);
+/*
+ * Core apply - mirrors Dungeon-Clone-Ki-Fix-Forge.js applyCloneFix.
+ */
+function applyCloneFix(mc, allowRetryLater) {
     if (!isSduDmzFighter(mc)) return { ok: false, reason: "not_fighter" };
     if (!isServerMc(mc)) return { ok: false, reason: "not_server" };
 
@@ -929,15 +944,28 @@ function tryApplyCloneFix(entityOrMc) {
         if (!mc.isAlive()) return { ok: false, reason: "dead" };
     } catch (eAlive) {}
 
-    var persist = pd(mc);
-    if (persist == null) return { ok: false, reason: "no_persistent" };
+    var iEntity = getIEntity(mc);
+    var iNbt = getINbt(iEntity, mc);
 
-    if (looksAlreadyApplied(mc, persist)) {
-        return { ok: true, reason: "already_fixed" };
+    var hasSpawner = nbtHas(iNbt, mc, "sdd_spawner");
+    var hasCloneRef = nbtHas(iNbt, mc, "sdu_clone_ref");
+    var tagSource = "cnpc_or_persistent";
+
+    /* If CNPC/persistent miss tags, probe entity save NBT (extra vs forge). */
+    if (!hasSpawner || !hasCloneRef) {
+        var full = serializeEntityNbt(mc);
+        var host = findCompoundWithKey(full, "sdd_spawner", 0);
+        if (host != null) {
+            hasSpawner = true;
+            tagSource = "entity_nbt";
+            if (host.contains("sdu_clone_ref")) hasCloneRef = true;
+        }
+        var refHost = findCompoundWithKey(full, "sdu_clone_ref", 0);
+        if (refHost != null) hasCloneRef = true;
     }
 
-    var meta = readCloneMeta(mc);
-    var isBoss = !!meta.isBoss;
+    var isBoss =
+        nbtHas(iNbt, mc, "sdd_boss") && nbtGetBoolean(iNbt, mc, "sdd_boss");
 
     var desiredKiDamage = 0.0;
     var desiredMovesCsv = "";
@@ -945,76 +973,103 @@ function tryApplyCloneFix(entityOrMc) {
     var desiredAiTier = 0;
     var desiredBehavior = 0;
     var desiredScale = 1.0;
-    var via = meta.source;
+    var via = tagSource;
 
+    var loadedStoredSettings =
+        nbtHas(iNbt, mc, FIXED_SETTINGS_KEY) &&
+        nbtGetBoolean(iNbt, mc, FIXED_SETTINGS_KEY);
     var hasStoredRoll =
-        tagHas(persist, FIXED_DAMAGE_KEY) && tagHas(persist, FIXED_MOVES_KEY);
+        nbtHas(iNbt, mc, FIXED_DAMAGE_KEY) && nbtHas(iNbt, mc, FIXED_MOVES_KEY);
 
-    if (hasStoredRoll) {
-        desiredKiDamage = tagFloat(persist, FIXED_DAMAGE_KEY, 0);
-        desiredMovesCsv = tagString(persist, FIXED_MOVES_KEY);
-        desiredKiEnabled = tagBool(persist, FIXED_ENABLED_KEY);
-        desiredAiTier = tagInt(persist, FIXED_AI_TIER_KEY, 0);
-        desiredBehavior = tagInt(persist, FIXED_BEHAVIOR_KEY, 0);
-        desiredScale = tagFloat(persist, FIXED_SCALE_KEY, 1.0);
+    /* Forge: if already marked, still re-apply from stored rolls. */
+    if (loadedStoredSettings || hasStoredRoll) {
+        desiredKiDamage = nbtGetFloat(iNbt, mc, FIXED_DAMAGE_KEY, 0);
+        desiredMovesCsv = nbtGetString(iNbt, mc, FIXED_MOVES_KEY);
+        desiredKiEnabled = nbtGetBoolean(iNbt, mc, FIXED_ENABLED_KEY);
+        desiredAiTier = nbtGetInt(iNbt, mc, FIXED_AI_TIER_KEY, 0);
+        desiredBehavior = nbtGetInt(iNbt, mc, FIXED_BEHAVIOR_KEY, 0);
+        desiredScale = nbtGetFloat(iNbt, mc, FIXED_SCALE_KEY, 1.0);
         via = "stored";
-    } else {
-        var be = null;
-        var level = getLevel(mc);
-        if (level == null) {
-            return { ok: false, reason: "no_level", retry: true };
-        }
 
-        if (meta.hasSpawner && meta.spawnerTag != null) {
-            var pos = unpackSpawnerPosFromTag(meta.spawnerTag);
-            if (pos == null) {
-                return { ok: false, reason: "bad_spawner_pos", retry: true };
-            }
+        /* Skip if already looks applied (avoid clearing pool every nearby tick). */
+        if (loadedStoredSettings) {
+            var curDmg = 0;
+            var curMoves = 0;
             try {
-                be = level.getBlockEntity(pos);
-            } catch (eBE) {
-                try {
-                    be = level.m_7702_(pos);
-                } catch (eBE2) {
-                    be = null;
-                }
+                curDmg = parseFloat("" + mc.getKiBlastDamage());
+            } catch (eD) {}
+            try {
+                curMoves = mc.getSkillPool().size();
+            } catch (eM) {}
+            if (
+                (!desiredKiEnabled &&
+                    desiredKiDamage <= 0 &&
+                    !desiredMovesCsv) ||
+                curDmg > 0 ||
+                curMoves > 0
+            ) {
+                return { ok: true, reason: "already_fixed" };
             }
-            if (!isAdvancedSpawner(be)) {
-                var px = "?";
-                var py = "?";
-                var pz = "?";
-                try {
-                    px = pos.getX();
-                    py = pos.getY();
-                    pz = pos.getZ();
-                } catch (eP) {}
-                /* Tagged pos missed - try nearest before giving up. */
-                be = findNearestAdvancedSpawner(mc, NEAREST_SPAWNER_RANGE);
-                if (!isAdvancedSpawner(be)) {
-                    return {
-                        ok: false,
-                        reason: "no_spawner_te@" + px + "," + py + "," + pz,
-                        retry: true
-                    };
-                }
-                via = meta.source + "+nearest";
-            }
-        } else {
-            /* No sdd_* tags in persistent OR entity NBT - nearest TE fallback. */
-            be = findNearestAdvancedSpawner(mc, NEAREST_SPAWNER_RANGE);
-            if (!isAdvancedSpawner(be)) {
+        }
+    } else {
+        var blockEntity = null;
+
+        if (hasSpawner) {
+            var packedText = readPackedSpawnerLongString(iNbt, mc);
+            if (packedText == null) {
                 return {
                     ok: false,
-                    reason: "no_tags_no_nearby_spawner",
-                    retry: true
+                    reason: "bad_spawner_long",
+                    retry: !!allowRetryLater
+                };
+            }
+            var pos = unpackBlockPos(packedText);
+            if (pos == null) {
+                return {
+                    ok: false,
+                    reason: "bad_spawner_pos",
+                    retry: !!allowRetryLater
+                };
+            }
+            blockEntity = resolveSpawnerTE(iEntity, mc, pos);
+            if (!isAdvancedSpawner(blockEntity)) {
+                blockEntity = findNearestAdvancedSpawner(
+                    mc,
+                    NEAREST_SPAWNER_RANGE
+                );
+                via = tagSource + "+nearest";
+            }
+            if (!isAdvancedSpawner(blockEntity)) {
+                return {
+                    ok: false,
+                    reason:
+                        "no_spawner_te@" + pos.x + "," + pos.y + "," + pos.z,
+                    retry: !!allowRetryLater
+                };
+            }
+        } else {
+            /* Forge required tags; we add nearest-spawner fallback for tagless clones. */
+            blockEntity = findNearestAdvancedSpawner(mc, NEAREST_SPAWNER_RANGE);
+            if (!isAdvancedSpawner(blockEntity)) {
+                return {
+                    ok: false,
+                    reason:
+                        "no_sdd_spawner" +
+                        (hasCloneRef ? "" : "+no_sdu_clone_ref") +
+                        "+no_nearby_spawner",
+                    retry: !!allowRetryLater
                 };
             }
             via = "nearest_spawner";
         }
 
-        var rolledCfg = rollFromSpawnerConfig(be, isBoss);
+        var rolledCfg = rollFromSpawnerConfig(blockEntity, isBoss, iNbt, mc);
         if (rolledCfg == null) {
-            return { ok: false, reason: "no_config", retry: true };
+            return {
+                ok: false,
+                reason: "no_config",
+                retry: !!allowRetryLater
+            };
         }
         desiredAiTier = rolledCfg.desiredAiTier;
         desiredBehavior = rolledCfg.desiredBehavior;
@@ -1023,32 +1078,52 @@ function tryApplyCloneFix(entityOrMc) {
         desiredKiEnabled = rolledCfg.desiredKiEnabled;
         desiredScale = rolledCfg.desiredScale;
 
-        tagSetFloat(persist, FIXED_DAMAGE_KEY, desiredKiDamage);
-        tagSetString(persist, FIXED_MOVES_KEY, desiredMovesCsv);
-        tagSetBool(persist, FIXED_ENABLED_KEY, desiredKiEnabled);
-        tagSetInt(persist, FIXED_AI_TIER_KEY, desiredAiTier);
-        tagSetInt(persist, FIXED_BEHAVIOR_KEY, desiredBehavior);
-        tagSetFloat(persist, FIXED_SCALE_KEY, desiredScale);
+        /* Persist rolled values (forge: before apply; mark FIXED only after). */
+        nbtSetFloat(iNbt, mc, FIXED_DAMAGE_KEY, desiredKiDamage);
+        nbtSetString(iNbt, mc, FIXED_MOVES_KEY, desiredMovesCsv);
+        nbtSetBoolean(iNbt, mc, FIXED_ENABLED_KEY, desiredKiEnabled);
+        nbtSetInt(iNbt, mc, FIXED_AI_TIER_KEY, desiredAiTier);
+        nbtSetInt(iNbt, mc, FIXED_BEHAVIOR_KEY, desiredBehavior);
+        nbtSetFloat(iNbt, mc, FIXED_SCALE_KEY, desiredScale);
     }
 
-    var applyMethod = findApplyMethod(mc);
+    /* Resolve apply method BEFORE clearing moves (forge fix). */
+    var applyMethod = findApplySuSpawnNbt(mc);
     if (applyMethod == null) {
         return { ok: false, reason: "no_applySuSpawnNbt" };
     }
-
     if (CompoundTagClass == null) {
         return { ok: false, reason: "no_CompoundTag" };
     }
 
-    var raw = new CompoundTagClass();
+    var rawSpawnNbt = new CompoundTagClass();
     try {
-        raw.putInt("AiTier", desiredAiTier);
-        raw.putInt("Behavior", desiredBehavior);
-        raw.putFloat("KiPower", desiredKiDamage);
-        raw.putBoolean("KiEnabled", desiredKiEnabled);
-        raw.putFloat("ModelScale", desiredScale);
-        if (desiredMovesCsv.length > 0) {
-            raw.putString("SduKiMovesCsv", desiredMovesCsv);
+        /* Prefer CNPC INbt writers when available (exact forge path). */
+        if (NpcAPIClass != null) {
+            var spawnNbt = NpcAPIClass.Instance().getINbt(rawSpawnNbt);
+            spawnNbt.setInteger("AiTier", desiredAiTier);
+            spawnNbt.setInteger("Behavior", desiredBehavior);
+            spawnNbt.setFloat("KiPower", desiredKiDamage);
+            spawnNbt.setBoolean("KiEnabled", desiredKiEnabled);
+            spawnNbt.setFloat("ModelScale", desiredScale);
+            if (desiredMovesCsv.length > 0) {
+                try {
+                    spawnNbt.setString("SduKiMovesCsv", desiredMovesCsv);
+                } catch (eStr) {
+                    try {
+                        spawnNbt.putString("SduKiMovesCsv", desiredMovesCsv);
+                    } catch (eStr2) {}
+                }
+            }
+        } else {
+            rawSpawnNbt.putInt("AiTier", desiredAiTier);
+            rawSpawnNbt.putInt("Behavior", desiredBehavior);
+            rawSpawnNbt.putFloat("KiPower", desiredKiDamage);
+            rawSpawnNbt.putBoolean("KiEnabled", desiredKiEnabled);
+            rawSpawnNbt.putFloat("ModelScale", desiredScale);
+            if (desiredMovesCsv.length > 0) {
+                rawSpawnNbt.putString("SduKiMovesCsv", desiredMovesCsv);
+            }
         }
     } catch (eNbt) {
         return { ok: false, reason: "nbt_build:" + eNbt };
@@ -1056,17 +1131,28 @@ function tryApplyCloneFix(entityOrMc) {
 
     try {
         mc.getSkillPool().clear();
-    } catch (eClear) {}
-
-    if (!invokeApply(applyMethod, mc, raw)) {
-        return { ok: false, reason: "invoke_failed", retry: true };
+    } catch (eClear) {
+        return { ok: false, reason: "skillPool_clear:" + eClear };
     }
 
-    tagSetBool(persist, FIXED_SETTINGS_KEY, true);
+    try {
+        /* Pass CompoundTag directly - do NOT wrap in Object[] for Rhino. */
+        applyMethod.invoke(mc, rawSpawnNbt);
+    } catch (eInv) {
+        logFail("applySuSpawnNbt invoke failed: " + eInv);
+        return { ok: false, reason: "invoke_failed", retry: !!allowRetryLater };
+    }
+
+    nbtSetBoolean(iNbt, mc, FIXED_SETTINGS_KEY, true);
 
     try {
         mc.setKiBlastDamage(desiredKiDamage);
     } catch (eSet) {}
+
+    var newMoveCount = 0;
+    try {
+        newMoveCount = mc.getSkillPool().size();
+    } catch (eNew) {}
 
     logOk(
         "OK via=" +
@@ -1075,9 +1161,13 @@ function tryApplyCloneFix(entityOrMc) {
             desiredKiDamage +
             " moves=" +
             (desiredMovesCsv || "(none)") +
+            " pool=" +
+            newMoveCount +
             " enabled=" +
             desiredKiEnabled +
-            (isBoss ? " boss" : "")
+            (isBoss ? " boss" : "") +
+            " cnpc=" +
+            (iEntity != null)
     );
     return { ok: true, reason: "applied" };
 }
@@ -1087,29 +1177,42 @@ function handleCandidate(entity, source) {
     var mc = unwrapMc(entity);
     if (!isServerMc(mc)) return;
 
-    var meta = readCloneMeta(mc);
+    var iEntity = getIEntity(mc);
+    var iNbt = getINbt(iEntity, mc);
     logSeen(
         "seen source=" +
             source +
             " type=" +
             typeIdOf(entity) +
-            " class=" +
-            className(mc) +
-            " tags=" +
-            meta.source +
+            " cnpc=" +
+            (iEntity != null) +
             " sdd_spawner=" +
-            meta.hasSpawner +
+            nbtHas(iNbt, mc, "sdd_spawner") +
             " sdu_clone_ref=" +
-            meta.hasCloneRef
+            nbtHas(iNbt, mc, "sdu_clone_ref")
     );
 
-    var result = tryApplyCloneFix(mc);
+    var result = applyCloneFix(mc, true);
     if (result.ok) {
-        dbg("source=" + source + " " + result.reason);
+        /* Forge schedules one late pass even on success. */
+        if (result.reason === "applied") {
+            var q = global.dungeonCloneKiRetry;
+            var tick = 0;
+            try {
+                tick = getLevel(mc).getServer().getTickCount();
+            } catch (eT) {}
+            q.push({
+                uuid: entityUuid(mc),
+                mc: mc,
+                runAt: tick + 20,
+                attempts: 0,
+                reason: "late_pass"
+            });
+        }
         return;
     }
     if (result.retry) {
-        queueRetry(mc, result.reason);
+        queueForgeStyleRetries(mc);
         dbg("source=" + source + " retry=" + result.reason);
     } else {
         logFail("source=" + source + " fail=" + result.reason);
@@ -1119,7 +1222,6 @@ function handleCandidate(entity, source) {
 function scanNearbyPlayer(player) {
     var mcPlayer = unwrapMc(player);
     if (!isServerMc(mcPlayer)) return;
-
     var level = getLevel(mcPlayer);
     if (level == null || AABBClass == null) return;
 
@@ -1131,13 +1233,7 @@ function scanNearbyPlayer(player) {
         y = mcPlayer.getY();
         z = mcPlayer.getZ();
     } catch (ePos) {
-        try {
-            x = mcPlayer.m_20185_();
-            y = mcPlayer.m_20186_();
-            z = mcPlayer.m_20189_();
-        } catch (ePos2) {
-            return;
-        }
+        return;
     }
 
     var r = NEARBY_RANGE;
@@ -1155,7 +1251,7 @@ function scanNearbyPlayer(player) {
         try {
             list = level.m_45933_(mcPlayer, box);
         } catch (e2) {
-            list = null;
+            return;
         }
     }
     if (list == null) return;
@@ -1190,11 +1286,7 @@ PlayerEvents.tick(function (event) {
         try {
             age = player.age;
         } catch (eA) {
-            try {
-                age = unwrapMc(player).tickCount;
-            } catch (eA2) {
-                return;
-            }
+            return;
         }
         if (age % NEARBY_SCAN_EVERY !== 0) return;
         scanNearbyPlayer(player);
@@ -1203,6 +1295,7 @@ PlayerEvents.tick(function (event) {
     }
 });
 
+/* Drain forge-style delayed retries. */
 ServerEvents.tick(function (event) {
     try {
         if (event.server == null) return;
@@ -1224,23 +1317,32 @@ ServerEvents.tick(function (event) {
         var next = [];
         for (var i = 0; i < q.length; i++) {
             var item = q[i];
-            item.attempts++;
-            var live = resolveEntityByUuid(item.mc, item.uuid);
-            item.mc = live;
-            var result = tryApplyCloneFix(live);
-            if (result.ok) continue;
-            if (result.retry && item.attempts < RETRY_MAX_ATTEMPTS) {
-                item.reason = result.reason;
+            if (item.runAt != null && tick < item.runAt) {
                 next.push(item);
-            } else if (!result.ok) {
-                logFail(
-                    "give up uuid=" +
-                        item.uuid +
-                        " reason=" +
-                        result.reason +
-                        " after " +
-                        item.attempts
-                );
+                continue;
+            }
+            item.attempts++;
+            var mc = item.mc;
+            try {
+                if (mc == null || !mc.isAlive()) continue;
+            } catch (eDead) {
+                continue;
+            }
+            var result = applyCloneFix(mc, false);
+            if (result.ok) continue;
+            /* One-shot delayed tasks like forge TickTask - do not loop forever. */
+            if (result.retry && item.reason === "forge_retry" && item.attempts < 1) {
+                next.push(item);
+            } else if (!result.ok && item.reason !== "late_pass") {
+                /* Only log once per schedule wave end. */
+                if (item.attempts >= 1) {
+                    logFail(
+                        "retry done uuid=" +
+                            item.uuid +
+                            " reason=" +
+                            result.reason
+                    );
+                }
             }
         }
         global.dungeonCloneKiRetry = next;
