@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Rival System V4
- Version: 4.7.2
+ Version: 4.7.7
 
  Combined Global Player gameplay modules (like Sparring TP System).
 
@@ -30,6 +30,14 @@
    /rival declare <player>   visible notify; accept/decline/ignore
    both declare or accept    Mutual (benefits both ways)
    Mutual + 3+ death/KO      Nemesis (timer/damage wins do NOT count)
+
+ Changelog (4.7.7):
+ - Personal cooldown between official challenges (default 2 minutes)
+   after a battle ends; blocks send and accept for both fighters.
+
+ Changelog (4.7.6):
+ - Battle report delivered once (broadcast OR private DM), so fighters
+   no longer see the full report twice.
 
  Changelog (4.7.2 consolidate):
  - Keeps declare-status path: silent Unknown, declare Mutual,
@@ -374,11 +382,17 @@ function rcLinkStatus(link) {
         }
         return "mutual";
     }
-    if (link.declaredByMe === true && link.declaredByThem === true) return "declared";
-    if (link.declaredByMe === true ||
-        link.declaredByThem === true ||
-        link.inviteSent === true ||
-        link.inviteReceived === true) {
+    /* Declared = both silent, with no visible declare still in flight. */
+    if (link.declaredByMe === true && link.declaredByThem === true &&
+        link.inviteSent !== true && link.inviteReceived !== true) {
+        return "declared";
+    }
+    /* Visible /rival declare pending (sent or received). */
+    if (link.inviteSent === true || link.inviteReceived === true) {
+        return "pending";
+    }
+    /* Silent one-sided Unknown. */
+    if (link.declaredByMe === true || link.declaredByThem === true) {
         return "unknown";
     }
     return "none";
@@ -388,6 +402,7 @@ function rcLinkStatusLabel(status) {
     if (status === "nemesis") return RC_COLOR + "c" + RC_COLOR + "lNemesis" + RC_COLOR + "r";
     if (status === "mutual") return RC_COLOR + "6Mutual" + RC_COLOR + "r";
     if (status === "declared") return RC_COLOR + "eDeclared" + RC_COLOR + "r";
+    if (status === "pending") return RC_COLOR + "dPending" + RC_COLOR + "r";
     if (status === "unknown") return RC_COLOR + "7Unknown" + RC_COLOR + "r";
     return RC_COLOR + "8None" + RC_COLOR + "r";
 }
@@ -1136,13 +1151,54 @@ function rcAwardRivalPoints(database, ownerRecord, rivalUuid, amount, reason) {
 
 /* ========================= REQUESTS ========================= */
 
+/*
+ * Match Handler clearInviteFlags so Global Player expiry cannot leave
+ * orphan inviteSent / inviteReceived after deleting db.requests.
+ */
+function rcClearInviteFlags(database, fromU, toU) {
+    if (database == null || database.players == null) return;
+    var from = database.players[fromU];
+    var to = database.players[toU];
+    if (from != null && from.rivals != null && from.rivals[toU] != null) {
+        var fl = from.rivals[toU];
+        fl.inviteSent = false;
+        if (fl.declaredByMe !== true) {
+            fl.inviteReceived = false;
+        }
+        if (fl.declaredByMe !== true && fl.declaredByThem !== true &&
+            fl.inviteReceived !== true && fl.mutual !== true) {
+            delete from.rivals[toU];
+        } else {
+            rcRefreshLinkStatus(fl);
+        }
+    }
+    if (to != null && to.rivals != null && to.rivals[fromU] != null) {
+        var tl = to.rivals[fromU];
+        tl.inviteReceived = false;
+        if (tl.declaredByMe !== true) {
+            tl.declaredByThem = false;
+        }
+        if (tl.declaredByMe !== true && tl.declaredByThem !== true &&
+            tl.inviteSent !== true && tl.mutual !== true) {
+            delete to.rivals[fromU];
+        } else {
+            rcRefreshLinkStatus(tl);
+        }
+    }
+}
+
 /* Expire pending visible /rival declare entries. Commands live in Handler. */
 function rcCleanupExpiredRequests(database) {
+    if (database == null || database.requests == null) return;
     var now = rcNow();
     for (var key in database.requests) {
         if (!database.requests.hasOwnProperty(key)) continue;
-        var createdAt = rcNumber(database.requests[key].createdAt, 0);
+        var req = database.requests[key];
+        var createdAt = rcNumber(req == null ? 0 : req.createdAt, 0);
         if (createdAt <= 0 || now - createdAt > RC_REQUEST_EXPIRE_MS) {
+            if (req != null) {
+                rcClearInviteFlags(database, req.fromUuid, req.toUuid);
+            }
             delete database.requests[key];
         }
     }
@@ -1891,6 +1947,7 @@ function rpNearRivalPriority(link) {
     if (status === "nemesis") rank = 4;
     else if (status === "mutual") rank = 3;
     else if (status === "declared") rank = 2;
+    else if (status === "pending") rank = 1;
     else if (status === "unknown") rank = 1;
     return rank * 1000000 + rpNumber(link.points, 0);
 }
@@ -1966,6 +2023,7 @@ function rpProcessPlayer(player) {
     var temp = rpTemp(player);
     var now = rpNow();
     var inChallenge = rpInActiveChallenge(player);
+    var inSparring = rpIsInSparring(player);
 
     var bestMultiplier = 1.0;
     var nearCount = 0;
@@ -2111,7 +2169,7 @@ function rpProcessPlayer(player) {
             dirty = true;
             rpTempPut(temp, presenceKey, now);
 
-            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true) {
+            if (RP_PRESENCE_TP_ENABLED === true && inChallenge !== true && inSparring !== true) {
                 var pStatus = rcLinkStatus(cappedLink);
                 var presenceTp = 0;
                 /*
@@ -2371,6 +2429,18 @@ function rpHandleStrongPlayerDamagedNearWeakRivals(victim) {
     }
 }
 
+/* Sparring sessions must not advance Rival Nemesis / presence TP. */
+function rpIsInSparring(player) {
+    if (player == null) return false;
+    try {
+        var temp = player.getTempdata();
+        if (temp == null || !temp.has("spar.active")) return false;
+        return rpString(temp.get("spar.active")) === "1";
+    } catch (e) {
+        return false;
+    }
+}
+
 function rpHandleDeathToRival(victim, damageSource) {
     var attacker = null;
     try { attacker = damageSource; } catch (ignored) {}
@@ -2401,6 +2471,7 @@ function rpHandleDeathToRival(victim, damageSource) {
         } catch (ignored4) {}
     }
     if (!rpIsPlayer(attacker)) return;
+    if (rpIsInSparring(victim) || rpIsInSparring(attacker)) return;
 
     var database = rpLoadDatabase(victim);
     if (database === null) return;
@@ -2515,6 +2586,7 @@ function rivalProxDamaged(event) {
  */
 function rpHandleKillOfMutualRival(killer, victim) {
     if (!rpIsPlayer(killer) || !rpIsPlayer(victim)) return false;
+    if (rpIsInSparring(killer) || rpIsInSparring(victim)) return false;
 
     try {
         var temp = victim.getTempdata();
@@ -2676,6 +2748,8 @@ var CH_MAX_MINUTES = 10;
 var CH_LONG_FIGHT_MS = 2 * 60 * 1000;
 var CH_BROADCAST_SCORE_LONG_MS = 60 * 1000;
 var CH_REQUEST_COOLDOWN_MS = 15 * 1000;
+/* After a challenge ends, both fighters wait before another official battle. */
+var CH_BETWEEN_COOLDOWN_MS = 2 * 60 * 1000;
 var CH_MAX_DISTANCE = 64;
 var CH_TICK_MS = 250;
 
@@ -2899,6 +2973,38 @@ function chFormatMs(ms) {
     seconds = seconds % 60;
     if (minutes <= 0) return seconds + "s";
     return minutes + "m " + seconds + "s";
+}
+
+function chPlayerBattleCdKey(uuid) {
+    return "ended:" + chString(uuid);
+}
+
+function chBattleCooldownRemaining(db, uuid) {
+    if (db == null || db.cooldowns == null) return 0;
+    var last = chNumber(db.cooldowns[chPlayerBattleCdKey(uuid)], 0);
+    if (last <= 0) return 0;
+    return Math.max(0, CH_BETWEEN_COOLDOWN_MS - (chNow() - last));
+}
+
+function chSetBattleCooldown(db, uuid) {
+    if (db == null || db.cooldowns == null) return;
+    var id = chString(uuid);
+    if (id == "") return;
+    db.cooldowns[chPlayerBattleCdKey(id)] = chNow();
+}
+
+function chBlockIfBattleCooldown(player, db, uuid, whoLabel) {
+    var rem = chBattleCooldownRemaining(db, uuid);
+    if (rem <= 0) return false;
+    var who = chString(whoLabel);
+    if (who == "" || who == "you") {
+        chMessage(player, CH_COLOR + "cChallenge cooldown: " + chFormatMs(rem) +
+            CH_COLOR + "7 before another official battle.");
+    } else {
+        chMessage(player, CH_COLOR + "c" + who + " is on challenge cooldown (" +
+            chFormatMs(rem) + ").");
+    }
+    return true;
 }
 
 /* ========================= STORAGE ========================= */
@@ -3306,6 +3412,8 @@ function chChallenge(player, targetName) {
         chMessage(player, CH_COLOR + "cThat player is already in a challenge.");
         return;
     }
+    if (chBlockIfBattleCooldown(player, db, fromUuid, "you")) return;
+    if (chBlockIfBattleCooldown(player, db, toUuid, chName(target))) return;
 
     var cooldownKey = fromUuid + ">" + toUuid;
     var remaining = CH_REQUEST_COOLDOWN_MS - (chNow() - chNumber(db.cooldowns[cooldownKey], 0));
@@ -3445,6 +3553,8 @@ function chAccept(player, fromName) {
         chMessage(player, CH_COLOR + "cGet within " + CH_MAX_DISTANCE + " blocks to accept.");
         return;
     }
+    if (chBlockIfBattleCooldown(player, db, chUuid(player), "you")) return;
+    if (chBlockIfBattleCooldown(player, db, pending.fromUuid, pending.fromName)) return;
 
     chStartCountdown(player, db, pending);
 }
@@ -3514,7 +3624,8 @@ function chBeginBattle(player, db, session) {
     session.state = "active";
     var durationMs = chNumber(session.durationMs, CH_DURATION_MS);
     if (durationMs < CH_DURATION_MS) durationMs = CH_DURATION_MS;
-    session.battleEndsAt = chNow() + durationMs;
+    session.battleStartedAt = chNow();
+    session.battleEndsAt = session.battleStartedAt + durationMs;
     session.lastScoreBroadcastAt = 0;
     session.announcedFight = true;
     chSaveChallengeDb(player, db);
@@ -3566,7 +3677,7 @@ function chBuildReport(session, winnerName, loserName) {
         lines.push(CH_COLOR + "8Runner  " + CH_COLOR + "c" + loserName);
     }
     lines.push(CH_COLOR + "8Time    " + CH_COLOR + "f" +
-        chFormatMs(Math.max(0, session.endedAt - (session.battleEndsAt - CH_DURATION_MS))) +
+        chFormatMs(chBattleElapsedMs(session)) +
         CH_COLOR + "8   via  " + CH_COLOR + "7" + session.endReason);
 
     var ids = [session.challengerUuid, session.opponentUuid];
@@ -3651,7 +3762,7 @@ function chApplyRewards(player, session, result) {
     bumpCombatStats(challengerRecord, cCombat, oCombat);
     bumpCombatStats(opponentRecord, oCombat, cCombat);
 
-    var battleDuration = Math.max(0, chNumber(session.endedAt, chNow()) - (chNumber(session.battleEndsAt, chNow()) - CH_DURATION_MS));
+    var battleDuration = chBattleElapsedMs(session);
     function touchDuration(record, wonFlag) {
         if (record === null) return;
         record.career.longestBattleMs = Math.max(chNumber(record.career.longestBattleMs, 0), battleDuration);
@@ -3829,6 +3940,7 @@ function chApplyRewards(player, session, result) {
             rcRecomputeNemesis(winnerRecord);
             rcRecomputeNemesis(loserRecord);
         }
+        var winRp = 0;
         var loseRp = 0;
         if (mutual) {
             winRp = CH_WIN_RP;
@@ -3924,47 +4036,56 @@ function chApplyRewards(player, session, result) {
     chSaveCoreDb(player, core);
 }
 
-function chEndSession(player, db, session, result) {
-    if (session.state === "ended") return;
-
-    session.state = "ended";
-    session.endedAt = chNow();
-    session.endReason = result.reason;
-    session.winnerUuid = chString(result.winnerUuid);
-    session.loserUuid = chString(result.loserUuid);
-
-    delete db.playerSessions[session.challengerUuid];
-    delete db.playerSessions[session.opponentUuid];
-    chSaveChallengeDb(player, db);
-
-    chApplyRewards(player, session, result);
-
-    var winnerName = "";
-    var loserName = "";
-    if (result.reason === "draw") {
-        winnerName = "Draw";
-    } else {
-        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
-        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+function chClaimSessionEnd(sessionId) {
+    try {
+        var world = chDataWorld(null);
+        if (world === null) return true;
+        var stored = world.getStoreddata();
+        var key = "dlr.rivalry.v4.challenge.end." + chString(sessionId);
+        var last = 0;
+        try {
+            if (stored.has(key)) last = chNumber(stored.get(key), 0);
+        } catch (e1) {}
+        if (chNow() - last < 15000) return false;
+        stored.put(key, "" + chNow());
+        return true;
+    } catch (e) {
+        return true;
     }
+}
 
-    var report = chBuildReport(session, winnerName, loserName);
+function chDeliverReport(session, result, report) {
     var a = chFindOnlineByUuid(session.challengerUuid);
     var b = chFindOnlineByUuid(session.opponentUuid);
+    var winnerName = "";
+    if (result.reason === "draw") winnerName = "Draw";
+    else {
+        winnerName = result.winnerUuid === session.challengerUuid
+            ? session.challengerName : session.opponentName;
+    }
 
-    /* Show full report to the whole server */
+    /*
+     Deliver the battle report once only:
+     broadcast when enabled, otherwise private DM to both fighters.
+     Never DM + broadcast the same report (that double-shows for fighters).
+    */
+    if (report != null) {
+        if (CH_BROADCAST_REPORT === true) {
+            chBroadcastLines(report);
+        } else {
+            for (var i = 0; i < report.length; i++) {
+                if (a !== null) chMessage(a, report[i]);
+                if (b !== null) chMessage(b, report[i]);
+            }
+        }
+    }
+
     if (CH_BROADCAST_REPORT === true) {
-        chBroadcastLines(report);
         if (result.reason === "draw") {
             chBroadcast(CH_COLOR + "e[Rival Battle] " + CH_COLOR + "fDraw!");
         } else {
             chBroadcast(CH_COLOR + "a[Rival Battle] " + CH_COLOR + "f" + winnerName +
                 CH_COLOR + "a takes the win!");
-        }
-    } else {
-        for (var i = 0; i < report.length; i++) {
-            if (a !== null) chMessage(a, report[i]);
-            if (b !== null) chMessage(b, report[i]);
         }
     }
 
@@ -3977,6 +4098,67 @@ function chEndSession(player, db, session, result) {
             if (chUuid(b) === result.winnerUuid) chMessage(b, CH_COLOR + "a[Rival] Victory!");
             else chMessage(b, CH_COLOR + "c[Rival] Defeat!");
         }
+    }
+}
+
+function chEndSession(player, db, session, result) {
+    if (session == null || db == null) return;
+    if (session.state === "ended") return;
+    if (!chClaimSessionEnd(session.id)) {
+        session.state = "ended";
+        return;
+    }
+
+    session.state = "ended";
+    session.endedAt = chNow();
+    session.endReason = result.reason;
+    session.winnerUuid = chString(result.winnerUuid);
+    session.loserUuid = chString(result.loserUuid);
+    try { delete session.pendingEnd; } catch (ePe) {}
+
+    /* Personal between-challenge cooldown for both fighters. */
+    try { chSetBattleCooldown(db, session.challengerUuid); } catch (eCd1) {}
+    try { chSetBattleCooldown(db, session.opponentUuid); } catch (eCd2) {}
+
+    delete db.playerSessions[session.challengerUuid];
+    delete db.playerSessions[session.opponentUuid];
+    chSaveChallengeDb(player, db);
+
+    try {
+        chApplyRewards(player, session, result);
+    } catch (rewardErr) {
+        chLog("applyRewards failed: " + rewardErr);
+    }
+
+    var winnerName = "";
+    var loserName = "";
+    if (result.reason === "draw") {
+        winnerName = "Draw";
+    } else {
+        winnerName = result.winnerUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+        loserName = result.loserUuid === session.challengerUuid ? session.challengerName : session.opponentName;
+    }
+
+    var report = null;
+    try {
+        report = chBuildReport(session, winnerName, loserName);
+    } catch (reportErr) {
+        chLog("buildReport failed: " + reportErr);
+        report = [
+            CH_COLOR + "8--------------------------------",
+            CH_COLOR + "6" + CH_COLOR + "l RIVAL BATTLE REPORT " + CH_COLOR + "r",
+            CH_COLOR + "8--------------------------------",
+            CH_COLOR + "8Result  " + CH_COLOR + "f" +
+                (result.reason === "draw" ? "Draw" : (winnerName + " wins")),
+            CH_COLOR + "8via  " + CH_COLOR + "7" + chString(result.reason),
+            CH_COLOR + "8--------------------------------"
+        ];
+    }
+
+    try {
+        chDeliverReport(session, result, report);
+    } catch (deliverErr) {
+        chLog("deliverReport failed: " + deliverErr);
     }
 
     delete db.sessions[session.id];
@@ -4225,6 +4407,18 @@ function rivalChTick(event) {
 
         var session = chGetSession(db, chUuid(player));
         if (session === null) return;
+
+        /* Handler forfeit/cancel writes pendingEnd; System owns the report. */
+        if (session.pendingEnd != null && typeof session.pendingEnd === "object") {
+            var pe = session.pendingEnd;
+            chEndSession(player, db, session, {
+                reason: chString(pe.reason || "forfeit"),
+                winnerUuid: chString(pe.winnerUuid),
+                loserUuid: chString(pe.loserUuid),
+                knockout: pe.knockout === true
+            });
+            return;
+        }
 
         if (session.state === "countdown") {
             var remaining = session.countdownEndsAt - now;

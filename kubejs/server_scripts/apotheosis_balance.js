@@ -9,11 +9,27 @@
  * Tyrannical Current HP Damage: removed
  * Giant Slaying Current HP Damage affix: disabled
  * Royal Family Current HP Damage: removed
+ * Life Steal REMOVED from Apotheosis (Vampiric / Guardian / Blood Lord / Royalty).
+ * Other healing attrs nerfed to ~1-5%:
+ *   - Healing Received: Blood Lord chest, Spiritual affix, Forest shield
+ *   - Overheal: Guardian heavy weapon, Berserking affix
+ *   - Blood Lord leech_block heal_factor: 1-5%
+ *   - Runtime: lifesteal_cap.js forces life_steal to 0%; OH/+heal still capped
  *
  * Requires a full server restart or /reload after the script is loaded.
+ *
+ * NOTE: /kubejs reload server_scripts only registers this file.
+ * Datapack overrides (gems/affixes) apply on /reload or world restart.
  */
 
+console.info(
+    "[Apotheosis Balance] script registered. Run /reload (or restart) to apply gem/affix JSON nerfs."
+);
+
 ServerEvents.highPriorityData(function (event) {
+    console.info(
+        "[Apotheosis Balance] highPriorityData running - removing Apotheosis life steal..."
+    );
 
     // Disable Giant Slaying percentage-current-health damage affix.
     event.addJson("apotheosis:affixes/heavy_weapon/attribute/giant_slaying", {
@@ -22,6 +38,106 @@ ServerEvents.highPriorityData(function (event) {
         operation: "ADDITION",
         values: {},
         types: []
+    });
+
+    // REMOVE Vampiric life steal affix entirely.
+    event.addJson("apotheosis:affixes/sword/attribute/vampiric", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:life_steal",
+        operation: "ADDITION",
+        values: {},
+        types: []
+    });
+
+    // Nerf Spiritual healing received affix to +1-5% (was ~+10-50%).
+    event.addJson("apotheosis:affixes/armor/attribute/spiritual", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:healing_received",
+        operation: "MULTIPLY_TOTAL",
+        values: {
+            rare: { min: 0.01, steps: 2, step: 0.005 },
+            epic: { min: 0.015, steps: 3, step: 0.005 },
+            mythic: { min: 0.02, steps: 4, step: 0.005 },
+            ancient: { min: 0.03, steps: 4, step: 0.005 }
+        },
+        types: ["chestplate", "leggings"]
+    });
+
+    // Nerf Berserking overheal affix to 1-5% (was ~10-40%).
+    event.addJson("apotheosis:affixes/heavy_weapon/attribute/berserking", {
+        type: "apotheosis:attribute",
+        attribute: "attributeslib:overheal",
+        operation: "ADDITION",
+        values: {
+            common: { min: 0.01, steps: 2, step: 0.005 },
+            uncommon: { min: 0.01, steps: 3, step: 0.005 },
+            rare: { min: 0.015, steps: 4, step: 0.005 },
+            epic: { min: 0.02, steps: 4, step: 0.005 },
+            mythic: { min: 0.025, steps: 5, step: 0.005 },
+            ancient: { min: 0.03, steps: 4, step: 0.005 }
+        },
+        types: ["heavy_weapon"]
+    });
+
+    // core/guardian - life steal removed; overheal kept at 1-5%.
+    event.addJson("apotheosis:gems/core/guardian", {
+        variant: "guardian",
+        weight: 10,
+        quality: 0,
+        dimensions: [],
+        bonuses: [
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "core_armor",
+                    types: ["chestplate", "leggings"]
+                },
+                attribute: "minecraft:generic.armor",
+                operation: "ADDITION",
+                values: {
+                    common: 0.5,
+                    uncommon: 1,
+                    rare: 2.5,
+                    epic: 4,
+                    mythic: 6,
+                    ancient: 8
+                }
+            },
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "heavy_weapon",
+                    types: ["heavy_weapon"]
+                },
+                attribute: "attributeslib:overheal",
+                operation: "ADDITION",
+                values: {
+                    common: 0.01,
+                    uncommon: 0.02,
+                    rare: 0.03,
+                    epic: 0.04,
+                    mythic: 0.045,
+                    ancient: 0.05
+                }
+            },
+            {
+                type: "apotheosis:attribute",
+                gem_class: {
+                    key: "shield",
+                    types: ["shield"]
+                },
+                attribute: "minecraft:generic.armor",
+                operation: "MULTIPLY_TOTAL",
+                values: {
+                    common: 0.05,
+                    uncommon: 0.1,
+                    rare: 0.2,
+                    epic: 0.25,
+                    mythic: 0.3,
+                    ancient: 0.45
+                }
+            }
+        ]
     });
 
     // core/ballast
@@ -706,7 +822,6 @@ ServerEvents.highPriorityData(function (event) {
                     "attributeslib:fire_damage",
                     "attributeslib:ghost_health",
                     "attributeslib:healing_received",
-                    "attributeslib:life_steal",
                     "attributeslib:mining_speed",
                     "attributeslib:overheal",
                     "attributeslib:prot_pierce",
@@ -873,21 +988,11 @@ ServerEvents.highPriorityData(function (event) {
                 "type": "apotheosis:attribute",
                 "gem_class": {
                     "key": "light_weapon",
-                    "types": [
-                        "sword",
-                        "trident"
-                    ]
+                    "types": []
                 },
                 "attribute": "attributeslib:life_steal",
                 "operation": "ADDITION",
-                "values": {
-                    "common": 0.05,
-                    "uncommon": 0.25,
-                    "rare": 0.4,
-                    "epic": 0.525,
-                    "mythic": 0.65,
-                    "ancient": 0.75
-                }
+                "values": {}
             },
             {
                 "type": "apotheosis:multi_attribute",
@@ -934,11 +1039,11 @@ ServerEvents.highPriorityData(function (event) {
                 "attribute": "attributeslib:healing_received",
                 "operation": "ADDITION",
                 "values": {
-                    "uncommon": 0.15,
-                    "rare": 0.2,
-                    "epic": 0.3,
-                    "mythic": 0.4,
-                    "ancient": 0.5
+                    "uncommon": 0.01,
+                    "rare": 0.02,
+                    "epic": 0.03,
+                    "mythic": 0.04,
+                    "ancient": 0.05
                 }
             },
             {
@@ -975,26 +1080,125 @@ ServerEvents.highPriorityData(function (event) {
                 "type": "apotheosis:leech_block",
                 "values": {
                     "uncommon": {
-                        "heal_factor": 0.15,
+                        "heal_factor": 0.01,
                         "cooldown": 400
                     },
                     "rare": {
-                        "heal_factor": 0.25,
+                        "heal_factor": 0.02,
                         "cooldown": 650
                     },
                     "epic": {
-                        "heal_factor": 0.4,
+                        "heal_factor": 0.03,
                         "cooldown": 800
                     },
                     "mythic": {
-                        "heal_factor": 0.55,
+                        "heal_factor": 0.04,
                         "cooldown": 850
                     },
                     "ancient": {
-                        "heal_factor": 0.65,
+                        "heal_factor": 0.05,
                         "cooldown": 1000
                     }
                 }
+            }
+        ]
+    });
+
+    // twilight/forest - nerf shield healing received to +1-5% (was +10-40%).
+    event.addJson("apotheosis:gems/twilight/forest", {
+        conditions: [{ type: "forge:mod_loaded", modid: "twilightforest" }],
+        weight: 5,
+        quality: 1.5,
+        dimensions: ["twilightforest:twilight_forest"],
+        unique: true,
+        min_rarity: "rare",
+        bonuses: [
+            {
+                type: "apotheosis:twilight_treasure_goblin",
+                gem_class: {
+                    key: "weapon",
+                    types: ["heavy_weapon", "sword", "trident", "bow", "crossbow"]
+                },
+                values: {
+                    rare: { chance: 0.005, cooldown: 4800 },
+                    epic: { chance: 0.0075, cooldown: 4800 },
+                    mythic: { chance: 0.01, cooldown: 4800 },
+                    ancient: { chance: 0.015, cooldown: 4800 }
+                }
+            },
+            {
+                type: "apotheosis:multi_attribute",
+                desc: "bonus.apotheosis:multi_attr.desc.and",
+                gem_class: { key: "shield", types: ["shield"] },
+                modifiers: [
+                    {
+                        attribute: "attributeslib:healing_received",
+                        operation: "MULTIPLY_BASE",
+                        values: {
+                            rare: 0.01,
+                            epic: 0.02,
+                            mythic: 0.035,
+                            ancient: 0.05
+                        }
+                    },
+                    {
+                        attribute: "minecraft:generic.attack_speed",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.05,
+                            epic: -0.1,
+                            mythic: -0.15,
+                            ancient: -0.2
+                        }
+                    }
+                ]
+            },
+            {
+                type: "apotheosis:twilight_ore_magnet",
+                gem_class: { key: "pickaxe", types: ["pickaxe"] },
+                values: {
+                    rare: 24,
+                    epic: 20,
+                    mythic: 16,
+                    ancient: 12
+                }
+            },
+            {
+                type: "apotheosis:multi_attribute",
+                desc: "bonus.apotheosis:multi_attr.desc.but_and",
+                gem_class: { key: "chestplate", types: ["chestplate"] },
+                modifiers: [
+                    {
+                        attribute: "attributeslib:armor_shred",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: 0.35,
+                            epic: 0.5,
+                            mythic: 0.75,
+                            ancient: 1
+                        }
+                    },
+                    {
+                        attribute: "attributeslib:prot_shred",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.25,
+                            epic: -0.4,
+                            mythic: -0.6,
+                            ancient: -0.8
+                        }
+                    },
+                    {
+                        attribute: "attributeslib:prot_pierce",
+                        operation: "MULTIPLY_TOTAL",
+                        values: {
+                            rare: -0.25,
+                            epic: -0.4,
+                            mythic: -0.6,
+                            ancient: -0.8
+                        }
+                    }
+                ]
             }
         ]
     });
@@ -1231,7 +1435,10 @@ ServerEvents.highPriorityData(function (event) {
         types: ["helmet", "chestplate", "leggings", "boots"]
     });
 
-    console.log(
-        "[DBZ Legacy Reborn] Applied Apotheosis gem + Blessed armor balance overrides."
+    console.info(
+        "[DBZ Legacy Reborn] Applied Apotheosis balance: life steal REMOVED; healing received / overheal ~1-5%."
+    );
+    console.info(
+        "[DBZ Legacy Reborn] Note: lifesteal_cap.js forces live life_steal to 0% for existing gear."
     );
 });

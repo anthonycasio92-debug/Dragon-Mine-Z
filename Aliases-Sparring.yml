@@ -1,40 +1,16 @@
 # ============================================================
-# DBZ Legacy Reborn - Sparring CMI Aliases (v3) — OPTIONAL
+# DBZ Legacy Reborn - Sparring CMI Aliases (v3.2.5) — OPTIONAL
 # ============================================================
-# Sparring Tp System.js v3.0.5+ already handles:
+# Sparring Tp System.js v3.2.5+ already handles:
 #   /spar ...   (Bukkit slash hook, no CMI needed)
-#   .spar ...   !spar ...   ./spar ...   (chat fallback)
 #
 # Paste these ONLY if you still want CMI aliases / tab-complete.
 # Merge the keys under your existing CustomAlias: section
 # (do NOT paste a second "CustomAlias:" root if one already exists).
 #
-# Then: /cmi reload
+# Bare /spar with "$1-" empty is treated as help in scripts
+# (v3.2.5+ / Handler v3.1.3+). Still run /cmi reload after paste.
 # ============================================================
-
-# spar:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# sparstats:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] stats $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# spartop:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] top $1-
-#   AddTabs: true
-#   ExactMatch: false
-#
-# sparhelp:
-#   Cmds:
-#   - asFakeOp! noppes script trigger 70 [playerName] help
-#   AddTabs: true
-#   ExactMatch: true
 
 CustomAlias:
   spar:
@@ -96,3 +72,37 @@ CustomAlias:
     - asFakeOp! noppes script trigger 70 [playerName] help
     AddTabs: true
     ExactMatch: true
+
+  # ---- Mentor Bond ----
+  # /spar mentor ... already works via the spar alias above.
+  # These shortcuts are for tab-complete / convenience.
+  sparmentor:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparapprentice:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] apprentice $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparbond:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor $1-
+    AddTabs: true
+    ExactMatch: false
+
+  # Admin: clear mentor + apprentice change cooldowns (script still checks op)
+  sparmentorcd:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor resetcd $1-
+    AddTabs: true
+    ExactMatch: false
+
+  sparbondcd:
+    Cmds:
+    - asFakeOp! noppes script trigger 70 [playerName] mentor resetcd $1-
+    AddTabs: true
+    ExactMatch: false

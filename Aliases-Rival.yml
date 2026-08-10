@@ -1,11 +1,11 @@
 # ============================================================
-# DBZ Legacy Reborn - Rival CMI Aliases (v4.6.19)
-# Pair with Rival System.js + Rival Command Handler.js v4.6.19
+# DBZ Legacy Reborn - Rival CMI Aliases (v4.7.5)
+# Pair with Rival System.js + Rival Command Handler.js v4.7.5
 # ============================================================
 # Intended flow:
 #   /rival <player>           -> silent Unknown (they see nothing)
 #   both silent               -> Declared
-#   /rival declare <player>   -> VISIBLE declare (they are notified)
+#   /rival declare <player>   -> Pending (they are notified)
 #   both declare or accept    -> Mutual
 #   Mutual + 3 death/KO       -> Nemesis
 #

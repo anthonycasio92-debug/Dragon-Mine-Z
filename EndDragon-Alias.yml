@@ -1,16 +1,14 @@
 #
 # End Dimension Strength - CMI aliases
 #
-# REQUIRES BOTH scripts:
-#   1) End Dimension Strength.js     → Global Player
-#      events: tick, kill, trigger, damagedEntity
-#   2) EndDragon-Forge-Trigger.js    → Global Forge Scripts
-#      event: trigger
+# REQUIRED:
+#   End Dimension Strength.js → Global Player
+#   events: tick, kill, trigger, damagedEntity
 #
-# Why Forge bridge?
-#   CustomNPCs skips Global Player triggers when the command source is
-#   FakePlayer / console. asFakeOp alone will silently do nothing.
-#   Prefer asOp! below. The Forge bridge still covers FakeOp/console.
+# Do NOT enable CustomNPCs Global Forge Scripts for this.
+# asOp! below runs the trigger as a real player so Global Player
+# scripts receive it. EndDragon-Forge-Trigger.js is optional legacy
+# only (enabling CNPC forge causes EntityConstructing/Size NPE spam).
 #
 # /enddragon     -> trigger 50  (spawn)
 # /cleardragons  -> trigger 51  (kill all ender dragons)

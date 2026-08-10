@@ -1,7 +1,7 @@
 /*
 ============================================================
  DBZ Legacy Reborn - Sparring TP System
- Version: 3.0.9
+ Version: 3.2.8
 
  Combat-Based Training (Sparring v3)
 
@@ -21,6 +21,44 @@
   - Beam clashes via BeamClashManager.isClashing(UUID).
   - Style labels use style IDs; damage-weighted specialists.
   - /spar command cards match Rival System layout.
+  - v3.1.0: movement AFK gate no longer refreshed by hits/blocks;
+    same-dimension required; Fabled prestige via plugin classloader;
+    overworld leaderboard store; sessions counted on end; wave ki
+    typed as beam before explosive.
+  - v3.1.1: spar TP / session damage use HP actually lost after DMZ
+    defense (same approach as Rival challenges). CNPC event.damage is
+    LivingHurt pre-mitigation and is no longer used for payouts.
+  - v3.1.2: fully disable sparring during active Rival challenges
+    (no session start, TP, or chat spam while fighting).
+  - v3.1.3: /spar help no longer advertises .spar / !spar / ./spar
+    (those chat prefixes are unreliable and confuse players).
+  - v3.1.4: ki hits score again — queue HP received from damagedEntity
+    (owner-attributed kiblast LivingHurt) as well as victim damaged;
+    never demote a pending ki hit to melee; credit a small floor when
+    a landed ki hit is fully mitigated (HP drop ~0).
+  - v3.2.0: Mentor Bond (/spar mentor|apprentice); global spar TP +50%;
+    Friendly Fist knockdown during a spar fully heals the partner.
+  - v3.2.1: charging / preparing a ki attack holds the spar activity
+    timer (hit + movement gates), so sessions no longer end mid-charge.
+  - v3.2.2: audit fixes — mentor reconcile; Friendly Fist heal flag only
+    after success; no partner fallback for non-PvP damage; third-party
+    hits no longer poison spar timers; block TP only from spar partner;
+    Command Handler ignores non-spar trigger ids.
+  - v3.2.3: /spar mentor works via Command Handler (CMI path); /spar help
+    and /spar stats show current Mentor Bond status.
+  - v3.2.4: Friendly Fist spar heal rewritten — detect KD or ~1 HP, heal
+    from either fighter's tick, mark pending on FF hits, and do not require
+    Java boolean === true (Rhino-safe).
+  - v3.2.5: /spar always shows Mentor Bond at top of help; CMI empty
+    "$1-" no longer becomes "Unknown command"; reconcileMentorBond no
+    longer wipes one-sided bonds (repairs them instead).
+  - v3.2.6: Friendly Fist heal chat uses ASCII only (no em-dash "?");
+    melee hit-activity window is shorter than ki so punch spars end
+    sooner when idle, while charged ki still has time to land.
+  - v3.2.7: Friendly Fist spar heal only on knockdown / lethal ~1 HP —
+    no longer full-heals on every FF hit.
+  - v3.2.8: admin /spar mentor resetcd [player] clears mentor + apprentice
+    change cooldowns (op / permission level 2).
 
  PLACE AS:
   CustomNPCs Global Player Script
@@ -28,7 +66,6 @@
  COMMANDS:
   Native (no CMI required):
     /spar ...   (Bukkit preprocess hook)
-    .spar ...   or  !spar ...  or  ./spar ...  (chat)
   Optional CMI aliases (Aliases-Sparring.yml) -> trigger 70
   Optional: Sparring Command Handler.js in a player script-slot
 
@@ -101,6 +138,8 @@ var MAX_DAMAGE_QUALITY = 1.80;         // big hits help, but don't replace BP
 var MAX_BASE_TP_PER_HIT = 700;         // softcap BEFORE BP (keep modest)
 var MAX_TP_PER_ACTION = 250000;        // safety ceiling after BP (was 35k — crushed high BP)
 var MAX_TP_PER_ACTION_BP_SCALE = 4.0;  // also allow up to BASE*BP*this
+/* Global sparring TP buff applied to every combat award. */
+var GLOBAL_TP_GAIN_MULT = 1.50;
 var BLOCK_TP_BASE = 40;                // defensive TP before BP curve
 var PERFECT_BLOCK_TP_BONUS = 22;       // stub bonus (reserved; needs DMZ API)
 var BLOCK_BREAKS_COMBO = true;         // blocking resets attacker's combo / Momentum
@@ -121,6 +160,21 @@ var BEAM_CLASH_TICK_MS = 500;
 var RELEASE_CONTROL_TP_PER_SEC = 4;    // passive while fighting at high release
 var HIGH_RELEASE_THRESHOLD = 180.0;
 
+/*
+ * Mentor Bond:
+ *  one mentor + one apprentice per player (mutual accept)
+ *  apprentice bonus only while sparring with their mentor
+ *  mentor share from apprentice spar TP (online mentor only)
+ */
+var MENTOR_SHARE_PCT = 0.15;           // mid of 10-20%
+var MENTOR_SPAR_BONUS_PCT = 0.18;      // mid of 10-25%, mentor-pair only
+var MENTOR_CHANGE_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+var MENTOR_INVITE_MS = 120000;
+var K_MENTOR_SHARE_MSG = "spar.mentor.shareMsg";
+var MENTOR_SHARE_MSG_COOLDOWN_MS = 4000;
+var K_FF_KD_HEALED = "spar.ff.kdHealed";
+var K_FF_HEAL_MSG = "spar.ff.healMsg";
+
 /* Ki type efficiency (unknown types use OTHER) */
 var KI_EFF = {
     basic: 1.00,
@@ -135,10 +189,13 @@ var MELEE_EFF = 1.00;
 
 /* Session / activity */
 var MAX_SPAR_DISTANCE = 30.0;
-var HIT_ACTIVITY_WINDOW_MS = 6000;
+/* Melee needs frequent trades; ki (esp. charged) needs a longer window. */
+var MELEE_HIT_ACTIVITY_WINDOW_MS = 4500;
+var KI_HIT_ACTIVITY_WINDOW_MS = 10000;
+var HIT_ACTIVITY_WINDOW_MS = KI_HIT_ACTIVITY_WINDOW_MS; /* legacy default / fallback */
 var SESSION_START_WINDOW_MS = 15000;
 var PAIR_RESTART_COOLDOWN_MS = 3000;
-var SESSION_GRACE_PERIOD_MS = 3000;
+var SESSION_GRACE_PERIOD_MS = 4000;
 var DISTANCE_GRACE_PERIOD_MS = 4000;
 var SHOW_GRACE_WARNING = true;
 var MOVEMENT_ACTIVITY_WINDOW_MS = 10000;
@@ -169,6 +226,7 @@ var PERFECT_ACTIONBAR_MS = 2500;
 /* Daily streak */
 var ENABLE_TRAINING_STREAK = true;
 var STREAK_MIN_SESSION_MS = 300000;
+var MIN_COUNTED_SESSION_MS = 30000;   // leaderboard session increment
 var STREAK_BONUS_PER_DAY = 0.02;
 var MAX_STREAK_DAYS_FOR_BONUS = 14;
 var MAX_STREAK_MULTIPLIER = 1.25;
@@ -236,11 +294,29 @@ var K_GRACE_REASON = "spar.grace.reason";
 var K_GRACE_WARNED = "spar.grace.warned";
 var K_LAST_OUT_PARTNER = "spar.lastOut.partner";
 var K_LAST_OUT_TIME = "spar.lastOut.time";
+var K_LAST_OUT_KIND = "spar.lastOut.kind"; /* melee | ki */
 var K_LAST_IN_PARTNER = "spar.lastIn.partner";
 var K_LAST_IN_TIME = "spar.lastIn.time";
 var K_LAST_KI_OUT = "spar.lastKiOut.time";
 var K_LAST_LASER_OUT = "spar.lastLaserOut.time";
 var K_CLASH_UNTIL = "spar.clash.until";
+/*
+ * CNPC damaged/damagedEntity fire on LivingHurt with pre-mitigation
+ * DMZ attack damage. Score sparring from real HP/absorption lost.
+ */
+var K_HP_SAMPLE = "spar.hp.pool";
+var K_PENDING_SAMPLE = "spar.hp.pendingSample";
+var K_PENDING_ATK = "spar.hp.pendingAtk";
+var K_PENDING_KI = "spar.hp.pendingKi";
+var K_PENDING_KI_KIND = "spar.hp.pendingKiKind";
+var K_PENDING_UNTIL = "spar.hp.pendingUntil";
+var PENDING_HP_RESOLVE_MS = 75;
+/*
+ * Fully mitigated kiblasts often cancel LivingDamage (0 HP lost) while
+ * LivingHurt still fired. Credit a token received amount so the action
+ * still pays at MIN_DAMAGE_QUALITY instead of disappearing.
+ */
+var KI_FULL_MIT_FLOOR = 12;
 var K_MOVE_X = "spar.move.x";
 var K_MOVE_Y = "spar.move.y";
 var K_MOVE_Z = "spar.move.z";
@@ -283,6 +359,15 @@ var K_CLASH_NEXT = "spar.clash.next";
 var S_STREAK_CURRENT = "spar.streak.current";
 var S_STREAK_BEST = "spar.streak.best";
 var S_STREAK_LAST_DAY = "spar.streak.lastDay";
+
+/* Mentor Bond (player storeddata) */
+var S_MENTOR_NAME = "spar.bond.mentorName";
+var S_APPRENTICE_NAME = "spar.bond.apprenticeName";
+var S_MENTOR_CD_UNTIL = "spar.bond.mentorChangeReadyAt";
+var S_APPRENTICE_CD_UNTIL = "spar.bond.apprenticeChangeReadyAt";
+var S_BOND_INVITE_FROM = "spar.bond.inviteFrom";
+var S_BOND_INVITE_KIND = "spar.bond.inviteKind";
+var S_BOND_INVITE_UNTIL = "spar.bond.inviteUntil";
 
 var LB_NAMES_KEY = "spar.leaderboard.names";
 var LB_TP_PREFIX = "spar.leaderboard.tp.";
@@ -400,6 +485,37 @@ function distanceBetween(a, b) {
         var dz = Number(a.getZ()) - Number(b.getZ());
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     } catch (e) { return 999999; }
+}
+
+function getWorldKey(player) {
+    if (player == null) return "";
+    try {
+        var world = null;
+        try { world = player.getWorld(); } catch (e1) {
+            try { world = player.world; } catch (e2) {}
+        }
+        if (world == null) return "";
+        try {
+            if (typeof world.getDimensionName == "function") {
+                var dim = String(world.getDimensionName());
+                if (dim != "") return dim.toLowerCase();
+            }
+        } catch (e3) {}
+        try {
+            if (typeof world.getName == "function") {
+                var name = String(world.getName());
+                if (name != "") return name.toLowerCase();
+            }
+        } catch (e4) {}
+    } catch (e) {}
+    return "";
+}
+
+function sameWorld(a, b) {
+    var ka = getWorldKey(a);
+    var kb = getWorldKey(b);
+    if (ka == "" || kb == "") return false;
+    return ka == kb;
 }
 
 function sendMessage(player, text) {
@@ -647,10 +763,15 @@ function getFabledPrestigeLevel(player) {
         if (plugin == null || !plugin.isEnabled()) return 0;
         var bukkitPlayer = Bukkit.getPlayerExact(getPlayerName(player));
         if (bukkitPlayer == null) return 0;
-        var methods = plugin.getClass().getMethods();
+
+        /* Load Fabled through its plugin classloader (Arclight / hybrid). */
+        var loader = plugin.getClass().getClassLoader();
+        var fabledClass = loader.loadClass("studio.magemonkey.fabled.Fabled");
+        var methods = fabledClass.getMethods();
         var getDataMethod = null;
         for (var i = 0; i < methods.length; i++) {
-            if (String(methods[i].getName()) == "getData" && methods[i].getParameterTypes().length == 1) {
+            if (String(methods[i].getName()) == "getData" &&
+                methods[i].getParameterTypes().length == 1) {
                 getDataMethod = methods[i];
                 break;
             }
@@ -658,7 +779,39 @@ function getFabledPrestigeLevel(player) {
         if (getDataMethod == null) return 0;
         var fabledData = getDataMethod.invoke(null, bukkitPlayer);
         if (fabledData == null) return 0;
-        var prestigeClass = fabledData.getClass(FABLED_PRESTIGE_CLASS_NAME);
+
+        var prestigeClass = null;
+        try { prestigeClass = fabledData.getClass(FABLED_PRESTIGE_CLASS_NAME); } catch (e1) {}
+        if (prestigeClass == null) {
+            try { prestigeClass = fabledData.getClass("prestige"); } catch (e2) {}
+        }
+        if (prestigeClass == null) {
+            try {
+                var playerClasses = fabledData.getClasses();
+                if (playerClasses != null) {
+                    var it = playerClasses.iterator();
+                    while (it.hasNext()) {
+                        var current = it.next();
+                        if (current == null) continue;
+                        var classData = null;
+                        try { classData = current.getData(); } catch (e3) {}
+                        var label = "";
+                        try {
+                            if (classData != null && typeof classData.getName == "function") {
+                                label = String(classData.getName());
+                            }
+                        } catch (e4) {}
+                        if (label == "") {
+                            try { label = String(current); } catch (e5) {}
+                        }
+                        if (String(label).toLowerCase().indexOf("prestige") >= 0) {
+                            prestigeClass = current;
+                            break;
+                        }
+                    }
+                }
+            } catch (eScan) {}
+        }
         if (prestigeClass == null) return 0;
         var level = Number(prestigeClass.getLevel());
         if (isNaN(level)) return 0;
@@ -687,8 +840,29 @@ function isPlayerChargingKi(player) {
         try {
             if (status.isActionCharging() === true) return true;
         } catch (e2) {}
+        try {
+            var techniques = data.getTechniques();
+            if (techniques != null && techniques.isTechniqueCharging() === true) return true;
+        } catch (e3) {}
     } catch (e) {}
     return false;
+}
+
+/*
+ * True while either fighter is charging / winding up a ki technique.
+ * Standing still mid-charge must not trip AFK or hit-activity gates.
+ */
+function isEitherPreparingKi(player, partner) {
+    return isPlayerChargingKi(player) || isPlayerChargingKi(partner);
+}
+
+function holdSparForKiCharge(player, partner) {
+    if (player == null || partner == null) return false;
+    if (!isEitherPreparingKi(player, partner)) return false;
+    refreshClashCombatActivity(player, partner);
+    try { refreshMovementActivity(player); } catch (e1) {}
+    try { refreshMovementActivity(partner); } catch (e2) {}
+    return true;
 }
 
 function awardTrainingPoints(player, playerData, amount) {
@@ -871,6 +1045,781 @@ function qualifyDailyTrainingStreak(player) {
             sparColor("a"), "Daily training secured! ",
             sparColor("e"), "Streak ", current, " day", (current == 1 ? "" : "s")
         ));
+    }
+}
+
+/* ========================= MENTOR BOND ========================= */
+
+function bondStored(player) {
+    try { return player.getStoreddata(); } catch (e) { return null; }
+}
+
+function getBondMentorName(player) {
+    var stored = bondStored(player);
+    if (stored == null) return "";
+    return readString(stored, S_MENTOR_NAME, "");
+}
+
+function getBondApprenticeName(player) {
+    var stored = bondStored(player);
+    if (stored == null) return "";
+    return readString(stored, S_APPRENTICE_NAME, "");
+}
+
+function clearBondInvite(player) {
+    var stored = bondStored(player);
+    if (stored == null) return;
+    putString(stored, S_BOND_INVITE_FROM, "");
+    putString(stored, S_BOND_INVITE_KIND, "");
+    putNumber(stored, S_BOND_INVITE_UNTIL, 0);
+}
+
+function readBondInvite(player) {
+    var stored = bondStored(player);
+    if (stored == null) return null;
+    var until = readNumber(stored, S_BOND_INVITE_UNTIL, 0);
+    var from = readString(stored, S_BOND_INVITE_FROM, "");
+    var kind = readString(stored, S_BOND_INVITE_KIND, "");
+    if (from == "" || kind == "" || nowMs() > until) {
+        if (from != "" || kind != "") clearBondInvite(player);
+        return null;
+    }
+    return { from: from, kind: kind, until: until };
+}
+
+function setBondInvite(target, fromName, kind) {
+    var stored = bondStored(target);
+    if (stored == null) return false;
+    putString(stored, S_BOND_INVITE_FROM, fromName);
+    putString(stored, S_BOND_INVITE_KIND, kind);
+    putNumber(stored, S_BOND_INVITE_UNTIL, nowMs() + MENTOR_INVITE_MS);
+    return true;
+}
+
+function bondCooldownLeft(player, key) {
+    var stored = bondStored(player);
+    if (stored == null) return 0;
+    return Math.max(0, readNumber(stored, key, 0) - nowMs());
+}
+
+function setBondCooldown(player, key) {
+    var stored = bondStored(player);
+    if (stored == null) return;
+    putNumber(stored, key, nowMs() + MENTOR_CHANGE_COOLDOWN_MS);
+}
+
+function clearBondCooldowns(player) {
+    var stored = bondStored(player);
+    if (stored == null) return false;
+    putNumber(stored, S_MENTOR_CD_UNTIL, 0);
+    putNumber(stored, S_APPRENTICE_CD_UNTIL, 0);
+    return true;
+}
+
+/*
+ * Staff gate for mentor cooldown reset.
+ * Accepts Forge permission level 2+ or Bukkit op / spar.mentor.admin.
+ */
+function isSparMentorAdmin(player) {
+    if (player == null) return false;
+    try {
+        var mc = player.getMCEntity();
+        if (mc != null) {
+            try { if (mc.hasPermissions && mc.hasPermissions(2)) return true; } catch (e0) {}
+            try { if (mc.m_20310_ && mc.m_20310_(2)) return true; } catch (e1) {}
+        }
+    } catch (e2) {}
+    try {
+        var name = getPlayerName(player);
+        var bp = Bukkit.getPlayerExact(name);
+        if (bp == null) bp = Bukkit.getPlayer(name);
+        if (bp != null) {
+            try { if (bp.isOp()) return true; } catch (e3) {}
+            try { if (bp.hasPermission("spar.mentor.admin")) return true; } catch (e4) {}
+            try { if (bp.hasPermission("sparring.mentor.admin")) return true; } catch (e5) {}
+        }
+    } catch (e6) {}
+    return false;
+}
+
+function namesMatch(a, b) {
+    return String(a || "").toLowerCase() == String(b || "").toLowerCase() && String(a || "") != "";
+}
+
+function isMentorOf(mentor, apprentice) {
+    if (mentor == null || apprentice == null) return false;
+    return namesMatch(getBondApprenticeName(mentor), getPlayerName(apprentice)) &&
+        namesMatch(getBondMentorName(apprentice), getPlayerName(mentor));
+}
+
+function reconcileMentorBond(player) {
+    if (player == null) return;
+    var stored = bondStored(player);
+    if (stored == null) return;
+    var self = getPlayerName(player);
+
+    /*
+     * Only clear on a real conflict (other side names a different partner).
+     * If the other side is blank, repair — do NOT wipe. Old reconcile wiped
+     * one-sided bonds whenever the partner was online, so /spar looked like
+     * it "lost" Mentor Bond.
+     */
+    var app = getBondApprenticeName(player);
+    if (app != "") {
+        var ap = getPlayerByName(player, app);
+        if (ap != null) {
+            var theirMentor = getBondMentorName(ap);
+            if (theirMentor != "" && !namesMatch(theirMentor, self)) {
+                putString(stored, S_APPRENTICE_NAME, "");
+            } else if (theirMentor == "") {
+                var apStore = bondStored(ap);
+                if (apStore != null) putString(apStore, S_MENTOR_NAME, self);
+            }
+        }
+    }
+
+    var ment = getBondMentorName(player);
+    if (ment != "") {
+        var m = getPlayerByName(player, ment);
+        if (m != null) {
+            var theirApp = getBondApprenticeName(m);
+            if (theirApp != "" && !namesMatch(theirApp, self)) {
+                putString(stored, S_MENTOR_NAME, "");
+            } else if (theirApp == "") {
+                var mStore = bondStored(m);
+                if (mStore != null) putString(mStore, S_APPRENTICE_NAME, self);
+            }
+        }
+    }
+}
+
+function isSparringWithOwnMentor(player, partner) {
+    if (player == null || partner == null) return false;
+    return isMentorOf(partner, player);
+}
+
+function clearMentorLink(apprentice, mentor, applyCooldown) {
+    if (apprentice != null) {
+        var aStore = bondStored(apprentice);
+        if (aStore != null) {
+            putString(aStore, S_MENTOR_NAME, "");
+            if (applyCooldown === true) setBondCooldown(apprentice, S_MENTOR_CD_UNTIL);
+        }
+    }
+    if (mentor != null) {
+        var mStore = bondStored(mentor);
+        if (mStore != null) {
+            putString(mStore, S_APPRENTICE_NAME, "");
+            if (applyCooldown === true) setBondCooldown(mentor, S_APPRENTICE_CD_UNTIL);
+        }
+    }
+}
+
+function bindMentorApprentice(mentor, apprentice) {
+    var mStore = bondStored(mentor);
+    var aStore = bondStored(apprentice);
+    if (mStore == null || aStore == null) return false;
+    putString(mStore, S_APPRENTICE_NAME, getPlayerName(apprentice));
+    putString(aStore, S_MENTOR_NAME, getPlayerName(mentor));
+    clearBondInvite(mentor);
+    clearBondInvite(apprentice);
+    return true;
+}
+
+function shareTpWithMentor(apprentice, amount) {
+    amount = Math.floor(Number(amount));
+    if (!(amount > 0)) return;
+    var mentorName = getBondMentorName(apprentice);
+    if (mentorName == "") return;
+    var mentor = getPlayerByName(apprentice, mentorName);
+    if (mentor == null || !isMentorOf(mentor, apprentice)) return;
+
+    var share = Math.floor(amount * MENTOR_SHARE_PCT);
+    if (share <= 0) return;
+    var data = getDMZData(mentor);
+    if (data == null) return;
+    if (!awardTrainingPoints(mentor, data, share)) return;
+
+    if (isSessionActive(mentor)) {
+        try {
+            putNumber(mentor.getTempdata(), K_SESSION_TP,
+                readNumber(mentor.getTempdata(), K_SESSION_TP, 0) + share);
+        } catch (eS) {}
+    }
+
+    throttleMessage(
+        mentor,
+        K_MENTOR_SHARE_MSG,
+        MENTOR_SHARE_MSG_COOLDOWN_MS,
+        sparText(
+            sparColor("6"), "[Mentor Bond] ",
+            sparColor("a"), "+", formatWholeNumber(share), " TP ",
+            sparColor("7"), "from apprentice ",
+            sparColor("f"), getPlayerName(apprentice)
+        )
+    );
+}
+
+function sparCmdBondStatus(player) {
+    try { reconcileMentorBond(player); } catch (eR) {}
+    uiHead(player, "MENTOR BOND");
+    var mentor = getBondMentorName(player);
+    var apprentice = getBondApprenticeName(player);
+    uiProp(player, "Mentor", mentor != "" ? sparColor("f") + mentor : sparColor("8") + "none");
+    uiProp(player, "Apprentice", apprentice != "" ? sparColor("f") + apprentice : sparColor("8") + "none");
+    uiBlank(player);
+    uiProp(player, "Share", sparColor("7") + "Mentor receives " +
+        sparColor("a") + Math.floor(MENTOR_SHARE_PCT * 100) + "%" +
+        sparColor("7") + " of apprentice spar TP");
+    uiProp(player, "Bonus", sparColor("7") + "Apprentice +" +
+        sparColor("a") + Math.floor(MENTOR_SPAR_BONUS_PCT * 100) + "%" +
+        sparColor("7") + " TP while sparring with mentor");
+    var mCd = bondCooldownLeft(player, S_MENTOR_CD_UNTIL);
+    var aCd = bondCooldownLeft(player, S_APPRENTICE_CD_UNTIL);
+    if (mCd > 0) {
+        uiProp(player, "Mentor CD", sparColor("c") + formatDuration(mCd));
+    }
+    if (aCd > 0) {
+        uiProp(player, "Apprentice CD", sparColor("c") + formatDuration(aCd));
+    }
+    var invite = readBondInvite(player);
+    if (invite != null) {
+        uiBlank(player);
+        if (invite.kind == "mentor") {
+            sendMessage(player, sparColor("e") + invite.from + sparColor("7") +
+                " wants you as their Mentor.");
+        } else {
+            sendMessage(player, sparColor("e") + invite.from + sparColor("7") +
+                " wants you as their Apprentice.");
+        }
+        sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar mentor accept" +
+            sparColor("8") + "  or  " + sparColor("e") + "/spar mentor deny");
+    }
+    uiBlank(player);
+    uiSection(player, "Commands");
+    uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
+    uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
+    uiCmd(player, "/spar mentor accept | deny", "respond to an invite");
+    uiCmd(player, "/spar mentor clear", "leave your mentor (7d cooldown)");
+    uiCmd(player, "/spar apprentice clear", "release your apprentice (7d cooldown)");
+    if (isSparMentorAdmin(player)) {
+        uiCmd(player, "/spar mentor resetcd [player]", "admin: clear bond cooldowns");
+    }
+    uiFoot(player);
+}
+
+function sparCmdAskMentor(player, targetName) {
+    targetName = String(targetName || "").replace(/^\s+|\s+$/g, "");
+    if (targetName == "") {
+        sparCmdBondStatus(player);
+        return;
+    }
+    if (namesMatch(targetName, getPlayerName(player))) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You cannot mentor yourself.");
+        return;
+    }
+    if (getBondMentorName(player) != "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You already have a mentor (" +
+            getBondMentorName(player) + "). Clear them first.");
+        return;
+    }
+    var cd = bondCooldownLeft(player, S_MENTOR_CD_UNTIL);
+    if (cd > 0) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Mentor change cooldown: " + formatDuration(cd));
+        return;
+    }
+    var target = getPlayerByName(player, targetName);
+    if (target == null) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Player not online.");
+        return;
+    }
+    if (getBondApprenticeName(target) != "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + getPlayerName(target) +
+            " already has an apprentice.");
+        return;
+    }
+    var tCd = bondCooldownLeft(target, S_APPRENTICE_CD_UNTIL);
+    if (tCd > 0) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + getPlayerName(target) +
+            " cannot take an apprentice yet (" + formatDuration(tCd) + ").");
+        return;
+    }
+    if (!setBondInvite(target, getPlayerName(player), "mentor")) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Could not send invite.");
+        return;
+    }
+    uiBanner(player, "Mentor Bond", sparColor("a") + "Invite sent to " +
+        sparColor("f") + getPlayerName(target) + sparColor("a") + ".");
+    sendMessage(target, sparText(
+        sparColor("6"), "[Mentor Bond] ",
+        sparColor("f"), getPlayerName(player),
+        sparColor("e"), " wants you as their Mentor."
+    ));
+    sendMessage(target, sparColor("8") + "/spar mentor accept  " + sparColor("7") + "or  " +
+        sparColor("8") + "/spar mentor deny");
+}
+
+function sparCmdAskApprentice(player, targetName) {
+    targetName = String(targetName || "").replace(/^\s+|\s+$/g, "");
+    if (targetName == "") {
+        sparCmdBondStatus(player);
+        return;
+    }
+    if (namesMatch(targetName, getPlayerName(player))) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You cannot apprentice yourself.");
+        return;
+    }
+    if (getBondApprenticeName(player) != "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You already have an apprentice (" +
+            getBondApprenticeName(player) + "). Clear them first.");
+        return;
+    }
+    var cd = bondCooldownLeft(player, S_APPRENTICE_CD_UNTIL);
+    if (cd > 0) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Apprentice change cooldown: " + formatDuration(cd));
+        return;
+    }
+    var target = getPlayerByName(player, targetName);
+    if (target == null) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Player not online.");
+        return;
+    }
+    if (getBondMentorName(target) != "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + getPlayerName(target) +
+            " already has a mentor.");
+        return;
+    }
+    var tCd = bondCooldownLeft(target, S_MENTOR_CD_UNTIL);
+    if (tCd > 0) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + getPlayerName(target) +
+            " cannot change mentors yet (" + formatDuration(tCd) + ").");
+        return;
+    }
+    if (!setBondInvite(target, getPlayerName(player), "apprentice")) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Could not send invite.");
+        return;
+    }
+    uiBanner(player, "Mentor Bond", sparColor("a") + "Invite sent to " +
+        sparColor("f") + getPlayerName(target) + sparColor("a") + ".");
+    sendMessage(target, sparText(
+        sparColor("6"), "[Mentor Bond] ",
+        sparColor("f"), getPlayerName(player),
+        sparColor("e"), " wants you as their Apprentice."
+    ));
+    sendMessage(target, sparColor("8") + "/spar mentor accept  " + sparColor("7") + "or  " +
+        sparColor("8") + "/spar mentor deny");
+}
+
+function sparCmdBondAccept(player) {
+    var invite = readBondInvite(player);
+    if (invite == null) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "No pending invite.");
+        return;
+    }
+    var other = getPlayerByName(player, invite.from);
+    if (other == null) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Inviter is no longer online.");
+        return;
+    }
+
+    var mentor = null;
+    var apprentice = null;
+    if (invite.kind == "mentor") {
+        mentor = player;
+        apprentice = other;
+    } else if (invite.kind == "apprentice") {
+        mentor = other;
+        apprentice = player;
+    } else {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Invalid invite.");
+        return;
+    }
+
+    if (getBondApprenticeName(mentor) != "" &&
+        !namesMatch(getBondApprenticeName(mentor), getPlayerName(apprentice))) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Mentor already has an apprentice.");
+        return;
+    }
+    if (getBondMentorName(apprentice) != "" &&
+        !namesMatch(getBondMentorName(apprentice), getPlayerName(mentor))) {
+        clearBondInvite(player);
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Apprentice already has a mentor.");
+        return;
+    }
+
+    if (!bindMentorApprentice(mentor, apprentice)) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "Could not create bond.");
+        return;
+    }
+
+    sendMessage(mentor, sparText(
+        sparColor("6"), "[Mentor Bond] ",
+        sparColor("a"), "You are now mentoring ",
+        sparColor("f"), getPlayerName(apprentice), sparColor("a"), "."
+    ));
+    sendMessage(apprentice, sparText(
+        sparColor("6"), "[Mentor Bond] ",
+        sparColor("a"), "Your mentor is now ",
+        sparColor("f"), getPlayerName(mentor), sparColor("a"), "."
+    ));
+}
+
+function sparCmdBondDeny(player) {
+    var invite = readBondInvite(player);
+    if (invite == null) {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "No pending invite.");
+        return;
+    }
+    var fromName = invite.from;
+    clearBondInvite(player);
+    uiBanner(player, "Mentor Bond", sparColor("7") + "Invite denied.");
+    var other = getPlayerByName(player, fromName);
+    if (other != null) {
+        sendMessage(other, sparText(
+            sparColor("6"), "[Mentor Bond] ",
+            sparColor("f"), getPlayerName(player),
+            sparColor("c"), " denied your invite."
+        ));
+    }
+}
+
+function sparCmdClearMentor(player) {
+    var mentorName = getBondMentorName(player);
+    if (mentorName == "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You have no mentor.");
+        return;
+    }
+    var mentor = getPlayerByName(player, mentorName);
+    clearMentorLink(player, mentor, true);
+    if (mentor == null) {
+        var stored = bondStored(player);
+        if (stored != null) putString(stored, S_MENTOR_NAME, "");
+        setBondCooldown(player, S_MENTOR_CD_UNTIL);
+    }
+    uiBanner(player, "Mentor Bond", sparColor("7") + "Left mentor " + sparColor("f") + mentorName +
+        sparColor("7") + ". 7-day cooldown started.");
+    if (mentor != null) {
+        sendMessage(mentor, sparText(
+            sparColor("6"), "[Mentor Bond] ",
+            sparColor("f"), getPlayerName(player),
+            sparColor("7"), " is no longer your apprentice."
+        ));
+    }
+}
+
+function sparCmdClearApprentice(player) {
+    var apprenticeName = getBondApprenticeName(player);
+    if (apprenticeName == "") {
+        uiBanner(player, "Mentor Bond", sparColor("c") + "You have no apprentice.");
+        return;
+    }
+    var apprentice = getPlayerByName(player, apprenticeName);
+    clearMentorLink(apprentice, player, true);
+    if (apprentice == null) {
+        var stored = bondStored(player);
+        if (stored != null) putString(stored, S_APPRENTICE_NAME, "");
+        setBondCooldown(player, S_APPRENTICE_CD_UNTIL);
+    }
+    uiBanner(player, "Mentor Bond", sparColor("7") + "Released apprentice " +
+        sparColor("f") + apprenticeName + sparColor("7") + ". 7-day cooldown started.");
+    if (apprentice != null) {
+        sendMessage(apprentice, sparText(
+            sparColor("6"), "[Mentor Bond] ",
+            sparColor("f"), getPlayerName(player),
+            sparColor("7"), " is no longer your mentor."
+        ));
+    }
+}
+
+function sparCmdResetMentorCd(admin, targetName) {
+    if (!isSparMentorAdmin(admin)) {
+        uiBanner(admin, "Mentor Bond", sparColor("c") + "Admin only.");
+        return;
+    }
+    var wanted = String(targetName || "").replace(/^\s+|\s+$/g, "");
+    var target = admin;
+    if (wanted != "") {
+        target = getPlayerByName(admin, wanted);
+        if (target == null) {
+            uiBanner(admin, "Mentor Bond", sparColor("c") + "Player not online: " + wanted);
+            return;
+        }
+    }
+    if (!clearBondCooldowns(target)) {
+        uiBanner(admin, "Mentor Bond", sparColor("c") + "Could not clear cooldowns.");
+        return;
+    }
+    var tName = getPlayerName(target);
+    uiBanner(admin, "Mentor Bond", sparColor("a") + "Cleared mentor/apprentice cooldowns for " +
+        sparColor("f") + tName + sparColor("a") + ".");
+    if (!namesMatch(tName, getPlayerName(admin))) {
+        sendMessage(target, sparText(
+            sparColor("6"), "[Mentor Bond] ",
+            sparColor("a"), "Your mentor/apprentice change cooldowns were reset by staff."
+        ));
+    }
+}
+
+function sparCmdRouteBond(player, parts) {
+    var sub = parts.length > 0 ? String(parts[0]).toLowerCase() : "";
+    var arg = parts.length > 1 ? parts[1] : "";
+    var arg2 = parts.length > 2 ? parts[2] : "";
+
+    if (sub == "mentor" || sub == "mentors" || sub == "bond") {
+        var action = String(arg || "").toLowerCase();
+        if (action == "" || action == "status" || action == "info") {
+            sparCmdBondStatus(player);
+        } else if (action == "accept" || action == "yes") {
+            sparCmdBondAccept(player);
+        } else if (action == "deny" || action == "decline" || action == "no") {
+            sparCmdBondDeny(player);
+        } else if (action == "clear" || action == "remove" || action == "leave") {
+            sparCmdClearMentor(player);
+        } else if (
+            action == "resetcd" || action == "clearcd" || action == "cdreset" ||
+            action == "resetcooldown" || action == "resetcool" || action == "cd"
+        ) {
+            sparCmdResetMentorCd(player, arg2);
+        } else if (action == "ask") {
+            sparCmdAskMentor(player, arg2);
+        } else {
+            sparCmdAskMentor(player, arg);
+        }
+        return true;
+    }
+
+    if (sub == "apprentice" || sub == "app" || sub == "student") {
+        var aAction = String(arg || "").toLowerCase();
+        if (aAction == "" || aAction == "status" || aAction == "info") {
+            sparCmdBondStatus(player);
+        } else if (aAction == "clear" || aAction == "remove" || aAction == "release") {
+            sparCmdClearApprentice(player);
+        } else if (
+            aAction == "resetcd" || aAction == "clearcd" || aAction == "cdreset" ||
+            aAction == "resetcooldown" || aAction == "resetcool" || aAction == "cd"
+        ) {
+            /* Same admin cooldown reset (mentor + apprentice CDs). */
+            sparCmdResetMentorCd(player, arg2);
+        } else if (aAction == "ask" || aAction == "take") {
+            sparCmdAskApprentice(player, arg2);
+        } else {
+            sparCmdAskApprentice(player, arg);
+        }
+        return true;
+    }
+
+    if (sub == "resetcd" || sub == "clearcd" || sub == "mentorcd") {
+        sparCmdResetMentorCd(player, arg);
+        return true;
+    }
+
+    return false;
+}
+
+/* ========================= FRIENDLY FIST SPAR HEAL ========================= */
+
+/*
+ * Rhino/Nashorn can box Java booleans so `=== true` fails.
+ * Accept any truthy Java/JS boolean-like value.
+ */
+function javaFlagTrue(value) {
+    if (value === true) return true;
+    if (value === false || value == null) return false;
+    try {
+        if (value == true) return true;
+    } catch (e1) {}
+    try {
+        if (String(value).toLowerCase() == "true") return true;
+    } catch (e2) {}
+    return false;
+}
+
+function isFriendlyFistOn(player) {
+    try {
+        var data = getDMZData(player);
+        if (data == null) return false;
+        var status = data.getStatus();
+        if (status == null) return false;
+        return javaFlagTrue(status.isFriendlyFistEnabled());
+    } catch (e) { return false; }
+}
+
+function isPlayerKnockedDown(player) {
+    try {
+        var data = getDMZData(player);
+        if (data == null) return false;
+        var status = data.getStatus();
+        if (status == null) return false;
+        return javaFlagTrue(status.isKnockedDown());
+    } catch (e) { return false; }
+}
+
+/*
+ * Friendly Fist lethal hits leave the victim knocked down (often ~1 HP).
+ * Heal ONLY on real knockdown / lethal leave — never on a normal FF hit.
+ */
+function getPlayerHealthSafe(player) {
+    if (player == null) return 0;
+    var health = 0;
+    try { health = Number(player.getHealth()); } catch (e0) { health = 0; }
+    if (isNaN(health) || health <= 0) {
+        try { health = Number(player.getMCEntity().getHealth()); } catch (e1) { health = 0; }
+    }
+    if (isNaN(health) || health < 0) health = 0;
+    return health;
+}
+
+function isFriendlyFistLethalHp(player) {
+    var health = getPlayerHealthSafe(player);
+    return health > 0 && health <= 1.5;
+}
+
+function needsFriendlyFistHeal(player) {
+    if (player == null) return false;
+    if (isPlayerKnockedDown(player)) return true;
+    /* ~1 HP alone is not enough — DMZ fighters can sit low without a KD.
+     * Only treat it as FF-lethal when a knockdown/death path armed pending. */
+    if (hasFriendlyFistHealPending(player) && isFriendlyFistLethalHp(player)) return true;
+    return false;
+}
+
+function healSparPlayerFull(player) {
+    if (player == null) return false;
+    try {
+        var maxH = 0;
+        var mc = null;
+        try { mc = player.getMCEntity(); } catch (e0) { mc = null; }
+        try { maxH = Number(player.getMaxHealth()); } catch (e1) { maxH = 0; }
+        if (!(maxH > 0) && mc != null) {
+            try { maxH = Number(mc.getMaxHealth()); } catch (e2) {}
+        }
+        if (!(maxH > 0)) maxH = 20;
+
+        var beforeKd = isPlayerKnockedDown(player);
+        var beforeHp = getPlayerHealthSafe(player);
+
+        /* Restore vanilla health first. */
+        try { player.setHealth(maxH); } catch (e3) {}
+        if (mc != null) {
+            try { mc.setHealth(mc.getMaxHealth()); } catch (e4) {}
+            try { mc.m_21153_(mc.m_21233_()); } catch (e5) {} /* LivingEntity#setHealth */
+            try { mc.m_5634_(maxH); } catch (e6) {} /* heal */
+        }
+
+        var data = getDMZData(player);
+        if (data != null) {
+            try { data.getStatus().setKnockedDown(false); } catch (e7) {}
+            try { data.getCooldowns().removeCooldown("KnockdownDuration"); } catch (e8) {}
+            try { data.getCooldowns().setCooldown("KnockdownDuration", 0); } catch (e9) {}
+            try {
+                NetworkHandler.sendToTrackingEntityAndSelf(
+                    new StatsSyncS2C(mc != null ? mc : player.getMCEntity()),
+                    mc != null ? mc : player.getMCEntity()
+                );
+            } catch (e10) {}
+        }
+        sampleHealthPool(player);
+
+        var nowH = getPlayerHealthSafe(player);
+        var healthy = nowH >= Math.max(2, maxH * 0.5);
+        var clearedKd = beforeKd && !isPlayerKnockedDown(player);
+        var raisedFromLethal = beforeHp > 0 && beforeHp <= 1.5 && healthy;
+        /* Must have actually recovered from KD / lethal HP — never "succeed" on a full-HP fighter. */
+        return healthy && (clearedKd || raisedFromLethal || beforeKd);
+    } catch (e) {
+        return false;
+    }
+}
+
+function markFriendlyFistHealPending(victim) {
+    if (victim == null) return;
+    try {
+        /* Short retry window after a real KD/lethal — not a per-hit arm. */
+        putNumber(victim.getTempdata(), "spar.ff.healPendingUntil", nowMs() + 1500);
+    } catch (e) {}
+}
+
+function hasFriendlyFistHealPending(victim) {
+    if (victim == null) return false;
+    try {
+        return nowMs() <= readNumber(victim.getTempdata(), "spar.ff.healPendingUntil", 0);
+    } catch (e) {
+        return false;
+    }
+}
+
+function finishFriendlyFistHeal(healer, target) {
+    if (healer == null || target == null) return false;
+    if (!needsFriendlyFistHeal(target)) return false;
+    var tTemp = target.getTempdata();
+    if (readString(tTemp, K_FF_KD_HEALED, "0") == "1") return false;
+
+    if (!healSparPlayerFull(target)) {
+        /* Retry while they remain knocked down / lethal. */
+        markFriendlyFistHealPending(target);
+        return false;
+    }
+
+    putString(tTemp, K_FF_KD_HEALED, "1");
+    try { putNumber(tTemp, "spar.ff.healPendingUntil", 0); } catch (e0) {}
+
+    try {
+        refreshMovementActivity(healer);
+        refreshMovementActivity(target);
+        var now = nowMs();
+        putString(healer.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(target));
+        putNumber(healer.getTempdata(), K_LAST_OUT_TIME, now);
+        putString(healer.getTempdata(), K_LAST_OUT_KIND, "ki");
+        putString(target.getTempdata(), K_LAST_OUT_PARTNER, getPlayerName(healer));
+        putNumber(target.getTempdata(), K_LAST_OUT_TIME, now);
+        putString(target.getTempdata(), K_LAST_OUT_KIND, "ki");
+        clearGraceState(healer, target);
+    } catch (eKeep) {}
+
+    sendMessage(healer, sparText(
+        sparColor("6"), "[Sparring] ",
+        sparColor("a"), "Friendly Fist ",
+        sparColor("7"), "knockdown - healed ",
+        sparColor("f"), getPlayerName(target), sparColor("7"), "."
+    ));
+    sendMessage(target, sparText(
+        sparColor("6"), "[Sparring] ",
+        sparColor("a"), "Friendly Fist ",
+        sparColor("7"), "heal from ",
+        sparColor("f"), getPlayerName(healer), sparColor("7"), "."
+    ));
+    return true;
+}
+
+function processFriendlyFistKnockdownHeal(player, partner) {
+    if (player == null || partner == null) return;
+    if (!isSessionActive(player) || !isSessionActive(partner)) return;
+
+    var pTemp = partner.getTempdata();
+    var aTemp = player.getTempdata();
+
+    /* Reset heal latch once they are clearly recovered. */
+    if (!needsFriendlyFistHeal(partner) && !isPlayerKnockedDown(partner) &&
+        !isFriendlyFistLethalHp(partner)) {
+        putString(pTemp, K_FF_KD_HEALED, "0");
+    }
+    if (!needsFriendlyFistHeal(player) && !isPlayerKnockedDown(player) &&
+        !isFriendlyFistLethalHp(player)) {
+        putString(aTemp, K_FF_KD_HEALED, "0");
+    }
+
+    /*
+     * Knockdown-only: healer must have Friendly Fist ON, and the partner
+     * must actually be knocked down / FF-lethal. Pending alone never heals.
+     */
+    if (needsFriendlyFistHeal(partner) && isFriendlyFistOn(player)) {
+        finishFriendlyFistHeal(player, partner);
+    }
+    if (needsFriendlyFistHeal(player) && isFriendlyFistOn(partner)) {
+        finishFriendlyFistHeal(partner, player);
     }
 }
 
@@ -1183,9 +2132,10 @@ function classifyKiType(event) {
             var type = types[t];
             if (type.indexOf("scatter") >= 0 || type.indexOf("disk") >= 0) return "scatter";
             if (type.indexOf("charge") >= 0) return "charge";
-            if (type.indexOf("explosive") >= 0 || type.indexOf("wave") >= 0) return "explosive";
+            /* Wave/beam before explosive — "kiwave" must not underpay as explosive. */
+            if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0 || type.indexOf("wave") >= 0) return "beam";
+            if (type.indexOf("explosive") >= 0) return "explosive";
             if (type.indexOf("barrage") >= 0 || type.indexOf("rapid") >= 0) return "barrage";
-            if (type.indexOf("laser") >= 0 || type.indexOf("beam") >= 0) return "beam";
             if (type.indexOf("kiblast") >= 0 || type.indexOf("blast") >= 0) return "basic";
         }
     } catch (e2) {}
@@ -1203,8 +2153,76 @@ function isSessionActive(player) {
     return readString(player.getTempdata(), K_SESSION_ACTIVE, "") == "1";
 }
 
+/* Rival challenge DB key — keep in sync with Rival System.js */
+var RIVAL_CHALLENGE_DB_KEY = "dlr.rivalry.v4.challenges";
+
+function getOverworldStoreddata() {
+    try {
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            try {
+                var world = NpcAPI.Instance().getIWorld(names[i]);
+                if (world != null) return world.getStoreddata();
+            } catch (e1) {}
+        }
+    } catch (e) {}
+    return null;
+}
+
+function isInRivalChallenge(player) {
+    if (player == null) return false;
+    try {
+        var stored = getOverworldStoreddata();
+        if (stored == null || !stored.has(RIVAL_CHALLENGE_DB_KEY)) return false;
+        var ch = JSON.parse(String(stored.get(RIVAL_CHALLENGE_DB_KEY)));
+        if (ch == null || ch.playerSessions == null || ch.sessions == null) return false;
+        var sid = ch.playerSessions[getPlayerUUID(player)];
+        if (sid == null || sid === undefined) return false;
+        var session = ch.sessions[String(sid)];
+        if (session == null) return false;
+        var st = String(session.state || "");
+        return st == "active" || st == "countdown";
+    } catch (e) {
+        return false;
+    }
+}
+
+/* Soft-stop any open spar when a Rival challenge is running (no chat). */
+function suppressSparringForChallenge(player) {
+    if (player == null || !isInRivalChallenge(player)) return false;
+    if (isSessionActive(player)) {
+        var partner = null;
+        try { partner = getPlayerByName(player, getPartnerName(player)); } catch (e1) {}
+        clearSessionData(player);
+        clearSelfHitTracking(player);
+        if (partner != null && isSessionActive(partner)) {
+            clearSessionData(partner);
+            clearSelfHitTracking(partner);
+        }
+    } else {
+        clearSelfHitTracking(player);
+        clearPendingHpSample(player);
+    }
+    return true;
+}
+
 function getPartnerName(player) {
     return readString(player.getTempdata(), K_PARTNER, "");
+}
+
+function clearPendingHpSample(player) {
+    if (player == null) return;
+    var temp = player.getTempdata();
+    var keys = [
+        K_HP_SAMPLE, K_PENDING_SAMPLE, K_PENDING_ATK,
+        K_PENDING_KI, K_PENDING_KI_KIND, K_PENDING_UNTIL
+    ];
+    for (var i = 0; i < keys.length; i++) {
+        try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
+            try { temp.put(keys[i], ""); } catch (e2) {}
+        }
+    }
 }
 
 function clearSessionData(player) {
@@ -1217,7 +2235,10 @@ function clearSessionData(player) {
         K_SESSION_BLOCKS, K_SESSION_PBLOCKS, K_SESSION_CLASH_MS, K_SESSION_VANISH, K_SESSION_KB,
         K_SESSION_MAX_COMBO, K_SESSION_MAX_MOM, K_SESSION_PERFECT, K_CLASH_UNTIL,
         K_TP_PENDING, K_TP_PENDING_MELEE, K_TP_PENDING_KI, K_TP_PENDING_CLASH, K_LAST_HIT_KIND,
-        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE
+        K_LAST_OUT_KIND,
+        K_STYLE_MELEE, K_STYLE_KI, K_STYLE_BEAM, K_STYLE_BLOCK, K_STYLE_MOVE,
+        K_HP_SAMPLE, K_PENDING_SAMPLE, K_PENDING_ATK, K_PENDING_KI, K_PENDING_KI_KIND, K_PENDING_UNTIL,
+        K_FF_KD_HEALED
     ];
     for (var i = 0; i < keys.length; i++) {
         try { if (temp.has(keys[i])) temp.remove(keys[i]); } catch (e) {
@@ -1231,12 +2252,18 @@ function clearSelfHitTracking(player) {
     var temp = player.getTempdata();
     try { temp.put(K_LAST_OUT_PARTNER, ""); } catch (e) {}
     try { temp.put(K_LAST_IN_PARTNER, ""); } catch (e) {}
+    try { temp.put(K_LAST_OUT_KIND, ""); } catch (e2) {}
     putNumber(temp, K_LAST_OUT_TIME, 0);
     putNumber(temp, K_LAST_IN_TIME, 0);
 }
 
 function startSession(a, b) {
     if (a == null || b == null || isSamePlayer(a, b)) {
+        clearSelfHitTracking(a);
+        clearSelfHitTracking(b);
+        return false;
+    }
+    if (isInRivalChallenge(a) || isInRivalChallenge(b)) {
         clearSelfHitTracking(a);
         clearSelfHitTracking(b);
         return false;
@@ -1269,16 +2296,32 @@ function startSession(a, b) {
         putNumber(bTemp, zeroKeys[i], 0);
     }
 
+    /* Seed movement window only — hits/blocks must not refresh AFK gate. */
     refreshMovementActivity(a);
     refreshMovementActivity(b);
-    recordSparringSessionStarted(a);
-    recordSparringSessionStarted(b);
+    sampleHealthPool(a);
+    sampleHealthPool(b);
 
     if (SHOW_SESSION_MESSAGES) {
         sendMessage(a, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), bName, sparColor("e"), "."));
         sendMessage(b, sparText(sparColor("6"), "[Sparring] ", sparColor("e"), "Combat training started with ", sparColor("f"), aName, sparColor("e"), "."));
         sendMessage(a, sparText(sparColor("8"), "TP is earned from real combat actions."));
         sendMessage(b, sparText(sparColor("8"), "TP is earned from real combat actions."));
+        if (isMentorOf(a, b) || isMentorOf(b, a)) {
+            var apprentice = isMentorOf(a, b) ? b : a;
+            var mentor = isMentorOf(a, b) ? a : b;
+            sendMessage(apprentice, sparText(
+                sparColor("6"), "[Mentor Bond] ",
+                sparColor("a"), "+", Math.floor(MENTOR_SPAR_BONUS_PCT * 100),
+                "% TP bonus while training with your mentor."
+            ));
+            sendMessage(mentor, sparText(
+                sparColor("6"), "[Mentor Bond] ",
+                sparColor("7"), "Training your apprentice - you earn ",
+                sparColor("a"), Math.floor(MENTOR_SHARE_PCT * 100), "%",
+                sparColor("7"), " of their spar TP."
+            ));
+        }
     }
     return true;
 }
@@ -1350,6 +2393,10 @@ function endSession(player, partner, reason) {
         if (duration >= STREAK_MIN_SESSION_MS) {
             qualifyDailyTrainingStreak(player);
             if (partner != null) qualifyDailyTrainingStreak(partner);
+        }
+        if (duration >= MIN_COUNTED_SESSION_MS) {
+            recordSparringSessionCompleted(player);
+            if (partner != null) recordSparringSessionCompleted(partner);
         }
         updateSparringLeaderboard(player);
         if (partner != null) updateSparringLeaderboard(partner);
@@ -1614,6 +2661,7 @@ function buildCombatMultiplier(player, partner) {
 
 function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
     if (player == null || partner == null || !isSessionActive(player)) return 0;
+    if (isInRivalChallenge(player) || isInRivalChallenge(partner)) return 0;
     baseAmount = Number(baseAmount);
     if (isNaN(baseAmount) || baseAmount <= 0) return 0;
     baseAmount = Math.min(MAX_BASE_TP_PER_HIT, baseAmount);
@@ -1621,11 +2669,20 @@ function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
     var built = buildCombatMultiplier(player, partner);
     if (built == null) return 0;
 
-    var amount = Math.floor(baseAmount * built.total);
+    var amount = Math.floor(baseAmount * built.total * GLOBAL_TP_GAIN_MULT);
     if (amount <= 0) return 0;
 
-    var actionCap = getMaxTpForAction(built.bpMult);
+    /* Apprentice bonus only while sparring with their single mentor. */
+    if (isSparringWithOwnMentor(player, partner)) {
+        amount = Math.floor(amount * (1.0 + MENTOR_SPAR_BONUS_PCT));
+    }
+
+    var actionCap = Math.floor(getMaxTpForAction(built.bpMult) * GLOBAL_TP_GAIN_MULT);
+    if (isSparringWithOwnMentor(player, partner)) {
+        actionCap = Math.floor(actionCap * (1.0 + MENTOR_SPAR_BONUS_PCT));
+    }
     if (amount > actionCap) amount = actionCap;
+    if (amount <= 0) return 0;
 
     if (!awardTrainingPoints(player, built.valuesA.data, amount)) return 0;
 
@@ -1640,6 +2697,7 @@ function awardCombatTp(player, partner, baseAmount, reason, hitKind) {
         else if (r == "melee") kind = "melee";
     }
     queueTpMessage(player, amount, kind);
+    shareTpWithMentor(player, amount);
     debug(player, reason + " +" + amount +
         " (base " + Math.floor(baseAmount) +
         " bp " + formatWholeNumber(built.trainingBP) +
@@ -1667,8 +2725,6 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
         putNumber(temp, K_SESSION_MELEE, readNumber(temp, K_SESSION_MELEE, 0) + damage);
         putNumber(temp, K_STYLE_MELEE, readNumber(temp, K_STYLE_MELEE, 0) + damage);
     }
-
-    refreshMovementActivity(attacker);
 
     /* Blocked attacks break combo / Momentum instead of extending them. */
     if (isPlayerBlocking(victim)) {
@@ -1706,6 +2762,7 @@ function awardDamageTp(attacker, victim, damage, isKi, kiKind) {
 
 function recordCombatExchange(attacker, target, isKi, kiKind) {
     if (attacker == null || target == null || isSamePlayer(attacker, target)) return;
+    if (isInRivalChallenge(attacker) || isInRivalChallenge(target)) return;
 
     var now = nowMs();
     var aTemp = attacker.getTempdata();
@@ -1713,19 +2770,31 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     var aName = getPlayerName(attacker);
     var tName = getPlayerName(target);
 
-    putString(aTemp, K_LAST_OUT_PARTNER, tName);
-    putNumber(aTemp, K_LAST_OUT_TIME, now);
-    putString(tTemp, K_LAST_IN_PARTNER, aName);
-    putNumber(tTemp, K_LAST_IN_TIME, now);
+    /*
+     * While already sparring, only refresh outgoing hit activity toward
+     * the spar partner. Hitting a third party must not poison the timer
+     * and end the session.
+     */
+    var attackerSparring = isSessionActive(attacker);
+    var stampOut = !attackerSparring ||
+        namesMatch(getPartnerName(attacker), tName);
 
-    if (isKi) {
-        putNumber(aTemp, K_LAST_KI_OUT, now);
-        /*
-         * Beams often classify as "beam" or "other". Stamp laser time for
-         * beam/charge and any ki so clash sustain can start from mutual ki.
-         */
-        if (kiKind == "beam" || kiKind == "charge" || kiKind == "other" || kiKind == "basic") {
-            putNumber(aTemp, K_LAST_LASER_OUT, now);
+    if (stampOut) {
+        putString(aTemp, K_LAST_OUT_PARTNER, tName);
+        putNumber(aTemp, K_LAST_OUT_TIME, now);
+        putString(aTemp, K_LAST_OUT_KIND, isKi ? "ki" : "melee");
+        putString(tTemp, K_LAST_IN_PARTNER, aName);
+        putNumber(tTemp, K_LAST_IN_TIME, now);
+
+        if (isKi) {
+            putNumber(aTemp, K_LAST_KI_OUT, now);
+            /*
+             * Beams often classify as "beam" or "other". Stamp laser time for
+             * beam/charge and any ki so clash sustain can start from mutual ki.
+             */
+            if (kiKind == "beam" || kiKind == "charge" || kiKind == "other" || kiKind == "basic") {
+                putNumber(aTemp, K_LAST_LASER_OUT, now);
+            }
         }
     }
 
@@ -1737,22 +2806,43 @@ function recordCombatExchange(attacker, target, isKi, kiKind) {
     var outTime = readNumber(tTemp, K_LAST_OUT_TIME, 0);
     if (outPartner.toLowerCase() != aName.toLowerCase()) return;
     if (now - outTime > SESSION_START_WINDOW_MS) return;
+    if (!sameWorld(attacker, target)) return;
     if (distanceBetween(attacker, target) > MAX_SPAR_DISTANCE) return;
 
     startSession(attacker, target);
 }
 
+function hitActivityWindowMs(kind) {
+    var k = String(kind || "").toLowerCase();
+    if (k == "ki" || k == "beam" || k == "clash" || k == "charge") {
+        return KI_HIT_ACTIVITY_WINDOW_MS;
+    }
+    return MELEE_HIT_ACTIVITY_WINDOW_MS;
+}
+
 function hasRecentOutgoingHit(player, partnerName) {
     var temp = player.getTempdata();
     if (readString(temp, K_LAST_OUT_PARTNER, "").toLowerCase() != String(partnerName).toLowerCase()) return false;
-    return (nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0)) <= HIT_ACTIVITY_WINDOW_MS;
+    var age = nowMs() - readNumber(temp, K_LAST_OUT_TIME, 0);
+    return age <= hitActivityWindowMs(readString(temp, K_LAST_OUT_KIND, "melee"));
 }
 
 /* ========================= LEADERBOARD / PROFILE ========================= */
 
 function getLeaderboardStore(player) {
-    try { return player.world.getStoreddata(); } catch (e) {
-        try { return player.getWorld().getStoreddata(); } catch (e2) { return null; }
+    /* Always pin to overworld so End/Nether sessions share one board. */
+    try {
+        var NpcAPI = Java.type("noppes.npcs.api.NpcAPI");
+        var names = ["minecraft:overworld", "overworld"];
+        for (var i = 0; i < names.length; i++) {
+            try {
+                var world = NpcAPI.Instance().getIWorld(names[i]);
+                if (world != null) return world.getStoreddata();
+            } catch (e1) {}
+        }
+    } catch (e) {}
+    try { return player.world.getStoreddata(); } catch (e2) {
+        try { return player.getWorld().getStoreddata(); } catch (e3) { return null; }
     }
 }
 
@@ -1787,7 +2877,7 @@ function ensureLeaderboardName(store, playerName) {
     writeLeaderboardNames(store, names);
 }
 
-function recordSparringSessionStarted(player) {
+function recordSparringSessionCompleted(player) {
     var store = getLeaderboardStore(player);
     if (store == null) return;
     var name = getPlayerName(player);
@@ -1908,13 +2998,14 @@ function refreshClashCombatActivity(player, partner) {
     var aName = getPlayerName(player);
     var bName = getPlayerName(partner);
 
-    /* Keep hit-activity alive so the session timer cannot expire mid-clash. */
+    /* Keep hit-activity alive so the session timer cannot expire mid-clash.
+       Do not refresh movement - clash path already skips the move gate. */
     putString(aTemp, K_LAST_OUT_PARTNER, bName);
     putNumber(aTemp, K_LAST_OUT_TIME, now);
+    putString(aTemp, K_LAST_OUT_KIND, "ki");
     putString(bTemp, K_LAST_OUT_PARTNER, aName);
     putNumber(bTemp, K_LAST_OUT_TIME, now);
-    refreshMovementActivity(player);
-    refreshMovementActivity(partner);
+    putString(bTemp, K_LAST_OUT_KIND, "ki");
 }
 
 /* Resolve a CNPC player into a java.util.UUID for DMZ clash APIs. */
@@ -2100,6 +3191,7 @@ function processPerfectBanner(player, partner) {
 
 function processSession(player) {
     if (!isSessionActive(player)) return;
+    if (suppressSparringForChallenge(player)) return;
 
     var partnerName = getPartnerName(player);
     if (partnerName == "" || partnerName.toLowerCase() == getPlayerName(player).toLowerCase()) {
@@ -2117,11 +3209,41 @@ function processSession(player) {
         clearSessionData(player);
         return;
     }
-    if (!isAlive(player) || !isAlive(partner)) {
-        endSession(player, partner, "a fighter was defeated");
+    if (!sameWorld(player, partner)) {
+        endSession(player, partner, "fighters changed dimensions");
         return;
     }
-    if (getPartnerName(partner) != getPlayerName(player) || !isSessionActive(partner)) {
+
+    /*
+     * Friendly Fist heal before alive/activity checks.
+     * DMZ leaves the victim at 1 HP + knocked down; heal them immediately
+     * so the spar does not end as a defeat.
+     */
+    try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf) {}
+
+    if (!isAlive(player) || !isAlive(partner)) {
+        /*
+         * If Friendly Fist should have saved them, arm lethal pending and
+         * retry once more before treating this as a real defeat.
+         */
+        if (isFriendlyFistOn(player) || isFriendlyFistOn(partner)) {
+            if (isAlive(player) && !isAlive(partner)) markFriendlyFistHealPending(partner);
+            if (isAlive(partner) && !isAlive(player)) markFriendlyFistHealPending(player);
+            try { processFriendlyFistKnockdownHeal(player, partner); } catch (eFf2) {}
+        }
+        if (!isAlive(player) || !isAlive(partner)) {
+            if (!(isFriendlyFistOn(player) || isFriendlyFistOn(partner))) {
+                endSession(player, partner, "a fighter was defeated");
+                return;
+            }
+            /* FF on — keep session for another tick while heal retries. */
+            if (isAlive(player)) markFriendlyFistHealPending(partner);
+            if (isAlive(partner)) markFriendlyFistHealPending(player);
+            return;
+        }
+    }
+    if (getPartnerName(partner).toLowerCase() != getPlayerName(player).toLowerCase() ||
+        !isSessionActive(partner)) {
         endSession(player, partner, "session data no longer matched");
         return;
     }
@@ -2131,13 +3253,16 @@ function processSession(player) {
     /*
      * Clash first: beam locks often stop damage ticks, which used to trip
      * the hit-activity timer and end the spar before the clash finished.
+     * Ki charge holds the same way — fighters stand still while winding up.
      */
     var inClash = processBeamClash(player, partner);
+    var inKiCharge = false;
+    try { inKiCharge = holdSparForKiCharge(player, partner); } catch (eKiHold) {}
 
     var failureReason = "";
     if (distanceBetween(player, partner) > MAX_SPAR_DISTANCE) {
         failureReason = "fighters moved too far apart";
-    } else if (!inClash) {
+    } else if (!inClash && !inKiCharge) {
         if (
             !hasRecentOutgoingHit(player, partnerName) ||
             !hasRecentOutgoingHit(partner, getPlayerName(player))
@@ -2171,12 +3296,184 @@ function processSession(player) {
     }
 }
 
+/* ========================= HP RECEIVED (post-mitigation) ========================= */
+
+function getHealthPool(player) {
+    var health = 0;
+    var absorption = 0;
+    if (player == null) return 0;
+    try { health = Number(player.getHealth()); } catch (e1) { health = 0; }
+    try {
+        if (typeof player.getAbsorptionAmount == "function") {
+            absorption = Number(player.getAbsorptionAmount());
+        } else if (typeof player.getAbsorption == "function") {
+            absorption = Number(player.getAbsorption());
+        }
+    } catch (e2) {}
+    try {
+        var mc = player.getMCEntity();
+        if (mc != null) {
+            if (!(absorption > 0)) {
+                try { absorption = Number(mc.getAbsorptionAmount()); } catch (e3) {}
+            }
+            if (!(health > 0)) {
+                try { health = Number(mc.getHealth()); } catch (e4) {}
+            }
+        }
+    } catch (e5) {}
+    if (isNaN(health) || health < 0) health = 0;
+    if (isNaN(absorption) || absorption < 0) absorption = 0;
+    return health + absorption;
+}
+
+function sampleHealthPool(player) {
+    if (player == null) return;
+    try {
+        putNumber(player.getTempdata(), K_HP_SAMPLE, getHealthPool(player));
+    } catch (e) {}
+}
+
+/*
+ * LivingHurt has not applied mitigation yet. Snapshot the pool and
+ * measure the drop on the next tick (same pattern as Rival challenges).
+ *
+ * Queue from BOTH:
+ *  - victim damaged (melee-friendly)
+ *  - attacker damagedEntity (kiblast owner attribution — required for ki)
+ * Never demote an already-pending ki hit to melee if a later event
+ * fails isKiAttack.
+ */
+function queueReceivedHit(victim, attacker, isKi, kiKind) {
+    if (victim == null || attacker == null) return;
+    try {
+        var temp = victim.getTempdata();
+        var pool = getHealthPool(victim);
+        if (!temp.has(K_PENDING_SAMPLE) || readNumber(temp, K_PENDING_SAMPLE, -1) < 0) {
+            putNumber(temp, K_PENDING_SAMPLE, pool);
+        }
+        putString(temp, K_PENDING_ATK, getPlayerName(attacker));
+
+        var alreadyKi = readString(temp, K_PENDING_KI, "0") == "1";
+        if (isKi === true || alreadyKi) {
+            putString(temp, K_PENDING_KI, "1");
+            if (isKi === true) {
+                putString(temp, K_PENDING_KI_KIND, String(kiKind || "other"));
+            } else {
+                var prevKind = readString(temp, K_PENDING_KI_KIND, "");
+                if (prevKind == "" || prevKind == "melee") {
+                    putString(temp, K_PENDING_KI_KIND, "other");
+                }
+            }
+        } else {
+            putString(temp, K_PENDING_KI, "0");
+            putString(temp, K_PENDING_KI_KIND, "melee");
+        }
+
+        putNumber(temp, K_PENDING_UNTIL, nowMs() + PENDING_HP_RESOLVE_MS);
+    } catch (e) {}
+}
+
+function resolvePendingReceived(player) {
+    if (player == null || !isSessionActive(player)) return false;
+    var temp = null;
+    try { temp = player.getTempdata(); } catch (e0) { return false; }
+    if (temp == null || !temp.has(K_PENDING_UNTIL)) return false;
+
+    var until = readNumber(temp, K_PENDING_UNTIL, 0);
+    if (nowMs() < until) return false;
+
+    var sample = readNumber(temp, K_PENDING_SAMPLE, -1);
+    var atkName = readString(temp, K_PENDING_ATK, "");
+    var isKi = readString(temp, K_PENDING_KI, "0") == "1";
+    var kiKind = readString(temp, K_PENDING_KI_KIND, isKi ? "other" : "melee");
+
+    clearPendingHpSample(player);
+
+    if (sample < 0 || atkName == "") {
+        sampleHealthPool(player);
+        return false;
+    }
+
+    var nowPool = getHealthPool(player);
+    var received = sample - nowPool;
+    sampleHealthPool(player);
+
+    /*
+     * Prefer real HP/absorption lost. If a kiblast LivingHurt landed but
+     * DMZ fully negated LivingDamage, still credit a token floor so ki
+     * training registers (beam clash already drips separately).
+     */
+    if (!(received > 0.01)) {
+        if (isKi === true) received = KI_FULL_MIT_FLOOR;
+        else return false;
+    }
+
+    var partnerName = getPartnerName(player);
+    if (partnerName == "" || partnerName.toLowerCase() != atkName.toLowerCase()) return false;
+
+    var attacker = getPlayerByName(player, atkName);
+    if (attacker == null || !isSessionActive(attacker)) return false;
+    if (!sameWorld(player, attacker)) return false;
+
+    putNumber(temp, K_SESSION_TAKEN, readNumber(temp, K_SESSION_TAKEN, 0) + received);
+    awardDamageTp(attacker, player, received, isKi, kiKind);
+    return true;
+}
+
+function resolveAttackerFromDamaged(event, victim) {
+    var source = null;
+    try { source = event.source; } catch (e1) {}
+    if (source != null) {
+        try { if (Number(source.getType()) === 1) return source; } catch (e2) {}
+    }
+    try {
+        var ds = null;
+        try { ds = event.damageSource; } catch (e3) { ds = null; }
+        if (ds == null) {
+            try { ds = event.source; } catch (e4) {}
+        }
+        if (ds != null) {
+            var cand = null;
+            try { if (typeof ds.getTrueSource == "function") cand = ds.getTrueSource(); } catch (e5) {}
+            if (cand == null) {
+                try { if (typeof ds.getSourceEntity == "function") cand = ds.getSourceEntity(); } catch (e6) {}
+            }
+            if (cand == null) {
+                try { if (typeof ds.getImmediateSource == "function") cand = ds.getImmediateSource(); } catch (e7) {}
+            }
+            if (cand != null) {
+                try { if (Number(cand.getType()) === 1) return cand; } catch (e8) {}
+            }
+        }
+    } catch (e9) {}
+    /*
+     * Do NOT fall back to the spar partner. Fall/fire/mob/DoT would then
+     * score as partner hits. damagedEntity already queues partner kiblasts.
+     */
+    return null;
+}
+
 /* ========================= EVENTS ========================= */
 
 function tick(event) {
     var player = event.player;
     if (player == null) return;
     try {
+        if (suppressSparringForChallenge(player)) return;
+
+        /*
+         * Resolve received HP loss before the 250ms session throttle so
+         * post-mitigation samples land on the first tick after the hit.
+         */
+        try {
+            if (resolvePendingReceived(player)) {
+                /* scored */
+            } else if (isSessionActive(player)) {
+                var t0 = player.getTempdata();
+                if (!t0.has(K_PENDING_UNTIL)) sampleHealthPool(player);
+            }
+        } catch (eHp) {}
+
         var temp = player.getTempdata();
         var now = nowMs();
         if (now < readNumber(temp, K_TICK_NEXT, 0)) return;
@@ -2194,19 +3491,24 @@ function damagedEntity(event) {
         if (attacker == null || target == null) return;
         try { if (Number(target.getType()) !== 1) return; } catch (eType) { return; }
         if (isSamePlayer(attacker, target)) return;
+        if (suppressSparringForChallenge(attacker) || isInRivalChallenge(target)) return;
 
-        var damage = 0;
-        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
-        if (!(damage > 0)) return;
-
+        /*
+         * Do NOT award from event.damage (LivingHurt pre-mitigation).
+         * Still queue an HP-received sample here: kiblast LivingHurt is
+         * owner-attributed on damagedEntity, while victim damaged often
+         * misses projectile sources — that is why ki stopped scoring.
+         */
         var ki = isKiAttack(event);
         var kiKind = ki ? classifyKiType(event) : "melee";
 
         recordCombatExchange(attacker, target, ki, kiKind);
 
         if (isSessionActive(attacker) && isSessionActive(target)) {
-            awardDamageTp(attacker, target, damage, ki, kiKind);
-            /* Mutual ki/beam should open/refresh clash hold immediately. */
+            if (getPartnerName(attacker).toLowerCase() == getPlayerName(target).toLowerCase()) {
+                queueReceivedHit(target, attacker, ki, kiKind);
+                /* Do NOT arm FF heal on every hit — only on real knockdown (tick/died). */
+            }
             if (ki) {
                 try { updateBeamClashState(attacker, target); } catch (eClash) {}
             }
@@ -2219,41 +3521,45 @@ function damagedEntity(event) {
 function damaged(event) {
     try {
         var victim = event.player;
-        if (victim == null || !isSessionActive(victim)) return;
+        if (victim == null) return;
+        if (suppressSparringForChallenge(victim)) return;
+        if (!isSessionActive(victim)) return;
 
         var partnerName = getPartnerName(victim);
         if (partnerName == "") return;
         var partner = getPlayerByName(victim, partnerName);
         if (partner == null) return;
 
-        var damage = 0;
-        try { damage = Number(event.damage); } catch (eD) { damage = 0; }
-        if (damage > 0) {
-            putNumber(victim.getTempdata(), K_SESSION_TAKEN,
-                readNumber(victim.getTempdata(), K_SESSION_TAKEN, 0) + damage);
-        }
+        var attacker = resolveAttackerFromDamaged(event, victim);
+        if (attacker != null &&
+            getPlayerName(attacker).toLowerCase() == partnerName.toLowerCase()) {
+            var ki = isKiAttack(event);
+            var kiKind = ki ? classifyKiType(event) : "melee";
+            /* Snapshot pool now; tick awards from real HP/absorption lost. */
+            queueReceivedHit(victim, attacker, ki, kiKind);
+            /* FF heal is knockdown-only (tick / died), not per-hit. */
 
-        if (!isPlayerBlocking(victim)) return;
+            if (isPlayerBlocking(victim)) {
+                var temp = victim.getTempdata();
+                putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
+                putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
+                awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
 
-        var temp = victim.getTempdata();
-        putNumber(temp, K_SESSION_BLOCKS, readNumber(temp, K_SESSION_BLOCKS, 0) + 1);
-        putNumber(temp, K_STYLE_BLOCK, readNumber(temp, K_STYLE_BLOCK, 0) + 1);
-        refreshMovementActivity(victim);
-        awardCombatTp(victim, partner, BLOCK_TP_BASE, "block");
-
-        /* Successful block snaps the attacker's combo / Momentum. */
-        if (breakCombo(partner, "attack blocked")) {
-            if (SHOW_COMBO_BREAK_MESSAGES === true) {
-                throttleMessage(
-                    victim,
-                    K_COMBO_BREAK_MSG,
-                    COMBO_BREAK_MSG_COOLDOWN_MS,
-                    sparText(
-                        sparColor("6"), "[Sparring] ",
-                        sparColor("a"), "Block! ",
-                        sparColor("7"), "Opponent combo broken"
-                    )
-                );
+                /* Successful block snaps the attacker's combo / Momentum. */
+                if (breakCombo(partner, "attack blocked")) {
+                    if (SHOW_COMBO_BREAK_MESSAGES === true) {
+                        throttleMessage(
+                            victim,
+                            K_COMBO_BREAK_MSG,
+                            COMBO_BREAK_MSG_COOLDOWN_MS,
+                            sparText(
+                                sparColor("6"), "[Sparring] ",
+                                sparColor("a"), "Block! ",
+                                sparColor("7"), "Opponent combo broken"
+                            )
+                        );
+                    }
+                }
             }
         }
 
@@ -2280,17 +3586,36 @@ function died(event) {
         var player = event.player;
         if (player == null || !isSessionActive(player)) return;
         var partner = getPlayerByName(player, getPartnerName(player));
+        /*
+         * Friendly Fist should prevent true death (KD at 1 HP). If died
+         * still fires, try the spar heal instead of ending the session.
+         */
+        if (partner != null && (isFriendlyFistOn(partner) || isFriendlyFistOn(player))) {
+            markFriendlyFistHealPending(player);
+            try { processFriendlyFistKnockdownHeal(partner, player); } catch (eFf) {}
+            if (isAlive(player) || needsFriendlyFistHeal(player) || isPlayerKnockedDown(player)) {
+                return;
+            }
+        }
         endSession(player, partner, "a fighter was defeated");
     } catch (e) {}
 }
 
 /* ========================= /spar COMMANDS (trigger) ========================= */
 
+function sparIsEmptyArgToken(s) {
+    if (s == null) return true;
+    s = String(s).replace(/^\s+|\s+$/g, "");
+    if (s == "") return true;
+    var low = s.toLowerCase();
+    return low == "$1-" || low == "$1" || low == "null" || low == "undefined" || low == "none";
+}
+
 function sparCmdArgAt(event, index) {
     try {
         if (event != null && event.arguments != null && event.arguments.length > index) {
             var value = String(event.arguments[index]).replace(/^\s+|\s+$/g, "");
-            if (value == "" || value.toLowerCase() == "null") return "";
+            if (sparIsEmptyArgToken(value)) return "";
             return value;
         }
     } catch (e) {}
@@ -2303,7 +3628,7 @@ function sparCmdArgsFrom(event, start) {
         if (event.arguments != null) {
             for (var i = start; i < event.arguments.length; i++) {
                 var piece = String(event.arguments[i]).replace(/^\s+|\s+$/g, "");
-                if (piece == "" || piece.toLowerCase() == "null") continue;
+                if (sparIsEmptyArgToken(piece)) continue;
                 out.push(piece);
             }
         }
@@ -2372,28 +3697,69 @@ function sparCmdHelp(player) {
     uiProp(player, "Train", sparColor("7") + "Fight each other " + sparColor("8") + "(" +
         sparColor("f") + "melee" + sparColor("8") + " or " + sparColor("f") + "ki" + sparColor("8") + ") to start");
     uiProp(player, "Pay", sparColor("7") + "TP from combat actions" + sparColor("8") + "  |  " +
-        sparColor("7") + "not standing still");
+        sparColor("a") + "+50%" + sparColor("7") + " global");
     uiProp(player, "Bonus", sparColor("7") + "Momentum" + sparColor("8") + "  |  " +
         sparColor("7") + "Session" + sparColor("8") + "  |  " +
         sparColor("7") + "Streak" + sparColor("8") + "  |  " +
         sparColor("7") + "Perfect" + sparColor("8") + "  |  " +
-        sparColor("7") + "Style");
+        sparColor("7") + "Style" + sparColor("8") + "  |  " +
+        sparColor("7") + "Mentor");
     uiBlank(player);
+
+    /* Mentor Bond first so /spar always surfaces it. */
+    uiSection(player, "Your Mentor Bond");
+    try {
+        try { reconcileMentorBond(player); } catch (eR) {}
+        var helpMentor = getBondMentorName(player);
+        var helpApp = getBondApprenticeName(player);
+        uiProp(player, "Mentor", helpMentor != "" ? sparColor("f") + helpMentor : sparColor("8") + "none");
+        uiProp(player, "Apprentice", helpApp != "" ? sparColor("f") + helpApp : sparColor("8") + "none");
+        var helpInvite = readBondInvite(player);
+        if (helpInvite != null) {
+            if (helpInvite.kind == "mentor") {
+                sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                    " wants you as their Mentor.");
+            } else {
+                sendMessage(player, sparColor("e") + helpInvite.from + sparColor("7") +
+                    " wants you as their Apprentice.");
+            }
+            sendMessage(player, sparColor("8") + "Use  " + sparColor("e") + "/spar mentor accept" +
+                sparColor("8") + "  or  " + sparColor("e") + "/spar mentor deny");
+        }
+    } catch (eBond) {
+        uiProp(player, "Mentor", sparColor("8") + "none");
+        uiProp(player, "Apprentice", sparColor("8") + "none");
+    }
+    sendMessage(player, sparColor("8") + "Share  " + sparColor("a") +
+        Math.floor(MENTOR_SHARE_PCT * 100) + "%" + sparColor("8") + " to mentor  |  Bonus  " +
+        sparColor("a") + "+" + Math.floor(MENTOR_SPAR_BONUS_PCT * 100) + "%" +
+        sparColor("8") + " with mentor");
+    uiBlank(player);
+
     uiSection(player, "Training");
     uiCmd(player, "/spar", "this help menu");
     uiCmd(player, "/spar stats [player]", "personal sparring record");
     uiCmd(player, "/spar top [tp|streak|session|payout|perfect|time|combo|clash]", "");
     uiBlank(player);
+    uiSection(player, "Mentor Commands");
+    uiCmd(player, "/spar mentor", "bond status");
+    uiCmd(player, "/spar mentor <player>", "ask them to mentor you");
+    uiCmd(player, "/spar apprentice <player>", "ask them to be your apprentice");
+    uiCmd(player, "/spar mentor accept | deny | clear", "");
+    uiCmd(player, "/spar apprentice clear", "release your apprentice");
+    if (isSparMentorAdmin(player)) {
+        uiCmd(player, "/spar mentor resetcd [player]", "admin: clear bond cooldowns");
+    }
+    uiBlank(player);
     uiSection(player, "Shortcuts");
     uiCmd(player, "/sparstats", "same as /spar stats");
     uiCmd(player, "/spartop", "same as /spar top");
+    uiCmd(player, "/sparmentor | /sparapprentice | /sparbond", "mentor shortcuts");
     uiCmd(player, "/sparstreak | /sparsession | /sparpayout", "");
     uiCmd(player, "/sparperfect | /spartime | /sparhelp", "");
     uiBlank(player);
     sendMessage(player, sparColor("8") + "Stay active: trade damage, move, and keep the fight going.");
-    sendMessage(player, sparColor("8") + "Also works  " + sparColor("e") + ".spar" +
-        sparColor("8") + "  /  " + sparColor("e") + "!spar" +
-        sparColor("8") + "  /  " + sparColor("e") + "./spar");
+    sendMessage(player, sparColor("8") + "Friendly Fist knockdowns during a spar heal your partner.");
     uiFoot(player);
 }
 
@@ -2458,6 +3824,15 @@ function sparCmdShowPersonal(player, targetName) {
         sparColor("8") + "   Momentum  " + sparColor("e") + formatWholeNumber(profile.momentum));
     uiProp(player, "Streak", sparColor("6") + formatWholeNumber(streakCurrent) + " days" +
         sparColor("8") + "   Best  " + sparColor("6") + formatWholeNumber(streakBest) + " days");
+    if (online != null) {
+        uiBlank(player);
+        uiSection(player, "Mentor Bond");
+        try { reconcileMentorBond(online); } catch (eR2) {}
+        var stMentor = getBondMentorName(online);
+        var stApp = getBondApprenticeName(online);
+        uiProp(player, "Mentor", stMentor != "" ? sparColor("f") + stMentor : sparColor("8") + "none");
+        uiProp(player, "Apprentice", stApp != "" ? sparColor("f") + stApp : sparColor("8") + "none");
+    }
     uiFoot(player);
 }
 
@@ -2551,12 +3926,23 @@ function claimSparCommand(player) {
 }
 
 function sparCmdRouteParts(player, parts) {
-    if (parts == null || parts.length == 0) {
+    if (parts == null) parts = [];
+
+    /* CMI bare /spar often leaves a literal "$1-" — treat as help. */
+    if (parts.length == 1 && sparIsEmptyArgToken(parts[0])) {
+        parts = [];
+    }
+
+    if (parts.length == 0) {
         sparCmdHelp(player);
         return;
     }
     var sub = String(parts[0]).toLowerCase();
     var arg = parts.length > 1 ? parts[1] : "";
+
+    if (sparCmdRouteBond(player, parts)) {
+        return;
+    }
 
     if (sub == "help" || sub == "?" || sub == "commands") {
         sparCmdHelp(player);
@@ -2616,6 +4002,31 @@ function parseSparCommandLine(line) {
     if (lower == "sparpayout") return ["top", "payout"];
     if (lower == "sparperfect") return ["top", "perfect"];
     if (lower == "spartime") return ["top", "time"];
+    if (lower == "sparmentor" || lower.indexOf("sparmentor ") == 0) {
+        var mRest = text.length > 10 ? text.substring(10).replace(/^\s+/, "") : "";
+        if (mRest == "") return ["mentor"];
+        return ["mentor"].concat(mRest.split(/\s+/));
+    }
+    if (lower == "sparbond" || lower.indexOf("sparbond ") == 0) {
+        var bRest = text.length > 8 ? text.substring(8).replace(/^\s+/, "") : "";
+        if (bRest == "") return ["mentor"];
+        return ["mentor"].concat(bRest.split(/\s+/));
+    }
+    if (lower == "sparapprentice" || lower.indexOf("sparapprentice ") == 0) {
+        var aRest = text.length > 14 ? text.substring(14).replace(/^\s+/, "") : "";
+        if (aRest == "") return ["apprentice"];
+        return ["apprentice"].concat(aRest.split(/\s+/));
+    }
+    if (lower == "sparmentorcd" || lower.indexOf("sparmentorcd ") == 0) {
+        var cdRest = text.length > 12 ? text.substring(12).replace(/^\s+/, "") : "";
+        if (cdRest == "") return ["mentor", "resetcd"];
+        return ["mentor", "resetcd"].concat(cdRest.split(/\s+/));
+    }
+    if (lower == "sparbondcd" || lower.indexOf("sparbondcd ") == 0) {
+        var bdRest = text.length > 10 ? text.substring(10).replace(/^\s+/, "") : "";
+        if (bdRest == "") return ["mentor", "resetcd"];
+        return ["mentor", "resetcd"].concat(bdRest.split(/\s+/));
+    }
 
     return null;
 }
@@ -2690,7 +4101,17 @@ function isSparSlashMessage(msg) {
         lower == "/sparlongest" ||
         lower == "/sparpayout" ||
         lower == "/sparperfect" ||
-        lower == "/spartime"
+        lower == "/spartime" ||
+        lower == "/sparmentor" ||
+        lower.indexOf("/sparmentor ") == 0 ||
+        lower == "/sparapprentice" ||
+        lower.indexOf("/sparapprentice ") == 0 ||
+        lower == "/sparbond" ||
+        lower.indexOf("/sparbond ") == 0 ||
+        lower == "/sparmentorcd" ||
+        lower.indexOf("/sparmentorcd ") == 0 ||
+        lower == "/sparbondcd" ||
+        lower.indexOf("/sparbondcd ") == 0
     );
 }
 
@@ -2780,7 +4201,7 @@ function init(event) {
     try {
         registerSparSlashCommandHook();
         try {
-            print("[Sparring v3.0.9] BP-curve restored | BeamClashManager=" +
+            print("[Sparring v3.2.8] mentor resetcd admin | BeamClashManager=" +
                 (BeamClashManager != null ? "hooked" : "MISSING") +
                 " MainDamageTypes=" + (MainDamageTypes != null ? "hooked" : "MISSING") +
                 " AbstractKiProjectile=" + (AbstractKiProjectile != null ? "ok" : "MISSING"));
@@ -2813,7 +4234,12 @@ function chat(event) {
             lower.indexOf("spar ") == 0 ||
             lower.indexOf("sparhelp") == 0 ||
             lower.indexOf("sparstats") == 0 ||
-            lower.indexOf("spartop") == 0
+            lower.indexOf("spartop") == 0 ||
+            lower.indexOf("sparmentor") == 0 ||
+            lower.indexOf("sparapprentice") == 0 ||
+            lower.indexOf("sparbond") == 0 ||
+            lower.indexOf("sparmentorcd") == 0 ||
+            lower.indexOf("sparbondcd") == 0
         )) {
             return;
         }
