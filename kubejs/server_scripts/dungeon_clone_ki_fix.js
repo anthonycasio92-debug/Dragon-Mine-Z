@@ -34,10 +34,11 @@ var RETRY_EVERY_TICKS = 1;
 var NEARBY_SCAN_EVERY = 40;
 var NEARBY_RANGE = 48.0;
 var NEAREST_SPAWNER_RANGE = 24;
-var LOG_OK_LEFT = 16;
-var LOG_FAIL_LEFT = 24;
-var LOG_SEEN_LEFT = 20;
-var LOG_NBT_LEFT = 8;
+/* Runtime logs only when DEBUG=true (avoids console flood in dungeons). */
+var LOG_OK_LEFT = DEBUG ? 16 : 0;
+var LOG_FAIL_LEFT = DEBUG ? 24 : 0;
+var LOG_SEEN_LEFT = DEBUG ? 20 : 0;
+var LOG_NBT_LEFT = DEBUG ? 8 : 0;
 
 global.dungeonCloneKiRetry = global.dungeonCloneKiRetry || [];
 

@@ -456,6 +456,47 @@ function applyVanillaStatsToNbt(tag, forceKeepRedstone) {
     return changed;
 }
 
+function readLogicInt(logic, name) {
+    if (logic == null || !name) return null;
+    try {
+        var v = logic[name];
+        if (v != null && v !== undefined) {
+            var n = Number(v);
+            if (!isNaN(n)) return n;
+        }
+    } catch (e1) {}
+    try {
+        var f = getDeclaredField(logic.getClass(), name);
+        if (f != null) {
+            var fv = f.get(logic);
+            if (fv != null) {
+                var n2 = Number(fv);
+                if (!isNaN(n2)) return n2;
+            }
+        }
+    } catch (e2) {}
+    return null;
+}
+
+function setLogicIntIfNonVanilla(logic, name, want) {
+    var cur = readLogicInt(logic, name);
+    if (cur == null) return false; /* unreadable - do not fake a change */
+    if (cur === want) return false;
+    try {
+        logic[name] = want;
+    } catch (eSet) {
+        try {
+            var f = getDeclaredField(logic.getClass(), name);
+            if (f != null) f.setInt(logic, want);
+            else return false;
+        } catch (eSet2) {
+            return false;
+        }
+    }
+    var after = readLogicInt(logic, name);
+    return after === want || after == null;
+}
+
 function vanillaizeApothTileFields(be) {
     be = resolveApothTile(be) || be;
     if (be == null || getApothJavaClass(be) == null) return false;
@@ -502,28 +543,39 @@ function vanillaizeApothTileFields(be) {
         } catch (eGs) {}
 
         if (logic != null) {
-            if (Number(logic.minSpawnDelay) !== VANILLA_MIN_DELAY) {
-                logic.minSpawnDelay = VANILLA_MIN_DELAY;
+            /*
+             * Only count a change when we can READ a real non-vanilla value.
+             * Obfuscated BaseSpawner fields often yield undefined/NaN in KubeJS;
+             * treating that as "needs reset" re-touches every scan and floods logs.
+             */
+            if (setLogicIntIfNonVanilla(logic, "minSpawnDelay", VANILLA_MIN_DELAY)) {
                 changed = true;
             }
-            if (Number(logic.maxSpawnDelay) !== VANILLA_MAX_DELAY) {
-                logic.maxSpawnDelay = VANILLA_MAX_DELAY;
+            if (setLogicIntIfNonVanilla(logic, "maxSpawnDelay", VANILLA_MAX_DELAY)) {
                 changed = true;
             }
-            if (Number(logic.spawnCount) !== VANILLA_SPAWN_COUNT) {
-                logic.spawnCount = VANILLA_SPAWN_COUNT;
+            if (setLogicIntIfNonVanilla(logic, "spawnCount", VANILLA_SPAWN_COUNT)) {
                 changed = true;
             }
-            if (Number(logic.maxNearbyEntities) !== VANILLA_MAX_NEARBY) {
-                logic.maxNearbyEntities = VANILLA_MAX_NEARBY;
+            if (
+                setLogicIntIfNonVanilla(
+                    logic,
+                    "maxNearbyEntities",
+                    VANILLA_MAX_NEARBY
+                )
+            ) {
                 changed = true;
             }
-            if (Number(logic.requiredPlayerRange) !== VANILLA_PLAYER_RANGE) {
-                logic.requiredPlayerRange = VANILLA_PLAYER_RANGE;
+            if (
+                setLogicIntIfNonVanilla(
+                    logic,
+                    "requiredPlayerRange",
+                    VANILLA_PLAYER_RANGE
+                )
+            ) {
                 changed = true;
             }
-            if (Number(logic.spawnRange) !== VANILLA_SPAWN_RANGE) {
-                logic.spawnRange = VANILLA_SPAWN_RANGE;
+            if (setLogicIntIfNonVanilla(logic, "spawnRange", VANILLA_SPAWN_RANGE)) {
                 changed = true;
             }
         }
@@ -1192,9 +1244,11 @@ BlockEvents.rightClicked("minecraft:spawner", function (event) {
 
         var ok = applyComparatorRedstone(event.block, enable);
         if (!ok && readTileRedstoneControl(resolveApothTile(event.block)) !== enable) {
-            console.info(
-                "[Apotheosis Spawner] Comparator right-click failed to set redstone_control"
-            );
+            if (DEBUG_SPAWNER) {
+                console.info(
+                    "[Apotheosis Spawner] Comparator right-click failed to set redstone_control"
+                );
+            }
             return;
         }
 
@@ -1223,12 +1277,14 @@ BlockEvents.rightClicked("minecraft:spawner", function (event) {
             event.success();
         } catch (eSuc) {}
 
-        console.info(
-            "[Apotheosis Spawner] Comparator set redstone_control=" +
-                enable +
-                " for " +
-                player.username
-        );
+        if (DEBUG_SPAWNER) {
+            console.info(
+                "[Apotheosis Spawner] Comparator set redstone_control=" +
+                    enable +
+                    " for " +
+                    player.username
+            );
+        }
     } catch (err) {
         console.error("[Apotheosis Spawner] rightClicked error: " + err);
     }
@@ -1309,17 +1365,19 @@ function drainQueuedChunks(server) {
         var n = vanillaizeSpawnersInChunk(level, item.x, item.z);
         if (n > 0) {
             converted += n;
-            console.info(
-                "[Apotheosis Spawner] Vanillaized " +
-                    n +
-                    " spawner(s) in chunk " +
-                    item.x +
-                    "," +
-                    item.z +
-                    " (" +
-                    item.dim +
-                    ")"
-            );
+            if (DEBUG_SPAWNER) {
+                console.info(
+                    "[Apotheosis Spawner] Vanillaized " +
+                        n +
+                        " spawner(s) in chunk " +
+                        item.x +
+                        "," +
+                        item.z +
+                        " (" +
+                        item.dim +
+                        ")"
+                );
+            }
         }
     }
     return converted;
